@@ -3,14 +3,22 @@ import { CocosError, Json, type EditorAdapter, type JsonObject, type JsonValue }
 import { Operations } from '../../capability-catalog/src/operations.js';
 import { PropertyDump } from './dump.js';
 import type { EditorPort } from './port.js';
+import { ShaderService } from './shader.js';
+import { AssetQuery } from './asset-query.js';
+import { PreviewService } from './preview.js';
+import { GeometryService } from './geometry.js';
+import { RenderingService } from './rendering.js';
 
 export class Creator3Adapter implements EditorAdapter {
   readonly major = 3 as const;
-  constructor(private readonly port: EditorPort) {}
+  private readonly shaders: ShaderService;
+  constructor(private readonly port: EditorPort) { this.shaders = new ShaderService(port); }
 
   supportedCapabilities(): string[] {
-    const excluded = new Set(['preview.start', 'preview.stop', 'ui.build']);
-    return new Operations().list().filter(row => row.context === 'editor' && row.supportedMajors?.includes(3) && !excluded.has(row.id)).map(row => row.id);
+    const excluded = new Set(['ui.build']);
+    if (!this.port.preview || this.port.version !== '3.8.8') for (const id of ['preview.start', 'preview.stop', 'preview.status', 'preview.capture']) excluded.add(id);
+    return new Operations().list().filter(row => row.context === 'editor' && row.supportedMajors?.includes(3) && !excluded.has(row.id)
+      && (row.module !== 'F22' || row.id === 'shader.environment' || this.port.version === '3.8.8')).map(row => row.id);
   }
 
   async revision(): Promise<string> {
@@ -76,6 +84,17 @@ export class Creator3Adapter implements EditorAdapter {
   }
 
   async execute(id: string, p: JsonObject): Promise<JsonValue> {
+    if (id === 'geometry.create') return new GeometryService(this.port, (id, params) => this.execute(id, params)).create(p);
+    if (id === 'geometry.array') return new GeometryService(this.port, (id, params) => this.execute(id, params)).array(p);
+    if (id.startsWith('rendering.')) {
+      if (this.port.version !== '3.8.8') throw new CocosError('UNSUPPORTED_VERSION', 'Rendering settings require Creator 3.8.8');
+      const rendering = new RenderingService(this.port, (id, params) => this.execute(id, params));
+      if (id === 'rendering.query') return rendering.query(p);
+      if (id === 'rendering.configure') return rendering.configure(p);
+      if (id === 'rendering.planar_reflection') return rendering.planarReflection(p);
+    }
+    if (id.startsWith('preview.')) return new PreviewService(this.port).execute(id, p);
+    if (id.startsWith('shader.') || id.startsWith('material.')) return this.shaders.execute(id, p);
     const str = (key: string): string => Json.string(p[key], key);
     switch (id) {
       case 'editor.status': return { editorVersion: this.port.version, creatorMajor: 3, projectPath: this.port.projectPath, ready: await this.scene('query-is-ready') };
@@ -140,10 +159,7 @@ export class Creator3Adapter implements EditorAdapter {
       case 'component.reset': await this.scene('reset-component', { uuid: str('componentId') }); return this.execute('component.query', p);
       case 'component.invoke': Json.safePath(str('method')); return this.scene('execute-component-method', { uuid: str('componentId'), name: str('method'), args: p.args ?? [] });
       case 'asset.query': {
-        const options: JsonObject = { pattern: p.pattern ?? 'db://assets/**' }; if (p.type) options.type = p.type;
-        const rows = await this.asset('query-assets', options) as JsonValue[];
-        const offset = Number(p.offset ?? 0); const limit = Number(p.limit ?? 100);
-        return { rows: rows.slice(offset, offset + limit), total: rows.length, nextOffset: offset + limit < rows.length ? offset + limit : null };
+        return new AssetQuery(this.port).execute(p);
       }
       case 'asset.info': return { asset: await this.asset('query-asset-info', str('url')) };
       case 'asset.meta': return { meta: await this.asset('query-asset-meta', str('url')) };
@@ -205,7 +221,7 @@ export class Creator3Adapter implements EditorAdapter {
     }
   }
 
-  async dispose(): Promise<void> {}
+  async dispose(): Promise<void> { this.port.disposePreview?.(); }
 }
 
 export type { EditorPort } from './port.js';

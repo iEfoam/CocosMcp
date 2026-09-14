@@ -1,5 +1,7 @@
 import { ExtensionUpdate } from '../../shared/extension-update.js';
 import { McpService } from '../../shared/mcp-service.js';
+import { CreatorShaderHost } from './shader-host.js';
+import { ManagedPreview, type PreviewWindow } from './preview.js';
 import { dirname } from 'path';
 import { readFileSync, readdirSync, existsSync } from 'fs';
 import { join } from 'path';
@@ -19,6 +21,20 @@ interface CreatorEditor {
 declare const Editor: CreatorEditor;
 
 class CreatorHost implements EditorPort {
+  private managedPreview: ManagedPreview | undefined;
+  preview(method: string, params: import('../../../packages/contracts/src/index.js').JsonObject): Promise<JsonValue> {
+    this.managedPreview ??= new ManagedPreview({ create: options => {
+      const electron = require('electron') as { BrowserWindow: new (options: unknown) => PreviewWindow };
+      return new electron.BrowserWindow(options);
+    } });
+    return this.managedPreview.execute(method, params);
+  }
+  disposePreview(): void { this.managedPreview?.dispose(); }
+  private shaderHost: CreatorShaderHost | undefined;
+  shader(method: string, params: import('../../../packages/contracts/src/index.js').JsonObject): Promise<JsonValue> {
+    this.shaderHost ??= new CreatorShaderHost(Editor.App.path, Editor.Project.path, Editor.App.version);
+    return this.shaderHost.execute(method, params);
+  }
   readonly extensionName = 'cocos-mcp-creator3';
   get version(): string { return Editor.App.version; }
   get projectPath(): string { return Editor.Project.path; }

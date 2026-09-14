@@ -1,6 +1,8 @@
 import { CocosError, Json, type JsonObject, type JsonValue } from '../../contracts/src/index.js';
 import { RuntimeAccess as A, RuntimePolicy, type RuntimeObject } from './access.js';
 import { SceneInspector, type SceneEnvironment } from './scene.js';
+import { MaterialController } from './material.js';
+import { ShaderPreview } from './shader-preview.js';
 
 interface Handle { value: unknown; owned: boolean; generation: number }
 interface Subscription { owner: RuntimeObject; event: string; callback: (...args: unknown[]) => void }
@@ -14,14 +16,19 @@ export class RuntimeController {
   private nextHandle = 0;
   private nextEvent = 0;
   private scene: unknown;
+  private readonly materials: MaterialController;
+  private readonly shaderPreview: ShaderPreview;
 
   constructor(private readonly environment: SceneEnvironment, private readonly eventCapacity = 1000, private readonly policy = new RuntimePolicy()) {
     this.inspector = new SceneInspector(environment);
+    this.materials = new MaterialController(environment);
+    this.shaderPreview = new ShaderPreview(environment, this.materials);
   }
 
   private synchronize(): void {
     const current = A.call(this.environment.cc.director, 'getScene');
     if (current !== this.scene) {
+      this.shaderPreview.dispose(); this.materials.dispose();
       this.clearSubscriptions(); this.handles.clear(); this.scene = current; this.generation++;
     }
   }
@@ -85,6 +92,8 @@ export class RuntimeController {
 
   async execute(id: string, p: JsonObject): Promise<JsonValue> {
     this.synchronize();
+    if (id.startsWith('runtime.material.') || id === 'runtime.shader.variants.compile') return this.materials.execute(id, p);
+    if (id.startsWith('runtime.shader.')) return this.shaderPreview.execute(id, p);
     const str = (key: string): string => Json.string(p[key], key);
     switch (id) {
       case 'runtime.query': return { scene: this.inspector.sceneInfo(), engineVersion: String(this.environment.cc.ENGINE_VERSION ?? 'unknown'), generation: this.generation };
@@ -177,7 +186,7 @@ export class RuntimeController {
     this.subscriptions.clear();
   }
 
-  dispose(): void { this.clearSubscriptions(); this.handles.clear(); this.events.length = 0; }
+  dispose(): void { this.shaderPreview.dispose(); this.materials.dispose(); this.clearSubscriptions(); this.handles.clear(); this.events.length = 0; }
 }
 
 export { SceneInspector } from './scene.js';

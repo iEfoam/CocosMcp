@@ -1,5 +1,7 @@
 import type { Capability, CreatorMajor, Effect, JsonSchema } from '../../contracts/src/index.js';
 import { Schema as S } from './schema.js';
+import { ShaderCapabilities } from './shader.js';
+import { SceneProductionCapabilities } from './scene-production.js';
 
 export class Operations {
   private readonly rows: Capability[] = [];
@@ -78,8 +80,10 @@ export class Operations {
       risks: ['内部编辑器接口随补丁版本变化'], prerequisites: ['精确 editorVersion', '--allow-project-code'], rollback: '重新加载工程或使用编辑器撤销' });
     this.add('scene.script', 'F08', '调用已安装扩展的场景脚本方法', 'external', { extension: str, method: str, args: S.array() }, ['extension', 'method'], [2, 3], {
       risks: ['扩展脚本可能修改工程外部状态'], prerequisites: ['--allow-project-code'], rollback: '由扩展提供补偿操作' });
-    this.add('preview.start', 'F43', '启动项目预览', 'runtime');
+    this.add('preview.start', 'F43', '启动项目预览；3.8.8 使用独立 MCP 窗口并要求场景已保存', 'runtime', { width: { type: 'integer', minimum: 256, maximum: 2048 }, height: { type: 'integer', minimum: 256, maximum: 2048 }, visible: bool });
     this.add('preview.stop', 'F43', '停止项目预览', 'runtime', {}, [], [2, 3], { supportedMajors: [3] });
+    this.add('preview.status', 'F43', '查询 MCP 预览窗口和最近的渲染诊断', 'read', {}, [], [3]);
+    this.add('preview.capture', 'F46', '在真实绘制帧之后截取 MCP 预览窗口；不要求开发运行时网关', 'read', {}, [], [3], { prerequisites: ['Creator 3.8.8；preview.start 已完成'], rollback: '只读截图，不修改项目资源' });
     this.add('logs.query', 'F44', '分页查询桥接捕获的日志，按来源和级别过滤', 'read', { cursor: S.integer(), level: S.enum('debug', 'info', 'warn', 'error'), limit: S.integer(1) });
     this.add('ui.build', 'F20', '从声明式节点树构建 UI；失败时补偿本次创建的节点', 'scene', { parentId: str, tree: obj }, ['tree'], [2, 3], { implementation: 'planned', supportedMajors: [] });
     this.add('scene.validate', 'F51', '检查缺失组件与无效对象引用', 'read');
@@ -109,6 +113,8 @@ export class Operations {
         platforms: ['development-runtime'], prerequisites: ['开发构建运行时桥接'],
         ...(id === 'invoke' ? { risks: ['仅允许公开引擎 API，禁止私有成员和危险构造'], rollback: '运行时重启后句柄自动失效' } : {}) });
     }
+    this.rows.push(...new ShaderCapabilities().list());
+    this.rows.push(...new SceneProductionCapabilities().list());
     return this.rows;
   }
 }

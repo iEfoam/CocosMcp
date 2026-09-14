@@ -14,7 +14,7 @@ for (const major of [2, 3]) {
   await mkdir(join(extensionRoot, 'dist'), { recursive: true });
   await build({ entryPoints: { main: `extensions/creator${major}/src/main.ts`, scene: `extensions/creator${major}/src/scene.ts`, panel: `extensions/creator${major}/src/panel.ts` },
     outdir: join(extensionRoot, 'dist'), outExtension: { '.js': `.${extension}` }, bundle: true, platform: 'node',
-    target: major === 2 ? 'node8' : 'node12', format: 'cjs', sourcemap: true, external: ['cc'] });
+    target: major === 2 ? 'node8' : 'node12', format: 'cjs', sourcemap: true, external: ['cc', 'electron'] });
   await build({ entryPoints: ['apps/server/src/managed-service.ts'], outfile: join(extensionRoot, 'dist/service.mjs'), bundle: true, platform: 'node', target: 'node24', format: 'esm', banner: { js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);" } });
   await build({ entryPoints: ['apps/server/src/update-extension.ts'], outfile: join(extensionRoot, 'dist/update.mjs'), bundle: true, platform: 'node', target: 'node24', format: 'esm' });
   await writeFile(join(extensionRoot, 'service-config.json'), JSON.stringify({ nodeExecutable: process.execPath }));

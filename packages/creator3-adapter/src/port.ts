@@ -10,4 +10,7 @@ export interface EditorPort {
   getSetting(name: string, key?: string): Promise<unknown>;
   setSetting(name: string, key: string, value: JsonValue): Promise<void>;
   messages(packageName?: string): Array<{ package: string; message: string; public: boolean }>;
+  preview?(method: string, params: import('../../contracts/src/index.js').JsonObject): Promise<JsonValue>;
+  disposePreview?(): void;
+  shader?(method: string, params: import('../../contracts/src/index.js').JsonObject): Promise<JsonValue>;
 }
