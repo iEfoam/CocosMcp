@@ -1,0 +1,29 @@
+// 固定参数、不依赖 cc_time，便于跨帧截图回归。
+CCEffect %{
+  techniques:
+  - passes:
+    - vert: gradient-vs:vert
+      frag: gradient-fs:frag
+      properties:
+        tint: { value: [0.1, 0.65, 1.0, 1.0], editor: { type: color } }
+}%
+CCProgram gradient-vs %{
+  precision highp float;
+  #include <builtin/uniforms/cc-global>
+  #include <builtin/uniforms/cc-local>
+  in vec3 a_position;
+  out vec3 localPosition;
+  vec4 vert () {
+    localPosition = a_position;
+    return cc_matViewProj * cc_matWorld * vec4(a_position, 1.0);
+  }
+}%
+CCProgram gradient-fs %{
+  precision highp float;
+  in vec3 localPosition;
+  uniform Gradient { vec4 tint; };
+  vec4 frag () {
+    float brightness = 0.35 + 0.65 * smoothstep(-0.8, 0.8, localPosition.y);
+    return vec4(tint.rgb * brightness, tint.a);
+  }
+}%

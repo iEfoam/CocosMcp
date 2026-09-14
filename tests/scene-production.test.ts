@@ -7,6 +7,7 @@ import { PreviewService } from '../packages/creator3-adapter/src/preview.js';
 import { Creator3Adapter } from '../packages/creator3-adapter/src/index.js';
 import { ManagedPreview, type PreviewWindow, type PreviewWindowFactory } from '../extensions/creator3/src/preview.js';
 import { CapabilityCatalog } from '../packages/capability-catalog/src/index.js';
+import { CaptureResult } from '../apps/server/src/capture-result.js';
 import type { EditorPort } from '../packages/creator3-adapter/src/port.js';
 import type { JsonObject, JsonValue } from '../packages/contracts/src/index.js';
 
@@ -167,4 +168,55 @@ test('scene production capability schemas bound mesh, array, reflection and prev
   assert.throws(() => catalog.validate('geometry.create', { name: 'x', url: 'db://assets/x.gltf', shape: 'cube', materialUuid: 'a', options: { arbitrary: true } }));
   assert.equal(catalog.describe('geometry.create').module, 'F21');
   assert.equal(catalog.describe('rendering.configure').module, 'F31');
+});
+
+test('MCP screenshot results expose image content while preserving structured compatibility', () => {
+  const value = { capabilityId: 'preview.capture', result: { dataUrl: 'data:image/png;base64,dGVzdA==', width: 1280 } };
+  const result = new CaptureResult().format(value);
+  assert.equal(result.content[1]!.type, 'image');
+  assert.equal((result.content[0] as { text: string }).text.includes('base64'), false);
+  assert.deepEqual(result.structuredContent, value); assert.equal(value.result.dataUrl, 'data:image/png;base64,dGVzdA==');
+  assert.equal(new CaptureResult().format({ capabilityId: 'shader.read', result: value.result }).content.length, 1);
+});
+
+class GeometryHarness {
+  calls: Array<{ id: string; params: JsonObject }> = [];
+  native: string[] = [];
+  failConfigure = false;
+  port = { projectPath: process.cwd(), scene: async () => true,
+    request: async (_channel: string, message: string, target: unknown) => {
+      this.native.push(message);
+      if (message === 'query-asset-info') return target === 'material' ? { type: 'cc.Material' } : null;
+      return { uuid: 'asset', invalid: false, subAssets: { mesh: { uuid: 'mesh', type: 'cc.Mesh', invalid: false } } };
+    } } as unknown as EditorPort;
+  async run(id: string, params: JsonObject): Promise<JsonValue> {
+    this.calls.push({ id, params });
+    if (id === 'node.create') return { nodeId: 'created-node' };
+    if (id === 'component.add') return { componentIds: ['created-renderer'] };
+    if (this.failConfigure) throw new Error('native mesh assignment failed');
+    return {};
+  }
+}
+
+test('geometry creation binds the imported mesh, persists assets and reports partial targets on failure', async () => {
+  const p = { name: 'Beveled platform', url: 'db://assets/AcceptancePrimitive.gltf', materialUuid: 'material', shape: 'cube', options: { size: { x: 12, y: 0.4, z: 8 }, bevel: 0.06 } };
+  const h = new GeometryHarness(); const result = await new GeometryService(h.port, h.run.bind(h)).create(p) as JsonObject;
+  assert.equal(result.savedMesh, true); assert.equal(result.sceneSaveRequired, true);
+  assert.deepEqual(h.calls.find(c => c.id === 'component.set')!.params.properties, { mesh: { uuid: 'mesh' }, sharedMaterials: [{ uuid: 'material' }], shadowCastingMode: 1 });
+  const bad = new GeometryHarness(); bad.failConfigure = true;
+  await assert.rejects(new GeometryService(bad.port, bad.run.bind(bad)).create(p), error => {
+    const details = (error as { details: JsonObject }).details; assert.equal(details.nodeId, 'created-node'); assert.equal(details.assetUrl, p.url); return true;
+  });
+  assert.equal(bad.native.includes('delete-asset'), false);
+  await assert.rejects(new GeometryService(h.port, h.run.bind(h)).create({ ...p, url: 'db://assets/../escaped.gltf' }), /traversal/);
+});
+
+test('native preview addresses are normalized only when they belong to this host', async () => {
+  const { networkInterfaces } = await import('node:os');
+  const address = Object.values(networkInterfaces()).flatMap(rows => rows ?? []).find(row => row.family === 'IPv4')!.address;
+  let source = `http://${address}:7456`, target = '';
+  const port = { version: '3.8.8', preview: async (_method: string, params: JsonObject) => { target = String(params.url); return {}; }, scene: async () => ({ sceneId: 'saved' }), request: async (_channel: string, message: string) => message === 'query-dirty' ? false : source } as unknown as EditorPort;
+  await new PreviewService(port).execute('preview.start', {}); assert.equal(target, 'http://127.0.0.1:7456/');
+  source = 'http://example.com:7456'; await new PreviewService(port).execute('preview.start', {});
+  assert.equal(target, 'http://example.com:7456/'); // 远端保持原样，由 ManagedPreview 严格拒绝，不能伪装成本机。
 });

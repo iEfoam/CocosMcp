@@ -266,6 +266,18 @@ cocos_build_list
 
 真实平台构建还要求对应 SDK、证书、设备工具和 Creator GUI。任务状态为 `outcome-unknown` 时，先检查产物和日志，再决定是否重试。
 
+### Creator 登录状态
+
+Creator 3.x 的账号目录固定为 `<project>/.codex-work/cache/creator-home`，构建用户数据固定为 `.codex-work/cache/creator-build/<version>/user-data`，不再随构建任务 ID 变化。不要清理这些目录来重试构建，否则可能需要重新登录。旧任务目录不会被自动删除，也不会自动复制其中的凭证。
+
+日常 MCP 服务连接已打开的 Creator；无需为了重启 MCP 再启动编辑器。需要从终端打开 Creator 3.x 时，在本仓库使用固定入口：
+
+```sh
+node scripts/project-env.mjs node scripts/open-creator.mjs --project /path/to/project --creator /Applications/Cocos/Creator/3.8.8/CocosCreator.app/Contents/MacOS/CocosCreator
+```
+
+该入口沿用项目的 `creator-home` 和 `shader-editor` 用户目录；可加 `--dry-run` 只检查参数。首次使用隔离目录或登录凭证过期时仍需登录一次。它不读取或复制 Dashboard 账号，不应与另一实例同时打开同一个工程。
+
 ## 9. 常见错误处理
 
 | 错误 | 处理方式 |

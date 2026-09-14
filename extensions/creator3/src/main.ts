@@ -1,9 +1,11 @@
 import { ExtensionUpdate } from '../../shared/extension-update.js';
 import { McpService } from '../../shared/mcp-service.js';
 import { CreatorShaderHost } from './shader-host.js';
+import { createHash } from 'crypto';
+import { CocosError, Json } from '../../../packages/contracts/src/index.js';
 import { ManagedPreview, type PreviewWindow } from './preview.js';
 import { dirname } from 'path';
-import { readFileSync, readdirSync, existsSync } from 'fs';
+import { readFileSync, readdirSync, existsSync, realpathSync } from 'fs';
 import { join } from 'path';
 import { Creator3Adapter, type EditorPort } from '../../../packages/creator3-adapter/src/index.js';
 import { EditorBridge } from '../../../packages/editor-bridge/src/index.js';
@@ -27,11 +29,27 @@ class CreatorHost implements EditorPort {
       const electron = require('electron') as { BrowserWindow: new (options: unknown) => PreviewWindow };
       return new electron.BrowserWindow(options);
     } });
+    if (method === 'connect-runtime') {
+      const root = join(Editor.Project.path, '.codex-work/cache/cocos-mcp');
+      const projectId = createHash('sha256').update(realpathSync(Editor.Project.path)).digest('hex').slice(0, 24);
+      const gateways = readdirSync(root).filter(name => /^runtime-\d+\.json$/.test(name)).flatMap(name => {
+        try {
+          process.kill(Number(name.slice(8, -5)), 0);
+          const config = Json.object(JSON.parse(readFileSync(join(root, name), 'utf8')));
+          if (config.projectId !== projectId || !/^http:\/\/127\.0\.0\.1:\d+$/.test(String(config.url)) || typeof config.token !== 'string') return [];
+          if (params.gatewayPort && new URL(String(config.url)).port !== String(params.gatewayPort)) return [];
+          return [config];
+        } catch { return []; }
+      });
+      if (gateways.length !== 1) throw new CocosError('CONTEXT_UNAVAILABLE', 'Start one project runtime gateway, or select gatewayPort explicitly');
+      return this.managedPreview.execute(method, { config: gateways[0]!, source: readFileSync(join(__dirname, 'runtime.js'), 'utf8') });
+    }
     return this.managedPreview.execute(method, params);
   }
   disposePreview(): void { this.managedPreview?.dispose(); }
   private shaderHost: CreatorShaderHost | undefined;
   shader(method: string, params: import('../../../packages/contracts/src/index.js').JsonObject): Promise<JsonValue> {
+    if (method === 'compile') return this.scene('shader.compileNative', { ...params, projectPath: Editor.Project.path, editorVersion: Editor.App.version }) as Promise<JsonValue>;
     this.shaderHost ??= new CreatorShaderHost(Editor.App.path, Editor.Project.path, Editor.App.version);
     return this.shaderHost.execute(method, params);
   }

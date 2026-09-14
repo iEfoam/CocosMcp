@@ -1,3 +1,4 @@
+import { networkInterfaces } from 'node:os';
 import { CocosError, Json, type JsonObject, type JsonValue } from '../../contracts/src/index.js';
 import type { EditorPort } from './port.js';
 
@@ -13,7 +14,11 @@ export class PreviewService {
       const info = Json.object(await this.port.scene('sceneInfo'));
       const url = await this.port.request('preview', 'query-preview-url');
       if (typeof url !== 'string') throw new CocosError('EDITOR_ERROR', 'Creator did not return a preview URL');
-      return this.port.preview('start', { ...params, url, sceneId: info.sceneId! });
+      const localUrl = new URL(url);
+      // Creator 默认返回本机局域网地址；只在地址确属本机接口时转换到回环，不放宽窗口的同源限制。
+      const localAddresses = Object.values(networkInterfaces()).flatMap(rows => rows ?? []).map(row => row.address);
+      if (localAddresses.includes(localUrl.hostname)) localUrl.hostname = '127.0.0.1';
+      return this.port.preview('start', { ...params, url: localUrl.href, sceneId: info.sceneId! });
     }
     return this.port.preview(id.slice('preview.'.length), params);
   }

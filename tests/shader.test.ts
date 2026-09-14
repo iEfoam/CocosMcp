@@ -102,6 +102,10 @@ class MockMaterial {
   recompileShaders(): void {}
   overridePipelineStates(): void {}
 }
+class MockState {
+  enabled = false;
+  get native(): MockState { return this; }
+}
 class MockInstance extends MockMaterial {
   constructor(info: { parent: MockMaterial }) { super(); this.parent = info.parent; this.uuid = 'instance'; this.copy(info.parent); }
 }
@@ -111,7 +115,7 @@ class MaterialHarness {
     setMaterialInstance: (material: MockMaterial) => { this.current = material; },
     setSharedMaterial: (material: MockMaterial, _slot: number, force: boolean) => { this.forced = force; this.current.destroy(); this.current = material; } };
   root = { uuid: 'root', children: [], getComponents: () => [this.component] };
-  controller = new MaterialController({ cc: { director: { getScene: () => this.root }, MaterialInstance: MockInstance } as unknown as RuntimeObject, major: 3 });
+  controller = new MaterialController({ cc: { director: { getScene: () => this.root }, renderer: { MaterialInstance: MockInstance } } as unknown as RuntimeObject, major: 3 });
 }
 
 test('repeated instance updates keep a stable parent and force restoration of a shared material', async () => {
@@ -132,4 +136,12 @@ test('bad material parameters and external binding changes preserve the active m
   const external = new MockMaterial(); harness.current = external;
   await assert.rejects(harness.controller.execute('runtime.material.reset', { componentId: 'renderer' }), /outside/);
   assert.equal(harness.current, external);
+});
+
+test('native gfx state self references are excluded from serialized state inspection', () => {
+  const harness = new MaterialHarness();
+  Object.assign(harness.shared.passes[0]!, { blendState: new MockState(), depthStencilState: new MockState(), rasterizerState: new MockState() });
+  const material = harness.controller.describe(harness.shared as unknown as RuntimeObject);
+  const state = Json.object((material.rows as JsonObject[])[0]!.states);
+  assert.deepEqual(state.blendState, { enabled: false });
 });

@@ -23,6 +23,7 @@ export class ManagedPreview {
   private window: PreviewWindow | undefined;
   private sceneId: string | undefined;
   private ready = false;
+  private runtimeRegistered = false;
   private readonly diagnostics: JsonObject[] = [];
   constructor(private readonly factory: PreviewWindowFactory) {}
 
@@ -44,11 +45,30 @@ export class ManagedPreview {
 
   private status(): JsonObject {
     return { running: Boolean(this.window && !this.window.isDestroyed()), pageReady: this.ready, sceneId: this.sceneId ?? null,
-      source: 'managed-preview-window', runtimeBridgeConnected: false, rows: this.diagnostics.slice(-50) };
+      source: 'managed-preview-window', runtimeBridgeRegistration: this.runtimeRegistered ? 'succeeded' : 'not-requested', rows: this.diagnostics.slice(-50) };
   }
 
   async execute(method: string, params: JsonObject): Promise<JsonValue> {
     if (method === 'status') return this.status();
+    if (method === 'connect-runtime') {
+      const window = this.window;
+      if (!window || window.isDestroyed() || !this.ready) throw new CocosError('CONTEXT_UNAVAILABLE', 'Start an MCP preview before connecting its runtime');
+      await this.bounded(window.webContents.executeJavaScript(String(params.source)), 5000);
+      // 凭证来自本工程受控配置，只进入同源开发预览；返回值和错误信息不包含凭证。
+      const result = await this.bounded(window.webContents.executeJavaScript(`(async () => {
+        const cc = await System.import('cc');
+        // 页面 load 完成时引擎仍可能在加载场景；不能把注册网关当作场景可操作。
+        for (let attempt=0; !cc.director.getScene() && attempt<60; attempt++) await new Promise(resolve => setTimeout(resolve,100));
+        if (!cc.director.getScene() || cc.director.getScene().uuid !== ${JSON.stringify(this.sceneId)}) throw new Error('Target preview scene has not launched');
+        if (globalThis.__cocosMcpDevelopmentConnection) await globalThis.__cocosMcpDevelopmentConnection.stop().catch(() => {});
+        globalThis.__cocosMcpDevelopmentConnection = await CocosMCPRuntime.CocosMCP.connect({
+          ...${JSON.stringify(params.config)}, cc, major: 3, development: true
+        });
+        return {connected:true, sceneId:cc.director.getScene()?.uuid ?? null};
+      })()`), 10000);
+      this.runtimeRegistered = Boolean(result && typeof result === 'object' && (result as { connected?: boolean }).connected === true);
+      return result as JsonValue;
+    }
     if (method === 'stop') { this.dispose(); return { stopped: true, scope: 'mcp-owned-preview-window' }; }
     if (method === 'start') {
       const sceneId = String(params.sceneId ?? '');
@@ -78,7 +98,7 @@ export class ManagedPreview {
         this.diagnostics.push({ level: level >= 3 ? 'error' : 'warning', message: String(message).slice(0, 2000) });
         if (this.diagnostics.length > 50) this.diagnostics.shift();
       });
-      window.once('closed', () => { if (this.window === window) { this.window = undefined; this.ready = false; this.sceneId = undefined; } });
+      window.once('closed', () => { if (this.window === window) { this.window = undefined; this.ready = false; this.sceneId = undefined; this.runtimeRegistered = false; } });
       try { await this.bounded(window.loadURL(url), 15000); if (window.isDestroyed()) throw new Error('Preview closed while loading'); this.ready = true; }
       catch (error) { this.dispose(); throw new CocosError('EDITOR_ERROR', 'Preview page failed to load', { cause: String(error) }); }
       return this.status();
@@ -108,7 +128,7 @@ export class ManagedPreview {
   }
 
   dispose(): void {
-    const window = this.window; this.window = undefined; this.sceneId = undefined; this.ready = false;
+    const window = this.window; this.window = undefined; this.sceneId = undefined; this.ready = false; this.runtimeRegistered = false;
     if (window && !window.isDestroyed()) window.destroy();
   }
 }

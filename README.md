@@ -14,6 +14,7 @@
 - Creator 源码/编辑器 ASAR 候选能力目录生成，结果标记为 `source-only`，不会伪装成运行验证。
 - 引擎源码目录分析会生成 `engine-capabilities.json`，记录公开/内部 API、模块、平台条件、废弃标记和源码位置；在当前 `cocos-engine` 快照上已发现 27,611 个源码候选，其中 20,900 个被识别为公开候选，仍需逐项适配和验证。
 - 场景支持 `scene.snapshot` 和 `scene.diff`，可在工作流执行前保存基线、比较结构变化并进行回归检查。
+- Creator 3.8.8 的 Shader/材质工具：Effect 原生编译、依赖指纹、带哈希守卫的资源编辑、材质实例调参、宏变体和 RenderTexture 预览。使用方式、精确版本与验证边界见 [Shader 开发指南](docs/shader-development.md)。
 - Creator CLI 构建任务、状态、日志、取消和产物检查；任务索引持久化在工程 `.codex-work/cache/cocos-mcp/build-jobs.json`，服务重启后可查询，重启时仍在执行的任务会标记为状态未知失败，避免永久占用工程。
 - 显式 `operationId` 支持进程内幂等复用，操作完成结果可通过 `cocos_operation_query` 查询；审计日志只记录操作元信息。
 - 工作流编排支持 `cocos_workflow_plan` 和 `cocos_workflow_execute`：先批量校验参数、版本、风险和副作用，再按顺序执行多步场景生产流程；默认失败即停，并返回已完成步骤和补偿提示。
@@ -27,6 +28,8 @@
 当前代码的安装、能力矩阵、2.x/3.x 差异、运行时桥接、构建任务、安全边界和真实验收步骤见 [实施与验收指南](docs/implementation-guide.md)。
 
 面向日常使用的安装、启动、调用示例见 [使用文档](docs/user-guide.md)；按领域查看能力和版本限制见 [功能介绍](docs/feature-reference.md)。
+
+Creator 3.8.8 的参数化几何体、重复阵列、渲染设置、独立预览窗口和 MCP 图片截图见 [场景生产与预览](docs/scene-production.md)。该模块明确区分已保存配置、实际绘制帧以及需要自定义管线的 AO/物理透射效果。
 
 ## 开发
 
@@ -108,3 +111,5 @@ device-verified   已在目标设备或平台验证
 ## 许可证
 
 自有代码采用 MIT。Cocos Creator、引擎、Spine、DragonBones、平台 SDK 和其他第三方依赖分别遵循其各自许可证；本项目不改变第三方条款。
+
+资源创建目录规则与项目整理功能：[项目资源整理](docs/asset-organization.md)。

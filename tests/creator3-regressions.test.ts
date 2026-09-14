@@ -1,3 +1,5 @@
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { SceneInspector } from '../packages/runtime3-bridge/src/scene.js';
@@ -76,15 +78,19 @@ test('node creation supplies scene root and rejects unattached native false succ
   assert.deepEqual(options, {name: 'Cube', parent: 'root'});
 });
 
-test('prefab conversion returns replacement IDs matched by subtree position', async () => {
+test('prefab conversion returns replacement IDs matched by subtree position', async t => {
+  const root = await mkdtemp(join(process.env.TMPDIR!, 'prefab-regression-')); t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, 'assets', 'Prefabs'), { recursive: true });
   const port = {
+    projectPath: root,
     scene: async (method: string, id: unknown) => {
       if (method === 'childAt') return 'new';
       return {parentId: 'scene', index: 0, rows: [{path: '', name: 'Root', nodeId: id}, {path: '/0', name: 'Child', nodeId: `${String(id)}-child`}]};
     },
     request: async () => 'prefab-asset',
   } as unknown as EditorPort;
-  assert.deepEqual(await new Creator3Adapter(port).execute('prefab.create', {nodeId: 'old', url: 'db://assets/test.prefab'}), {
+  assert.deepEqual(await new Creator3Adapter(port).execute('prefab.create', {nodeId: 'old', url: 'db://assets/Prefabs/test.prefab'}), {
+    assetLocation: { requestedUrl: 'db://assets/Prefabs/test.prefab', url: 'db://assets/Prefabs/test.prefab', folderUrl: 'db://assets/Prefabs', type: 'prefab', reuseExistingFolder: true, targetExists: false },
     assetUuid: 'prefab-asset', rootId: 'new', rows: [
       {path: '', previousNodeId: 'old', nodeId: 'new'},
       {path: '/0', previousNodeId: 'old-child', nodeId: 'new-child'},
@@ -92,8 +98,11 @@ test('prefab conversion returns replacement IDs matched by subtree position', as
   });
 });
 
-test('save copy refuses existing resource before serialization or write', async () => {
+test('save copy refuses existing resource before serialization or write', async t => {
+  const root = await mkdtemp(join(process.env.TMPDIR!, 'scene-copy-regression-')); t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, 'assets', 'Scenes'), { recursive: true }); await writeFile(join(root, 'assets', 'Scenes', 'test.scene'), '{}');
   const port = {
+    projectPath: root,
     scene: async () => { throw new Error('must not serialize'); },
     request: async (_channel: string, message: string) => { assert.equal(message, 'query-asset-info'); return {uuid: 'existing'}; },
   } as unknown as EditorPort;

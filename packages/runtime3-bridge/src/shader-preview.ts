@@ -61,12 +61,12 @@ export class ShaderPreview {
     if (this.baselines.size > 8) this.baselines.delete(this.baselines.keys().next().value!);
     let uniform = true;
     for (let offset = 4; offset < bytes.length; offset += 4) if (bytes[offset] !== bytes[0] || bytes[offset + 1] !== bytes[1] || bytes[offset + 2] !== bytes[2]) { uniform = false; break; }
-    return { baselineId, width: preview.width, height: preview.height, image: this.image(bytes, preview.width, preview.height), uniformImage: uniform,
+    return { baselineId, width: preview.width, height: preview.height, ...Json.object(this.image(bytes, preview.width, preview.height)), uniformImage: uniform,
       compilation: this.materials.compile(preview.material), source: 'dedicated-rendertexture', timeControl: 'live-engine-time' };
   }
   private image(bytes: Uint8Array, width: number, height: number): JsonValue {
     const document = (globalThis as unknown as { document?: Document }).document;
-    if (!document) return { encoding: 'rgba8', rows: Array.from(bytes), origin: 'bottom-left' };
+    if (!document) throw new CocosError('UNSUPPORTED_CAPABILITY', 'PNG capture requires a browser Canvas encoder on this platform');
     const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height;
     const context = canvas.getContext('2d'); if (!context) throw new CocosError('UNSUPPORTED_CAPABILITY', 'PNG encoder unavailable');
     const pixels = context.createImageData(width, height);

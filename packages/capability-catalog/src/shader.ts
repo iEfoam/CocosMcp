@@ -26,6 +26,7 @@ export class ShaderCapabilities {
     add('shader.diagnostics', '查询编译任务并检查源码是否已过期', 'read', { taskId: str }, ['taskId']);
     add('shader.variants.plan', '生成有数量上限的宏组合计划', 'read', { axes: S.record(), limit: { type: 'integer', minimum: 1, maximum: 256 } }, ['axes']);
     add('shader.restore', '仅当当前源码匹配时恢复本次资源备份', 'asset', { backupId: str, expectedHash: str }, ['backupId', 'expectedHash']);
+    add('shader.preview.connect', '将已打开的 MCP 预览连接到本工程开发运行时网关', 'runtime', { gatewayPort: { type: 'integer', minimum: 1, maximum: 65535 } });
     add('material.query', '读取持久化材质和源码哈希', 'read', url, ['url']);
     add('material.create', '通过引擎初始化和序列化创建材质', 'asset', { ...material, effectUrl: str }, ['url', 'effectUrl']);
     add('material.clone', '复制材质资源到新路径', 'asset', { sourceUrl: str, targetUrl: str }, ['sourceUrl', 'targetUrl']);

@@ -64,6 +64,10 @@ export class ShaderService {
         runtimeRequired: ['GPU compilation', 'preview', 'profiling'], supportedMajors: [3], verifiedPlatforms: [],
         compilerExecution: 'synchronous', cancellation: 'not-supported-during-native-call' };
       case 'shader.templates': return this.native('templates', p);
+      case 'shader.preview.connect': {
+        if (!this.port.preview) throw new CocosError('UNSUPPORTED_CAPABILITY', 'Managed preview host unavailable');
+        return Json.value(await this.port.preview('connect-runtime', p));
+      }
       case 'shader.read': case 'material.query': return this.read(str('url'));
       case 'shader.create': return this.save(str('url'), str('content'));
       case 'shader.update': return this.save(str('url'), str('content'), str('expectedHash'));

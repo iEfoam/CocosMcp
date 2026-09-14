@@ -55,6 +55,10 @@ export class Operations {
     for (const [id, title] of [['info', '读取资源信息'], ['meta', '读取导入设置'], ['dependencies', '查询直接资源依赖'], ['users', '查询资源反向引用']] as const) {
       this.add(`asset.${id}`, id === 'dependencies' || id === 'users' ? 'F15' : 'F14', title, 'read', asset, ['url'], [2, 3], id === 'dependencies' || id === 'users' ? { supportedMajors: [3] } : {});
     }
+    this.add('asset.location', 'F13', '规划新资源路径：优先复用已有类型目录，没有则建议创建；不写入资源', 'read', { url: str }, ['url'], [3]);
+    const organize = { scopeUrl: str, recursive: bool, urls: { type: 'array', items: str, maxItems: 2000 } };
+    this.add('asset.organize.plan', 'F13', '按类型预览项目资源整理；默认仅根目录，保留已归类目录，跳过路径敏感资源；agent 必须审查字符串加载路径', 'read', organize, [], [3]);
+    this.add('asset.organize.apply', 'F13', '执行已审查的资源整理计划；传相同范围及 planHash，通过 AssetDB 移动并验证 UUID，返回逐项记录与回滚路径', 'asset', { ...organize, planHash: str }, ['planHash'], [3]);
     this.add('asset.create', 'F13', '通过 AssetDB 创建文本资源', 'asset', { ...asset, content: { type: 'string' } }, ['url', 'content']);
     this.add('asset.save', 'F13', '通过 AssetDB 保存文本资源', 'asset', { ...asset, content: { type: 'string' } }, ['url', 'content']);
     this.add('asset.import', 'F13', '导入工程目录内的文件', 'asset', { sourcePath: str, targetUrl: str }, ['sourcePath', 'targetUrl']);

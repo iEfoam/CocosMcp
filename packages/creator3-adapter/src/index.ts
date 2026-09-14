@@ -4,6 +4,7 @@ import { Operations } from '../../capability-catalog/src/operations.js';
 import { PropertyDump } from './dump.js';
 import type { EditorPort } from './port.js';
 import { ShaderService } from './shader.js';
+import { AssetOrganization } from './asset-organization.js';
 import { AssetQuery } from './asset-query.js';
 import { PreviewService } from './preview.js';
 import { GeometryService } from './geometry.js';
@@ -18,7 +19,8 @@ export class Creator3Adapter implements EditorAdapter {
     const excluded = new Set(['ui.build']);
     if (!this.port.preview || this.port.version !== '3.8.8') for (const id of ['preview.start', 'preview.stop', 'preview.status', 'preview.capture']) excluded.add(id);
     return new Operations().list().filter(row => row.context === 'editor' && row.supportedMajors?.includes(3) && !excluded.has(row.id)
-      && (row.module !== 'F22' || row.id === 'shader.environment' || this.port.version === '3.8.8')).map(row => row.id);
+      && (row.module !== 'F22' || row.id === 'shader.environment' || this.port.version === '3.8.8')
+      && (!row.id.startsWith('rendering.') || this.port.version === '3.8.8')).map(row => row.id);
   }
 
   async revision(): Promise<string> {
@@ -84,6 +86,16 @@ export class Creator3Adapter implements EditorAdapter {
   }
 
   async execute(id: string, p: JsonObject): Promise<JsonValue> {
+    const organization = new AssetOrganization(this.port);
+    if (id === 'asset.location') return organization.location(Json.string(p.url, 'url'));
+    if (id === 'asset.organize.plan') return organization.plan(p);
+    if (id === 'asset.organize.apply') return organization.apply(p);
+    const prepared = await organization.prepare(id, p);
+    const result = await this.executePrepared(id, prepared.params);
+    return prepared.location ? { ...Json.object(result), assetLocation: prepared.location } : result;
+  }
+
+  private async executePrepared(id: string, p: JsonObject): Promise<JsonValue> {
     if (id === 'geometry.create') return new GeometryService(this.port, (id, params) => this.execute(id, params)).create(p);
     if (id === 'geometry.array') return new GeometryService(this.port, (id, params) => this.execute(id, params)).array(p);
     if (id.startsWith('rendering.')) {

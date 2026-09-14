@@ -50,8 +50,9 @@ export class CreatorShaderHost {
         chunks.set(name, path);
       }
     }
-    compiler.options.chunkSearchFn = (name: string): { name: string; content?: string } => {
-      const normalized = name.replace(/\.chunk$/, ''); const path = chunks.get(normalized);
+    compiler.options.chunkSearchFn = (names: string[]): { name: string; content?: string } => {
+      const normalized = names.map(name => name.replace(/\.chunk$/, '')).find(name => chunks.has(name)) ?? names[0]!;
+      const path = chunks.get(normalized);
       if (!path) return { name: normalized };
       const actual = realpathSync(path);
       const roots = [realpathSync(this.engineAssets()), realpathSync(this.projectPath)];

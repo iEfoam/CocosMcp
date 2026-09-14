@@ -49,10 +49,26 @@ export class MaterialController {
     return rows;
   }
   private passes(material: RuntimeObject): RuntimeObject[] { return material.passes as RuntimeObject[] ?? []; }
+  private stateData(value: unknown, depth = 0): JsonValue {
+    if (depth > 6) throw new CocosError('INVALID_ARGUMENT', 'Pipeline state nesting exceeds inspection limit');
+    if (value === null || value === undefined || typeof value !== 'object') return A.safeData(value);
+    if (Array.isArray(value)) return value.map(entry => this.stateData(entry, depth + 1));
+    const rows: JsonObject = {};
+    // 原生 gfx 状态可能通过 getter 暴露；仅在明确的状态对象上读取，不能套用到任意工程对象。
+    for (const key of A.propertyNames(value)) {
+      if (key === 'native') continue;
+      const entry = A.object(value)[key];
+      if (typeof entry !== 'function') rows[key] = this.stateData(entry, depth + 1);
+    }
+    return rows;
+  }
+  private passStates(pass: RuntimeObject): JsonObject {
+    return { blendState: this.stateData(pass.blendState), depthStencilState: this.stateData(pass.depthStencilState), rasterizerState: this.stateData(pass.rasterizerState) };
+  }
   describe(material: RuntimeObject): JsonObject {
     return { materialUuid: A.uuid(material), effectUuid: material.effectAsset ? A.uuid(material.effectAsset) : null, technique: Number(material.technique ?? 0),
       rows: this.passes(material).map((pass, index) => ({ pass: index, properties: A.safeData(pass.properties), defines: A.safeData(pass.defines),
-        states: { blendState: A.safeData(pass.blendState), depthStencilState: A.safeData(pass.depthStencilState), rasterizerState: A.safeData(pass.rasterizerState) },
+        states: this.passStates(pass),
         overrides: Object.keys(A.object(pass.properties ?? {})).map(name => ({ name, value: this.encode(A.call(material, 'getProperty', name, index)) })) })) };
   }
   private encode(value: unknown): JsonValue {
@@ -124,21 +140,45 @@ export class MaterialController {
       }
     }
   }
-  private states(states: JsonObject): void {
+  private states(states: JsonObject, material?: RuntimeObject): void {
     const allowed = new Set(['rasterizerState', 'depthStencilState', 'blendState', 'dynamicStates', 'priority', 'stage', 'phase']);
     for (const key of Object.keys(states)) if (!allowed.has(key)) throw new CocosError('INVALID_ARGUMENT', `Unknown pipeline state: ${key}`);
+    const pass = material ? this.passes(material)[0] : undefined;
+    for (const key of ['blendState', 'depthStencilState', 'rasterizerState']) if (states[key] !== undefined && pass) this.stateFields(states[key]!, pass[key], key);
+  }
+  private stateFields(value: JsonValue, shape: unknown, path: string): void {
+    if (Array.isArray(value)) {
+      if (!Array.isArray(shape) || !shape.length || value.length > 8) throw new CocosError('INVALID_ARGUMENT', `Invalid state array: ${path}`);
+      value.forEach((entry, index) => this.stateFields(entry, shape[index] ?? shape[0], `${path}.${index}`)); return;
+    }
+    if (value && typeof value === 'object') {
+      if (!shape || typeof shape !== 'object') throw new CocosError('INVALID_ARGUMENT', `Invalid state object: ${path}`);
+      for (const [key, entry] of Object.entries(value)) {
+        Json.safePath(key);
+        if (!(key in shape)) throw new CocosError('INVALID_ARGUMENT', `Unknown pipeline state: ${path}.${key}`);
+        this.stateFields(entry, A.object(shape)[key], `${path}.${key}`);
+      }
+      return;
+    }
+    if (typeof value !== typeof shape || (typeof value === 'number' && !Number.isFinite(value))) throw new CocosError('INVALID_ARGUMENT', `Invalid pipeline state value: ${path}`);
   }
   async instance(parent: RuntimeObject, p: JsonObject): Promise<RuntimeObject> {
     const passIndex = p.passIndex === undefined ? undefined : Number(p.passIndex);
     if (passIndex !== undefined && (!Number.isInteger(passIndex) || !this.passes(parent)[passIndex])) throw new CocosError('INVALID_ARGUMENT', 'Pass index out of range');
     const defines = Json.object(p.defines ?? {}); this.validateDefines(parent, defines);
-    const states = Json.object(p.states ?? {}); this.states(states);
+    const states = Json.object(p.states ?? {}); this.states(states, parent);
     let base = parent;
     while (base.parent) base = A.object(base.parent);
-    const instance = A.construct(this.environment.cc.MaterialInstance, [{ parent: base }]);
+    // Creator 3.8.8 将 MaterialInstance 导出在 renderer 命名空间，运行时 cc 顶层并不包含该类型。
+    const instanceType = A.object(this.environment.cc.renderer ?? {}).MaterialInstance ?? this.environment.cc.MaterialInstance;
+    const instance = A.construct(instanceType, [{ parent: base }]);
     try {
       // 连续调参不能把上一个临时实例作为父对象，否则释放旧实例后新 Pass 会引用失效资源。
       A.call(instance, 'copy', parent);
+      for (const [index, pass] of this.passes(parent).entries()) {
+        if (pass.defines) A.call(instance, 'recompileShaders', pass.defines, index);
+        if (pass.blendState && pass.depthStencilState && pass.rasterizerState) A.call(instance, 'overridePipelineStates', this.passStates(pass), index);
+      }
       if (Object.keys(defines).length) A.call(instance, 'recompileShaders', defines, passIndex);
       if (Object.keys(states).length) A.call(instance, 'overridePipelineStates', states, passIndex);
       await this.properties(instance, Json.object(p.properties ?? {}), passIndex); return instance;
@@ -174,18 +214,20 @@ export class MaterialController {
       const before = this.describe(material); const migration: JsonObject[] = [];
       if (p.effectUuid && previous) {
         // 切换 Effect 从新材质开始；仅迁移仍存在且能通过类型验证的显式参数。
+        A.call(material, 'reset', { effectAsset: effect, technique });
+        this.validateDefines(material, Json.object(p.defines ?? {})); this.states(Json.object(p.states ?? {}), material);
         A.call(material, 'reset', { effectAsset: effect, technique, defines: p.defines ?? {}, states: p.states ?? {} });
         const declared = Object.assign({}, ...this.passes(material).map(pass => pass.properties));
         for (const row of before.rows as JsonObject[]) for (const property of row.overrides as JsonObject[]) {
           if (property.value === null) continue;
           const name = String(property.name);
           if (!(name in declared)) { migration.push({ name, status: 'removed' }); continue; }
-          try { await this.properties(material, { [name]: property.value! }); migration.push({ name, status: 'retained' }); }
+          try { await this.properties(material, { [name]: property.value! }, Number(row.pass)); migration.push({ name, pass: row.pass!, status: 'retained' }); }
           catch (error) { migration.push({ name, status: 'incompatible', reason: CocosError.from(error).message }); }
         }
       } else {
         if (!previous) A.call(material, 'initialize', { effectAsset: effect, technique });
-        this.validateDefines(material, Json.object(p.defines ?? {})); this.states(Json.object(p.states ?? {}));
+        this.validateDefines(material, Json.object(p.defines ?? {})); this.states(Json.object(p.states ?? {}), material);
         // copy(overrides) 保留未修改的各 Pass 参数、宏和状态。
         const copy = A.construct(this.environment.cc.Material, []);
         const passIndex = p.passIndex === undefined ? undefined : Number(p.passIndex);

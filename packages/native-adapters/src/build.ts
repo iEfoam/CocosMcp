@@ -53,7 +53,9 @@ export class BuildJobs {
     const paths = await ProjectPaths.open(projectPath); const jobId = randomUUID();
     const outputPath = await paths.work('build', `creator/${jobId}`);
     const temporary = await paths.work('tmp', `creator-${jobId}`);
-    const cache = await paths.work('cache', `creator-${jobId}`);
+    // 登录状态必须跨任务保留；按编辑器版本隔离，避免升级污染配置，也不占用 GUI 的用户目录。
+    const cache = await paths.work('cache', `creator-build/${installation.version}`);
+    const creatorHome = await paths.work('cache', 'creator-home');
     const logs = await paths.work('logs', 'builds'); const logPath = join(logs, `${jobId}.log`);
     for (const reserved of ['project', 'projectPath', 'configPath', 'buildPath', 'dest', 'platform']) if (reserved in options) throw new CocosError('INVALID_ARGUMENT', `Build option is controlled by the runner: ${reserved}`);
     const configPath = join(temporary, 'build.json');
@@ -67,7 +69,7 @@ export class BuildJobs {
     await this.persist(paths.root);
     await mkdir(join(cache, 'user-data'), { recursive: true });
     // 使用参数数组，不经过 shell；配置文件也避免了 --build 内的参数注入。
-    const child = spawn(installation.executable, [`--user-data-dir=${join(cache, 'user-data')}`, '--project', paths.root, '--build', `configPath=${configPath}`],
+    const child = spawn(installation.executable, [...(installation.major === 3 ? ['--home', creatorHome] : []), `--user-data-dir=${join(cache, 'user-data')}`, '--project', paths.root, '--build', `configPath=${configPath}`],
       { cwd: paths.root, env: { ...paths.environment(), TMPDIR: temporary, TMP: temporary, TEMP: temporary, ELECTRON_ENABLE_LOGGING: '1' }, stdio: ['ignore', 'pipe', 'pipe'], shell: false });
     this.children.set(jobId, child); child.stdout?.pipe(log, { end: false }); child.stderr?.pipe(log, { end: false });
     child.once('error', error => { job.error = error.message; });

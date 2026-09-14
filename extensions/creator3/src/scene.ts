@@ -4,6 +4,7 @@ import type { RuntimeObject } from '../../../packages/runtime3-bridge/src/access
 import type { JsonValue } from '../../../packages/contracts/src/index.js';
 import { Json } from '../../../packages/contracts/src/index.js';
 import { MaterialController } from '../../../packages/runtime3-bridge/src/material.js';
+import { CreatorShaderHost } from './shader-host.js';
 
 declare const Editor: { App: { path: string } };
 declare const EditorExtends: { serialize(value: unknown): unknown };
@@ -21,6 +22,10 @@ class SceneLifecycle {
       this.materials = new MaterialController(this.inspector.environment);
     }
     if (method === 'shader.material') return this.materials!.serialized(Json.object(args[0]));
+    if (method === 'shader.compileNative') {
+      const p = Json.object(args[0]);
+      return new CreatorShaderHost(Editor.App.path, Json.string(p.projectPath, 'projectPath'), Json.string(p.editorVersion, 'editorVersion')).execute('compile', p);
+    }
     if (method === 'shader.binding') return this.materials!.binding(Json.object(args[0]));
     if (method === 'shader.bindings') return this.materials!.bindings(String(args[0]));
     if (method === 'shader.checkMaterial') { await this.materials!.load(String(args[0]), 'Material'); return { valid: true }; }

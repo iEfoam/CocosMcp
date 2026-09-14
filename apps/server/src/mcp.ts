@@ -4,6 +4,7 @@ import { CocosError, Json, type ExecutionRequest } from '../../../packages/contr
 import type { CocosApplication } from '../../../packages/application/src/index.js';
 import type { RuntimeGateway } from '../../../packages/application/src/runtime-gateway.js';
 import type { BuildJobs } from '../../../packages/native-adapters/src/build.js';
+import { CaptureResult } from './capture-result.js';
 
 export class CocosMcpServer {
   constructor(private readonly application: CocosApplication, private readonly runtimes?: RuntimeGateway, private readonly builds?: BuildJobs, private readonly allTools = false) {}
@@ -11,7 +12,7 @@ export class CocosMcpServer {
   private async result(task: () => Promise<unknown> | unknown): Promise<CallToolResult> {
     try {
       const value = Json.value(await task());
-      return { content: [{ type: 'text', text: JSON.stringify(value) }], structuredContent: value };
+      return new CaptureResult().format(value);
     } catch (error) {
       const value = Json.value({ error: CocosError.from(error).toJSON() });
       return { isError: true, content: [{ type: 'text', text: JSON.stringify(value) }], structuredContent: value };
@@ -19,7 +20,7 @@ export class CocosMcpServer {
   }
 
   create(): McpServer {
-    const server = new McpServer({ name: 'cocos-mcp', version: '0.1.0' });
+    const server = new McpServer({ name: 'cocos-mcp', version: '0.1.0' }, { instructions: '创建资源前调用 asset.location，优先复用已有对应类型目录，不得把生成资源散落在 assets 根目录。后续使用实际 assetLocation.url。用户要求项目资源整理时，先 asset.organize.plan，审查类型、路径引用和 skipped，再以相同范围及 planHash 执行 asset.organize.apply；通过 AssetDB 保留 UUID，检查 partial/pending 与恢复日志，不得直接搬动文件或重建 meta。' });
     const project = { projectId: z.string().min(1) };
     const envelope = { ...project, instanceId: z.string().optional(), runtimeInstanceId: z.string().optional(),
       operationId: z.string().min(1).max(128).optional(), expectedRevision: z.string().optional() };
@@ -34,10 +35,17 @@ export class CocosMcpServer {
       args => this.result(() => this.application.catalog.describe(args.capabilityId)));
     server.registerTool('cocos_coverage', { title: '功能覆盖清单', description: '查看提案全部 54 个模块的实现和验证缺口', inputSchema: z.object({}), annotations: read },
       () => this.result(() => this.application.catalog.coverage()));
-    server.registerTool('cocos_capability_execute', { title: '执行已注册能力', description: '按能力详情的 Schema 执行。修改前建议传 expectedRevision 和稳定 operationId。执行器不会执行任意 eval。',
+    server.registerTool('cocos_capability_execute', { title: '执行已注册能力', description: '创建资源前必须调用 asset.location，复用已有类型目录；后续使用结果的 assetLocation.url，禁止假定 assets 根路径。整理已有资源先 asset.organize.plan，审查引用后用相同范围及 planHash 调用 asset.organize.apply。按能力详情的 Schema 执行。修改前建议传 expectedRevision 和稳定 operationId。执行器不会执行任意 eval。',
       inputSchema: z.object({ ...envelope, capabilityId: z.string(), params: z.record(z.string(), z.unknown()).default({}) }),
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true } },
       (args, context) => this.execute(args, context));
+    const organizationScope = { scopeUrl: z.string().optional(), recursive: z.boolean().optional(), urls: z.array(z.string()).max(2000).optional() };
+    server.registerTool('cocos_assets_organize_plan', { title: '项目资源整理预览', description: '按资源类型规划整理，优先已有目录；返回源/目标、UUID、冲突与跳过原因。默认仅 assets 根目录，agent 审查路径引用后再执行。',
+      inputSchema: z.object({ ...envelope, ...organizationScope }), annotations: read },
+      ({ scopeUrl, recursive, urls, ...request }, context) => this.execute({ ...request, capabilityId: 'asset.organize.plan', params: { ...(scopeUrl !== undefined ? { scopeUrl } : {}), ...(recursive !== undefined ? { recursive } : {}), ...(urls !== undefined ? { urls } : {}) } }, context));
+    server.registerTool('cocos_assets_organize_apply', { title: '执行项目资源整理', description: '执行已审查计划；必须保留预览范围和 planHash。通过 AssetDB 移动保留 UUID，遇到变化拒绝，部分失败返回恢复记录。',
+      inputSchema: z.object({ ...envelope, ...organizationScope, planHash: z.string().min(1) }), annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false } },
+      ({ scopeUrl, recursive, urls, planHash, ...request }, context) => this.execute({ ...request, capabilityId: 'asset.organize.apply', params: { planHash, ...(scopeUrl !== undefined ? { scopeUrl } : {}), ...(recursive !== undefined ? { recursive } : {}), ...(urls !== undefined ? { urls } : {}) } }, context));
     const workflowStep = z.object({ capabilityId: z.string().min(1), params: z.record(z.string(), z.unknown()).default({}),
       instanceId: z.string().optional(), runtimeInstanceId: z.string().optional(), operationId: z.string().optional(), expectedRevision: z.string().optional() });
     server.registerTool('cocos_workflow_plan', { title: '规划工作流', description: '批量校验能力参数、版本、风险和副作用；规划不会修改工程',
