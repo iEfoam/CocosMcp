@@ -1,0 +1,95 @@
+{
+  "name": "cocos-mcp-creator3",
+  "version": "0.1.0",
+  "package_version": 2,
+  "editor": ">=3.0.0 <4.0.0",
+  "description": "免费开源 CocosMCP 编辑器桥接（Creator 3.x）",
+  "author": "CocosMCP contributors",
+  "license": "MIT",
+  "main": "./dist/main.cjs",
+  "contributions": {
+    "menu": [
+      {
+        "path": "CocosMCP",
+        "label": "启动桥接",
+        "message": "start"
+      },
+      {
+        "path": "CocosMCP",
+        "label": "停止桥接",
+        "message": "stop"
+      },
+      {
+        "path": "CocosMCP",
+        "label": "显示连接状态",
+        "message": "status"
+      },
+      {
+        "path": "CocosMCP",
+        "label": "打开控制中心",
+        "message": "open"
+      }
+    ],
+    "messages": {
+      "start": {
+        "methods": [
+          "start"
+        ]
+      },
+      "stop": {
+        "methods": [
+          "stop"
+        ]
+      },
+      "status": {
+        "methods": [
+          "status"
+        ]
+      },
+      "open": {
+        "methods": [
+          "open"
+        ]
+      },
+      "panel-state": {
+        "methods": [
+          "panelState"
+        ]
+      },
+      "service-start": {
+        "methods": [
+          "startService"
+        ]
+      },
+      "service-stop": {
+        "methods": [
+          "stopService"
+        ]
+      },
+      "extension-update": {
+        "methods": [
+          "updateExtension"
+        ]
+      }
+    },
+    "scene": {
+      "script": "./dist/scene.cjs",
+      "methods": [
+        "dispatch"
+      ]
+    }
+  },
+  "panels": {
+    "default": {
+      "main": "dist/panel.cjs",
+      "type": "dockable",
+      "title": "CocosMCP 控制中心",
+      "size": {
+        "width": 720,
+        "height": 620,
+        "min-width": 520,
+        "min-height": 440
+      }
+    }
+  }
+}
