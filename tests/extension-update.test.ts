@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { GithubUpdate } from '../packages/native-adapters/src/github-update.js';
 import { ExtensionUpdate } from '../extensions/shared/extension-update.js';
 
 class UpdateFixture {
@@ -16,22 +18,26 @@ class UpdateFixture {
   }
 }
 
-test('extension update installs with backup while keeping running version until reload', async () => {
+test('GitHub update validates release and installs while retaining running version', async () => {
   const {project, root} = await new UpdateFixture().create();
   const updater = new ExtensionUpdate(project, root, 3);
-  const first = updater.update();
-  assert.equal(updater.update(), first);
-  await first;
-  const installed = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+  const manifest = JSON.parse(await readFile('.codex-work/build/extensions/creator3/package.json', 'utf8'));
+  const rows = [];
+  for (const path of ['package.json','LICENSE','dist/main.cjs','dist/scene.cjs','dist/panel.cjs','dist/service.mjs','dist/update.mjs']) rows.push({path, content: (await readFile(join('.codex-work/build/extensions/creator3',path))).toString('base64')});
+  const data = Buffer.from(JSON.stringify({version: manifest.version, buildId: `v${manifest.version}`, major: 3, rows: rows.map(row => row.path === 'package.json' ? {path: row.path, content: Buffer.from(JSON.stringify({...manifest,buildId: `v${manifest.version}`})).toString('base64')} : row)}));
+  const digest = createHash('sha256').update(data).digest('hex');
+  const request: typeof fetch = async input => String(input).includes('api.github.com') ? new Response(JSON.stringify({tag_name: `v${manifest.version}`,assets:[{name:'cocos-mcp-creator3.json',browser_download_url:'https://github.com/iEfoam/CocosMcp/releases/download/test/cocos-mcp-creator3.json',digest:`sha256:${digest}`}]})) : new Response(data);
+  const github = new GithubUpdate(request);
+  await github.install(project, 3);
   assert.equal(updater.snapshot().version, '0.0.0');
-  assert.equal(updater.snapshot().installedBuildId, installed.buildId);
   assert.equal(updater.snapshot().reloadRequired, true);
-  await updater.update();
-  assert.match(updater.snapshot().message!, /重载/);
-  const reloaded = new ExtensionUpdate(project, root, 3);
-  assert.equal(reloaded.snapshot().reloadRequired, false);
-  await reloaded.update();
-  assert.match(reloaded.snapshot().message!, /最新版本/);
+  assert.equal(new ExtensionUpdate(project, root, 3).snapshot().reloadRequired, false);
+  await github.install(project, 3);
+  const release = await github.latest(3);
+  assert.throws(() => github.validate(Buffer.from('tampered'), release, 3), /SHA-256/);
+  const malicious = JSON.parse(data.toString()); malicious.rows[0].path = '../outside';
+  const invalid = Buffer.from(JSON.stringify(malicious));
+  assert.throws(() => github.validate(invalid, {...release, digest:createHash('sha256').update(invalid).digest('hex')}, 3), /非法/);
 });
 
 test('extension update reports missing configuration without changing installed version', async () => {

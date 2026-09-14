@@ -16,11 +16,13 @@ for (const major of [2, 3]) {
     outdir: join(extensionRoot, 'dist'), outExtension: { '.js': `.${extension}` }, bundle: true, platform: 'node',
     target: major === 2 ? 'node8' : 'node12', format: 'cjs', sourcemap: true, external: ['cc'] });
   await build({ entryPoints: ['apps/server/src/managed-service.ts'], outfile: join(extensionRoot, 'dist/service.mjs'), bundle: true, platform: 'node', target: 'node24', format: 'esm', banner: { js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);" } });
+  await build({ entryPoints: ['apps/server/src/update-extension.ts'], outfile: join(extensionRoot, 'dist/update.mjs'), bundle: true, platform: 'node', target: 'node24', format: 'esm' });
   await writeFile(join(extensionRoot, 'service-config.json'), JSON.stringify({ nodeExecutable: process.execPath }));
   const manifest = JSON.parse(await readFile(`extensions/creator${major}/package.json`, 'utf8'));
   const hash = createHash('sha256');
-  for (const file of [`main.${extension}`, `scene.${extension}`, `panel.${extension}`, 'service.mjs']) hash.update(await readFile(join(extensionRoot, 'dist', file)));
-  manifest.buildId = hash.digest('hex').slice(0, 12);
+  for (const file of [`main.${extension}`, `scene.${extension}`, `panel.${extension}`, 'service.mjs', 'update.mjs']) hash.update(await readFile(join(extensionRoot, 'dist', file)));
+  manifest.buildId = process.env.COCOS_RELEASE_TAG || hash.digest('hex').slice(0, 12);
+  if (process.env.COCOS_RELEASE_TAG) manifest.version = process.env.COCOS_RELEASE_TAG.replace(/^v/, '');
   await writeFile(join(extensionRoot, 'package.json'), JSON.stringify(manifest, null, 2) + '\n');
   await copyFile('LICENSE', join(extensionRoot, 'LICENSE'));
 }

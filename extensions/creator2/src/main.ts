@@ -52,7 +52,7 @@ class ExtensionLifecycle {
     if (!this.bridge) { const host = new CreatorHost(); this.bridge = new EditorBridge(new Creator2Adapter(host), host.projectPath, host.version); }
     return this.bridge;
   }
-  async panelState(): Promise<PanelState> { const state = await this.getBridge().panelStateWithRuntime(); state.service = this.getService().snapshot(); state.extension = this.getUpdater().snapshot(); return state; }
+  async panelState(): Promise<PanelState> { const state = await this.getBridge().panelStateWithRuntime(); state.service = this.getService().snapshot(); this.getUpdater().check(); state.extension = this.getUpdater().snapshot(); return state; }
   async start(): Promise<void> {
     this.getUpdater();
     // 菜单与面板可同时请求启动，必须复用同一次初始化以免留下重复监听器。

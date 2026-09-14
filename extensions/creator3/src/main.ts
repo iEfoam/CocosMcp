@@ -60,7 +60,7 @@ class ExtensionLifecycle {
     if (!this.bridge) { const host = new CreatorHost(); this.bridge = new EditorBridge(new Creator3Adapter(host), host.projectPath, host.version); }
     return this.bridge;
   }
-  async panelState(): Promise<PanelState> { const state = await this.getBridge().panelStateWithRuntime(); state.service = this.getService().snapshot(); state.extension = this.getUpdater().snapshot(); return state; }
+  async panelState(): Promise<PanelState> { const state = await this.getBridge().panelStateWithRuntime(); state.service = this.getService().snapshot(); this.getUpdater().check(); state.extension = this.getUpdater().snapshot(); return state; }
   async start(): Promise<void> {
     this.getUpdater();
     if (this.starting) return this.starting;

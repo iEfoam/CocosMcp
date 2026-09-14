@@ -3,13 +3,33 @@ import { join } from 'path';
 import { execFile } from 'child_process';
 
 interface VersionManifest { name: string; version: string; buildId?: string }
-export interface ExtensionVersionState { version: string; buildId: string; installedVersion: string; installedBuildId: string; reloadRequired: boolean; updating: boolean; message: string | null }
+export interface ExtensionVersionState { version: string; buildId: string; installedVersion: string; installedBuildId: string; reloadRequired: boolean; updating: boolean; message: string | null; latestVersion?: string; checking?: boolean }
 
-/** 更新仅使用安装器记录的本地构建源，不接受面板传入的路径或命令。 */
+/** 更新入口固定为随扩展打包的 GitHub 更新器，不接受面板传入的路径或命令。 */
 export class ExtensionUpdate {
   private readonly running: VersionManifest;
   private pending: Promise<void> | undefined;
   private message: string | null = null;
+  private latestVersion: string | undefined;
+  private checking: Promise<void> | undefined;
+  private nextCheck = 0;
+  private invoke(command: 'check' | 'install'): Promise<{version: string}> {
+    const config = JSON.parse(readFileSync(join(this.root, 'service-config.json'), 'utf8')) as {nodeExecutable?: string};
+    if (!config.nodeExecutable) throw new Error('尚未配置 Node.js，请重新安装扩展');
+    const work = join(this.project, '.codex-work');
+    return new Promise((accept, reject) => execFile(config.nodeExecutable!, [join(this.root, 'dist/update.mjs'), command, this.project, String(this.major)], {
+      env: { ...process.env, TMPDIR: join(work, 'tmp'), TMP: join(work, 'tmp'), TEMP: join(work, 'tmp'), NODE_COMPILE_CACHE: join(work, 'cache/node'), XDG_CACHE_HOME: join(work, 'cache') },
+      timeout: 120000, maxBuffer: 1024 * 1024,
+    }, (error, stdout, stderr) => {
+      if (error) { reject(new Error(stderr.trim() || error.message)); return; }
+      try { accept(JSON.parse(stdout)); } catch { reject(new Error('更新器返回无效版本信息')); }
+    }));
+  }
+  check(): void {
+    if (this.checking || this.pending || Date.now() < this.nextCheck) return;
+    this.nextCheck = Date.now() + 5 * 60 * 1000;
+    this.checking = Promise.resolve().then(() => this.invoke('check')).then(result => { this.latestVersion = result.version; }).catch(error => { this.message = `检查更新失败：${error instanceof Error ? error.message : String(error)}`; }).finally(() => { this.checking = undefined; });
+  }
   constructor(private readonly project: string, private readonly root: string, private readonly major: 2 | 3) {
     this.running = this.manifest(root);
   }
@@ -18,7 +38,7 @@ export class ExtensionUpdate {
     const installed = this.manifest(this.root);
     return { version: this.running.version, buildId: this.running.buildId ?? '', installedVersion: installed.version,
       installedBuildId: installed.buildId ?? '', reloadRequired: installed.version !== this.running.version || installed.buildId !== this.running.buildId,
-      updating: Boolean(this.pending), message: this.message };
+      ...(this.latestVersion ? { latestVersion: this.latestVersion } : {}), checking: Boolean(this.checking), updating: Boolean(this.pending), message: this.message };
   }
   update(): Promise<void> {
     if (this.pending) return this.pending;
@@ -26,22 +46,10 @@ export class ExtensionUpdate {
     return this.pending;
   }
   private async install(): Promise<void> {
-    const config = JSON.parse(readFileSync(join(this.root, 'service-config.json'), 'utf8')) as {nodeExecutable?: string; buildRoot?: string};
-    if (!config.nodeExecutable || !config.buildRoot) throw new Error('尚未配置本地更新源，请先使用 CocosMCP 安装器安装新版扩展');
-    const source = this.manifest(join(config.buildRoot, `extensions/creator${this.major}`));
-    if (source.name !== this.running.name || !source.buildId) throw new Error('更新包身份不匹配或缺少构建标识，请重新构建');
-    const installed = this.manifest(this.root);
-    if (source.version === installed.version && source.buildId === installed.buildId) { this.message = this.snapshot().reloadRequired ? '新版已安装，请在扩展管理器中重载扩展' : '已是本地构建源中的最新版本'; return; }
-    this.message = '正在备份并安装本地构建版本…';
-    const work = join(this.project, '.codex-work');
-    await new Promise<void>((accept, reject) => {
-      execFile(config.nodeExecutable!, [join(config.buildRoot!, 'server/cli.mjs'), 'install', '--project', this.project, '--major', String(this.major)], {
-        env: { ...process.env, TMPDIR: join(work, 'tmp'), TMP: join(work, 'tmp'), TEMP: join(work, 'tmp'), NODE_COMPILE_CACHE: join(work, 'cache/node'), XDG_CACHE_HOME: join(work, 'cache') },
-        timeout: 120000, maxBuffer: 1024 * 1024,
-      }, (error, _stdout, stderr) => error ? reject(new Error(`更新失败：${stderr.trim() || error.message}`)) : accept());
-    });
-    const after = this.manifest(this.root);
-    if (after.version !== source.version || after.buildId !== source.buildId) throw new Error('安装后版本校验失败');
-    this.message = '新版已安装，旧版本已备份；请在扩展管理器中重载扩展后重新启动 MCP 服务';
+    await this.checking;
+    this.message = '正在从 GitHub 下载并安装最新版本…';
+    const result = await this.invoke('install');
+    this.latestVersion = result.version;
+    this.message = this.snapshot().reloadRequired ? '新版已安装，旧版本已备份；请重载扩展后重新启动 MCP 服务' : '已是 GitHub 最新版本';
   }
 }
