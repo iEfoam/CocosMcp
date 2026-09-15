@@ -1,3 +1,4 @@
+import { BuildArtifacts } from './build-artifacts.js';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
@@ -5,6 +6,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { CocosError, type JsonObject, type JsonValue } from '../../contracts/src/index.js';
 import { ProjectPaths } from '../../application/src/paths.js';
+import { AtomicJsonFile } from './atomic-json.js';
 import { CreatorLocator } from './creator.js';
 
 interface BuildJob {
@@ -14,6 +16,7 @@ interface BuildJob {
 }
 
 export class BuildJobs {
+  private readonly json = new AtomicJsonFile();
   private readonly jobs = new Map<string, BuildJob>();
   private readonly children = new Map<string, ChildProcess>();
   private readonly reports = new Map<string, string>();
@@ -42,7 +45,7 @@ export class BuildJobs {
   private async persist(projectPath: string): Promise<void> {
     const path = await this.indexPath(projectPath);
     const rows = [...this.jobs.values()].filter(row => row.projectPath === projectPath);
-    await writeFile(path, JSON.stringify(rows, null, 2), { mode: 0o600 });
+    await this.json.write(path, rows);
   }
 
   async start(projectId: string, projectPath: string, creatorPath: string, platform: string, options: JsonObject = {}): Promise<JsonValue> {
@@ -65,7 +68,7 @@ export class BuildJobs {
     const report = join(logs, `${jobId}.json`); this.reports.set(jobId, report);
     const job: BuildJob = { jobId, projectId, projectPath: paths.root, state: 'running', platform, creatorVersion: installation.version, startedAt: new Date().toISOString(), outputPath, logPath };
     this.jobs.set(jobId, job);
-    await writeFile(report, JSON.stringify(job, null, 2));
+    await this.json.write(report, job);
     await this.persist(paths.root);
     await mkdir(join(cache, 'user-data'), { recursive: true });
     // 使用参数数组，不经过 shell；配置文件也避免了 --build 内的参数注入。
@@ -82,11 +85,11 @@ export class BuildJobs {
           job.state = !job.error && !signal && (code === 36 || code === 0) && hasOutput ? 'succeeded' : 'failed';
           if (job.state === 'failed' && !job.error) job.error = `Creator exited with ${code ?? signal}; outputPresent=${hasOutput}`;
         }
-        await writeFile(report, JSON.stringify(job, null, 2));
+        await this.json.write(report, job);
         await this.persist(paths.root);
       })().catch(error => { void (async () => {
         job.state = 'failed'; job.error = String(error); job.completedAt ??= new Date().toISOString();
-        await writeFile(report, JSON.stringify(job, null, 2)); await this.persist(paths.root);
+        await this.json.write(report, job); await this.persist(paths.root);
         console.error('[CocosMCP build]', error);
       })().catch(failure => console.error('[CocosMCP build] Failed to persist failure state', failure)); });
     });
@@ -106,6 +109,13 @@ export class BuildJobs {
     await this.hydrate(projectId, projectPath);
     return { rows: [...this.jobs.values()].filter(job => job.projectId === projectId).map(job => JSON.parse(JSON.stringify(job)) as JsonValue) };
   }
+  async artifacts(projectId: string, projectPath: string, jobId: string, entryPaths: string[]): Promise<JsonValue> {
+    await this.hydrate(projectId, projectPath);
+    const job = this.get(projectId, jobId);
+    if (job.state !== 'succeeded') throw new CocosError('OPERATION_CONFLICT', 'Only successful, completed build jobs can be inspected');
+    const result = await new BuildArtifacts().inspect(projectPath, jobId, entryPaths);
+    return { ...result as JsonObject, platform: job.platform, creatorVersion: job.creatorVersion };
+  }
   async logs(projectId: string, projectPath: string, jobId: string, offset = 0, limit = 200): Promise<JsonValue> {
     await this.hydrate(projectId, projectPath);
     const job = this.get(projectId, jobId); const lines = (await readFile(job.logPath, 'utf8')).split(/\r?\n/);
@@ -116,7 +126,7 @@ export class BuildJobs {
     const job = this.get(projectId, jobId); const child = this.children.get(jobId);
     if (!child || job.state !== 'running') throw new CocosError('OPERATION_CONFLICT', 'Build is not running');
     job.state = 'cancelled'; child.kill('SIGTERM');
-    await writeFile(this.reports.get(jobId)!, JSON.stringify(job, null, 2)); await this.persist(projectPath); return this.status(projectId, projectPath, jobId);
+    await this.json.write(this.reports.get(jobId)!, job); await this.persist(projectPath); return this.status(projectId, projectPath, jobId);
   }
   async close(): Promise<void> { for (const job of this.jobs.values()) if (job.state === 'running') await this.cancel(job.projectId, job.projectPath, job.jobId); }
 }

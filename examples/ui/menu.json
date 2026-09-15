@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "root": {
+    "key": "menu", "name": "MCPMenu",
+    "components": [{ "type": "cc.UITransform", "properties": { "contentSize": { "width": 640, "height": 480 } } }],
+    "children": [
+      { "key": "title", "name": "Title", "position": { "x": 0, "y": 150, "z": 0 }, "components": [
+        { "type": "cc.UITransform", "properties": { "contentSize": { "width": 400, "height": 60 } } },
+        { "type": "cc.Label", "properties": { "string": "Cocos MCP", "fontSize": 32, "lineHeight": 40 } }
+      ] },
+      { "key": "start", "name": "StartButton", "components": [
+        { "type": "cc.UITransform", "properties": { "contentSize": { "width": 220, "height": 64 } } },
+        { "type": "cc.Label", "properties": { "string": "Start", "fontSize": 24, "lineHeight": 32 } },
+        { "type": "cc.Button", "properties": { "interactable": true, "transition": 0 } }
+      ] },
+      { "key": "scroll", "name": "Scroll", "position": { "x": 0, "y": -130, "z": 0 }, "components": [
+        { "type": "cc.UITransform", "properties": { "contentSize": { "width": 400, "height": 100 } } },
+        { "type": "cc.Mask", "properties": { "type": 0 } },
+        { "type": "cc.ScrollView", "properties": { "content": { "nodeKey": "content" }, "horizontal": false, "vertical": true } }
+      ], "children": [
+        { "key": "content", "name": "Content", "components": [
+          { "type": "cc.UITransform", "properties": { "contentSize": { "width": 400, "height": 300 } } },
+          { "type": "cc.Label", "properties": { "string": "One\nTwo\nThree\nFour\nFive", "fontSize": 24, "lineHeight": 48 } }
+        ] }
+      ] }
+    ]
+  }
+}

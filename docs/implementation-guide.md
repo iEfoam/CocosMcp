@@ -18,7 +18,7 @@ CocosMCP 由独立 MCP 服务、Creator 2.x 扩展、Creator 3.x 扩展、编辑
 - 工作流规划、顺序执行、失败停止、状态持久化及操作幂等记录。
 - Creator/引擎源码候选能力目录生成器。
 
-当前不能据代码直接宣称“完成整个 Cocos 引擎”：能力目录中的 54 个模块是工作分解维度，模块下的对象、属性和平台后端仍需逐项适配与验收。`ui.build` 当前明确是 `planned`，不能执行；2.x 的 `asset.dependencies`、`asset.users`、编辑器消息和场景视图相关能力也会按能力目录返回版本不支持。
+当前不能据代码直接宣称“完成整个 Cocos 引擎”：能力目录中的 54 个模块是工作分解维度，模块下的对象、属性和平台后端仍需逐项适配与验收。`ui.build` 已接入 Creator 3.8.8 的受守卫创建流程，需先调用 `ui.plan`，原生编辑器验收尚未完成；2.x 的 `asset.dependencies`、`asset.users`、编辑器消息和场景视图相关能力也会按能力目录返回版本不支持。
 
 ## 2. 目录与职责
 
@@ -188,8 +188,9 @@ HTTP/MCP 客户端应优先调用 `cocos_capability_describe` 获取精确 Schem
 | 项目设置 | `project.settings.get/set` | — | ✓ |
 | 视图 | `view.query/set/focus` | — | ✓ |
 | 预览 | `preview.start` | ✓ | 由 Creator 菜单/运行时流程提供 |
-| 日志与校验 | `logs.query`、`scene.validate` | ✓ | ✓ |
-| 声明式 UI | `ui.build` | 规划中 | 规划中 |
+| 桥接日志与校验 | `logs.query`、`scene.validate` | ✓ | ✓ |
+| Creator 控制台 | `console.query`（含 Scene 消息与堆栈） | 未接入 | 仅 3.8.8，要求 `Editor.Logger.query` |
+| 声明式 UI | `ui.plan`、`ui.build`、布局/交互检查 | 不支持 | 3.8.8 已实现，待原生验收 |
 | 运行时 | `runtime.query/hierarchy/types/inspect/get/set/invoke/create/release/subscribe/unsubscribe/events/pause/resume/capture/statistics` | 运行时桥接 | 运行时桥接 |
 
 `cocos_coverage` 会分别报告 registered、implemented、planned、verified 等数量。这个结果是当前仓库实现状态，不等同于 Cocos 引擎 API 覆盖率；引擎源码扫描得到的候选能力必须经过适配、Schema 定义和实际验证后才能进入可执行集合。
@@ -219,6 +220,23 @@ HTTP/MCP 客户端应优先调用 `cocos_capability_describe` 获取精确 Schem
 6. 超时或断线后先用 `cocos_operation_query` 查询结果。ledger 处于 pending 时返回 `OUTCOME_UNKNOWN`，调用方应先检查编辑器状态。
 
 工程队列保证同一工程的操作顺序；`expectedRevision` 负责防止读取后被其他编辑改变。资源写入、场景修改和项目设置的回滚能力以能力详情中的 `rollback` 为准，工作流不会假装提供全局事务。
+
+### 日志读取与分页
+
+控制中心的“桥接日志”支持级别筛选、每页 20/50/100 条和上一页/下一页，覆盖桥接内存保留的最近 5,000 条事件。第一页每 5 秒刷新；浏览历史页时固定快照，点击“返回最新”或“刷新日志”恢复实时数据。切换级别或每页条数会回到第一页。这些事件不等于 Creator 控制台日志。
+
+Creator 3.8.8 可通过 `cocos_capability_execute` 调用 `console.query`，从原生 `Editor.Logger.query()` 读取编辑器主进程及 Scene 等子进程汇总的控制台消息：
+
+```json
+{
+  "capabilityId": "console.query",
+  "params": { "level": "error", "process": "Scene", "limit": 50 }
+}
+```
+
+沿用当前工程的 `projectId`/`instanceId`；结果中 `rows` 保留 `message`、`stack`、`process`、归一化 `level` 和原始 `rawLevel`。`log` 归入 `info`，不会根据消息内容将原生日志改判成错误。`contains` 同时匹配消息与堆栈；以 `nextCursor` 作为下次请求的 `cursor`，`hasMore` 表示当前筛选下还有数据。按时间顺序返回，最多保留原生日志末尾 5,000 条，每次最多 500 条；扩展重载后从 `cursor: 0` 重新读取。`occurredAt` 输出 UTC ISO 字符串，无法确定时区的原始时间返回 `null`。
+
+此能力无需已打开场景或运行时连接，不修改控制台级别、不清空日志，也不执行任意编辑器消息。独立浏览器预览的控制台不在此范围；MCP 自有预览仍通过 `preview.status` 返回窗口诊断。Creator 2.x 和其他 3.x 补丁版本未接入该原生读取适配，不能宣称跨版本验证。
 
 ## 10. 运行时桥接接入
 
@@ -328,3 +346,7 @@ pnpm start catalog --project /path/to/cocos-project \
 ## 16. 文档维护规则
 
 代码、能力目录和本指南必须一起更新。任何新增能力至少补充版本范围、输入 Schema、effect、前置条件、副作用、风险、回滚提示和验证等级；任何真实编辑器行为变化都要在 2.x/3.x Golden Project 回归后再提升 verification。提案文档保留为设计和调研记录，本指南记录当前可执行事实。
+
+### Creator 3 运行时桥接发布包
+
+Creator 3 更新包必须包含 `dist/runtime.js`，安装校验会拒绝缺少该文件的包。仅支持旧七文件清单的已安装版本不能直接使用面板升级到此版本；首次迁移请从本仓库构建后使用 CLI `install` 更新扩展并重载，之后可使用新版面板更新。Creator 2 的发布文件清单保持不变。

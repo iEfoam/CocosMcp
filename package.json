@@ -12,7 +12,7 @@
     "test": "node scripts/project-env.mjs node scripts/test.mjs",
     "start": "node scripts/project-env.mjs node .codex-work/build/server/cli.mjs",
     "catalog": "node scripts/project-env.mjs node .codex-work/build/server/cli.mjs catalog",
-    "check": "pnpm typecheck && pnpm build && pnpm test"
+    "check": "pnpm typecheck && pnpm build && pnpm test && pnpm build"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.0.0",

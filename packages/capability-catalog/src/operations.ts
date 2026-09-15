@@ -1,7 +1,14 @@
+import { RenderRuntimeCapabilities } from './render-runtime.js';
 import type { Capability, CreatorMajor, Effect, JsonSchema } from '../../contracts/src/index.js';
 import { Schema as S } from './schema.js';
 import { ShaderCapabilities } from './shader.js';
 import { SceneProductionCapabilities } from './scene-production.js';
+import { UiCapabilities } from './ui.js';
+import { TextureCapabilities } from './texture.js';
+import { RuntimeInteractionCapabilities } from './runtime-interaction.js';
+import { RuntimeAnimationCapabilities } from './animation-runtime.js';
+import { AnimationCapabilities } from './animation.js';
+import { RuntimeAssetCapabilities } from './runtime-assets.js';
 
 export class Operations {
   private readonly rows: Capability[] = [];
@@ -85,11 +92,24 @@ export class Operations {
     this.add('scene.script', 'F08', '调用已安装扩展的场景脚本方法', 'external', { extension: str, method: str, args: S.array() }, ['extension', 'method'], [2, 3], {
       risks: ['扩展脚本可能修改工程外部状态'], prerequisites: ['--allow-project-code'], rollback: '由扩展提供补偿操作' });
     this.add('preview.start', 'F43', '启动项目预览；3.8.8 使用独立 MCP 窗口并要求场景已保存', 'runtime', { width: { type: 'integer', minimum: 256, maximum: 2048 }, height: { type: 'integer', minimum: 256, maximum: 2048 }, visible: bool });
+    this.add('preview.resize', 'F43', '调整 MCP 预览内容尺寸并等待实际绘制；返回截图，不自动判定布局正确', 'runtime', { width: { type: 'integer', minimum: 256, maximum: 2048 }, height: { type: 'integer', minimum: 256, maximum: 2048 } }, ['width', 'height'], [3]);
+    this.add('preview.input', 'F36', '向 MCP 自有预览窗口发送点击或滚轮并截取下一帧；会聚焦窗口，须另行验证业务结果', 'runtime', { action: S.enum('click', 'wheel'), x: { type: 'integer', minimum: 0, maximum: 2047 }, y: { type: 'integer', minimum: 0, maximum: 2047 }, deltaX: { type: 'integer', minimum: -2000, maximum: 2000 }, deltaY: { type: 'integer', minimum: -2000, maximum: 2000 } }, ['action', 'x', 'y'], [3], { rollback: '点击可能已产生业务副作用，失败先查询游戏状态；不自动重复点击' });
     this.add('preview.stop', 'F43', '停止项目预览', 'runtime', {}, [], [2, 3], { supportedMajors: [3] });
+    this.add('preview.logs', 'F44', '分页查询 Web 预览异常与网络失败；按会话持久化，返回截断和捕捉缺口', 'read', { sessionId: { type: 'string', pattern: '^[a-f0-9]{32}$' }, cursor: S.integer(), limit: { type: 'integer', minimum: 1, maximum: 500 }, level: S.enum('warning', 'error'), kind: str, contains: str }, [], [3]);
     this.add('preview.status', 'F43', '查询 MCP 预览窗口和最近的渲染诊断', 'read', {}, [], [3]);
     this.add('preview.capture', 'F46', '在真实绘制帧之后截取 MCP 预览窗口；不要求开发运行时网关', 'read', {}, [], [3], { prerequisites: ['Creator 3.8.8；preview.start 已完成'], rollback: '只读截图，不修改项目资源' });
-    this.add('logs.query', 'F44', '分页查询桥接捕获的日志，按来源和级别过滤', 'read', { cursor: S.integer(), level: S.enum('debug', 'info', 'warn', 'error'), limit: S.integer(1) });
-    this.add('ui.build', 'F20', '从声明式节点树构建 UI；失败时补偿本次创建的节点', 'scene', { parentId: str, tree: obj }, ['tree'], [2, 3], { implementation: 'planned', supportedMajors: [] });
+    this.add('logs.query', 'F44', '分页查询桥接事件，按级别过滤；Creator 控制台请用 console.query', 'read', { cursor: S.integer(), level: S.enum('debug', 'info', 'warn', 'error'), limit: S.integer(1) });
+    this.add('console.query', 'F44', '读取 Creator 控制台（含 Scene 报错和堆栈），支持级别、进程、关键词和游标分页', 'read', {
+      cursor: S.integer(), limit: { type: 'integer', minimum: 1, maximum: 500 }, level: S.enum('debug', 'info', 'warn', 'error'), process: str, contains: str,
+    }, [], [3], { prerequisites: ['Creator 3.8.8 Editor.Logger.query；其他版本不宣称已验证'] });
+    this.rows.push(...new UiCapabilities().list());
+    this.rows.push(...new TextureCapabilities().list());
+    this.rows.push(...new AnimationCapabilities().list());
+    this.rows.push(...new RuntimeAnimationCapabilities().list());
+    this.rows.push(...new RuntimeInteractionCapabilities().list());
+    this.rows.push(...new RenderRuntimeCapabilities().list());
+    this.rows.push(...new RuntimeAssetCapabilities().list());
+    this.add('font.inspect', 'F17', '读取字体类型、位图字体字形覆盖和当前场景 Label 引用；动态字体缺字检查返回 unknown', 'read', { uuid: str, sampleText: { type: 'string', maxLength: 10000 } }, ['uuid'], [3], { prerequisites: ['Creator 3.8.8'] });
     this.add('scene.validate', 'F51', '检查缺失组件与无效对象引用', 'read');
     for (const [id, title, effect] of [
       ['query', '查询当前运行场景和引擎状态', 'read'],

@@ -30,7 +30,7 @@ export class GithubUpdate {
     if (createHash('sha256').update(data).digest('hex') !== release.digest) throw new Error('更新包 SHA-256 校验失败');
     const bundle = JSON.parse(data.toString()) as Bundle;
     const extension = major === 2 ? 'js' : 'cjs';
-    const allowed = ['package.json', 'LICENSE', `dist/main.${extension}`, `dist/scene.${extension}`, `dist/panel.${extension}`, 'dist/service.mjs', 'dist/update.mjs'];
+    const allowed = ['package.json', 'LICENSE', `dist/main.${extension}`, `dist/scene.${extension}`, `dist/panel.${extension}`, 'dist/service.mjs', 'dist/update.mjs', ...(major === 3 ? ['dist/runtime.js'] : [])];
     if (bundle.major !== major || bundle.version !== release.version || bundle.buildId !== release.buildId || !Array.isArray(bundle.rows) || bundle.rows.length !== allowed.length) throw new Error('更新包版本或结构不匹配');
     const seen = new Set<string>();
     for (const row of bundle.rows) {

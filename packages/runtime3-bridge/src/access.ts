@@ -31,6 +31,21 @@ export class RuntimePolicy {
 }
 
 export class RuntimeAccess {
+  /** System.import('cc') 使用公开 VERSION；ENGINE_VERSION 仅存在于旧版全局对象。 */
+  static engineVersion(cc: RuntimeObject): string { return String(cc.VERSION ?? cc.ENGINE_VERSION ?? 'unknown'); }
+
+  private static readonly released = new WeakSet<object>();
+
+  /** 引擎延迟到帧末释放；isValid 属性在 destroy 已排队时仍可能为 true。 */
+  static destroyOwned(cc: RuntimeObject, value: unknown): void {
+    const object = RuntimeAccess.object(value);
+    if (this.released.has(object) || object.isValid === false) return;
+    if (typeof cc.isValid === 'function' && RuntimeAccess.call(cc, 'isValid', object, true) === false) return;
+    this.released.add(object);
+    try { RuntimeAccess.call(object, 'destroy'); }
+    catch (error) { this.released.delete(object); throw error; }
+  }
+
   static object(value: unknown, label = 'object'): RuntimeObject {
     if (value === null || (typeof value !== 'object' && typeof value !== 'function')) throw new CocosError('NOT_FOUND', `${label} is unavailable`);
     return value as RuntimeObject;

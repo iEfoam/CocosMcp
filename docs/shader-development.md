@@ -8,6 +8,10 @@ F22 提供 Effect/Chunk 读写、原生编译、依赖指纹、材质资源编�
 
 所有能力通过 `cocos_capability_describe` 获取输入 Schema，通过 `cocos_capability_execute` 调用。`runtime.*` 需要明确选择正确的 `runtimeInstanceId`。输入集合采用 `rows`；材质参数用明确类型表达，不能传任意引擎表达式。
 
+材质属性值可以使用 `{type:"color",value:[255,128,0,255]}`、`{type:"vec4",value:[1,1,1,1]}` 或 `{type:"texture",uuid:"..."}`。颜色使用 Creator 的 0..255 分量。完整 `{r,g,b,a}`、`{x,y,z}` 等分量对象（包括 `__type__: "cc.Color"` 等序列化标记）会归一化为同一协议。数值数组仍表示 uniform 数组，不猜测为向量。`material.properties` 中的 Pass `properties` 是声明信息；写入时应使用 `overrides` 的属性值，不能把带数值 `type` 的声明直接作为值传入。输入格式错误会在调用 Scene 之前指出具体属性和所需格式。
+
+MCP 自有材质、临时场景和 Shader 预览的清理使用 `cc.isValid(object, true)` 检查帧末待销毁状态，避免重复排队；该守卫不修改 Creator 原生 `Node.destroy`。3.8.8 的原生 `MiniPreview.clearByComponent` 报警仍需以原生堆栈和触发操作复现，不能用工具自有资源的回归测试当作其已修复证据。
+
 ## 能力表
 
 | 操作 | 参数要点 | 结果或边界 |

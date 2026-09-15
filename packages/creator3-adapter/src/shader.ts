@@ -3,7 +3,7 @@ import { readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { CocosError, Json, type JsonObject, type JsonValue } from '../../contracts/src/index.js';
 import { ProjectPaths } from '../../application/src/paths.js';
-import { ShaderDiagnostics, ShaderVariants } from '../../shader-core/src/index.js';
+import { MaterialValues, ShaderDiagnostics, ShaderVariants } from '../../shader-core/src/index.js';
 import { PropertyDump } from './dump.js';
 import type { EditorPort } from './port.js';
 
@@ -101,6 +101,8 @@ export class ShaderService {
         return this.save(str('targetUrl'), Json.string(source.content, 'content'));
       }
       case 'material.create': case 'material.update': case 'material.apply_runtime': case 'material.migrate': {
+        // 在跨进程调用之前报告可修正的输入错误，避免参数格式错误污染 Scene 控制台。
+        p = { ...p, properties: new MaterialValues().properties(Json.object(p.properties ?? {})) };
         const url = str('url'); if (!url.endsWith('.mtl')) throw new CocosError('INVALID_ARGUMENT', 'Material URL must end in .mtl');
         const before = id === 'material.create' ? null : await this.read(url);
         if (before && before.sourceHash !== str('expectedHash')) throw new CocosError('OPERATION_CONFLICT', 'Material changed since it was read');

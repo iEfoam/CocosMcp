@@ -1,6 +1,6 @@
 import { RuntimeController } from './index.js';
 import { CocosError, type JsonObject, type JsonValue } from '../../contracts/src/index.js';
-import type { RuntimeObject } from './access.js';
+import { RuntimeAccess, type RuntimeObject } from './access.js';
 
 export interface RuntimeConnectionOptions { url: string; token: string; projectId: string; cc: RuntimeObject; major: 2 | 3; development: boolean }
 interface XhrLike {
@@ -40,7 +40,7 @@ export class DevelopmentConnection {
 
   async start(): Promise<void> {
     if (this.active) return;
-    const registered = await this.request('/runtime/register', { version: String(this.options.cc.ENGINE_VERSION ?? 'unknown'), platform: 'development-runtime' });
+    const registered = await this.request('/runtime/register', { version: RuntimeAccess.engineVersion(this.options.cc), platform: 'development-runtime' });
     this.runtimeInstanceId = String(registered.runtimeInstanceId); this.active = true;
     void this.poll();
   }
@@ -57,6 +57,7 @@ export class DevelopmentConnection {
         catch (failure) { error = JSON.parse(JSON.stringify(CocosError.from(failure, 'RUNTIME_ERROR').toJSON())) as JsonValue; }
         await this.request('/runtime/reply', { runtimeInstanceId: this.runtimeInstanceId, commandId: command.id!, result, error });
       } catch (error) {
+        this.controller.connectionLost();
         if (this.active) { console.warn('[CocosMCP runtime]', error); await new Promise(accept => setTimeout(accept, 2000)); }
       }
     }

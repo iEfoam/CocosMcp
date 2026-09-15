@@ -1,5 +1,6 @@
 import { CocosError, Json, type JsonObject, type JsonValue } from '../../contracts/src/index.js';
 import { RuntimeAccess as A, type RuntimeObject } from './access.js';
+import { UiInspector } from './ui.js';
 
 export interface SceneEnvironment {
   cc: RuntimeObject;
@@ -118,7 +119,7 @@ export class SceneInspector {
     try {
       const data = this.environment.serialize(asset);
       return typeof data === 'string' ? JSON.parse(data) as JsonValue : Json.value(data);
-    } finally { A.call(asset, 'destroy'); A.call(scene, 'destroy'); }
+    } finally { A.destroyOwned(this.environment.cc, asset); A.destroyOwned(this.environment.cc, scene); }
   }
 
   subtreeIdentity(id: string): JsonObject {
@@ -162,6 +163,19 @@ export class SceneInspector {
 
   execute(method: string, args: unknown[]): JsonValue {
     switch (method) {
+      case 'ui.preflight_update': return new UiInspector(this).preflight(Json.object(args[0]), true);
+      case 'ui.preflight': return new UiInspector(this).preflight(Json.object(args[0]));
+      case 'ui.eventBindings': return new UiInspector(this).eventBindings(Json.object(args[0]));
+      case 'ui.flush_label': {
+        const p = Json.object(args[0]), component = this.component(Json.string(p.componentId, 'componentId'));
+        const Label = this.environment.cc.Label;
+        // Label 的原生排版会修改 UITransform 尺寸；在本次写操作的检查点前同步完成派生更新。
+        if (typeof Label === 'function' && component instanceof Label) A.call(component, 'updateRenderData', true);
+        return { flushed: typeof Label === 'function' && component instanceof Label };
+      }
+      case 'ui.snapshot': return new UiInspector(this).snapshot(Json.object(args[0]));
+      case 'ui.inspect_layout': return new UiInspector(this).layout(Json.object(args[0]));
+      case 'ui.validate_interaction': return new UiInspector(this).interaction(Json.object(args[0]));
       case 'fingerprint': return this.fingerprint();
       case 'sceneInfo': return this.sceneInfo();
       case 'hierarchy': return this.hierarchy(Json.object(args[0] ?? {}));

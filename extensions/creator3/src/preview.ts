@@ -1,12 +1,20 @@
+import { PreviewDiagnostics, type PreviewDebugger } from './preview-diagnostics.js';
 import { CocosError, type JsonObject, type JsonValue } from '../../../packages/contracts/src/index.js';
 import { randomBytes } from 'crypto';
 
 export interface PreviewWindow {
+  getContentSize?(): number[];
+  setContentSize?(width: number, height: number): void;
+  show?(): void;
+  focus?(): void;
+  isFocused?(): boolean;
   loadURL(url: string): Promise<unknown>;
   isDestroyed(): boolean;
   destroy(): void;
   once(event: string, listener: (...args: unknown[]) => void): unknown;
   webContents: {
+    debugger?: PreviewDebugger;
+    sendInputEvent?(event: JsonObject): void;
     isDestroyed(): boolean;
     executeJavaScript(source: string): Promise<unknown>;
     capturePage(): Promise<{ isEmpty(): boolean; toDataURL(): string; getSize(): { width: number; height: number } }>;
@@ -25,7 +33,8 @@ export class ManagedPreview {
   private ready = false;
   private runtimeRegistered = false;
   private readonly diagnostics: JsonObject[] = [];
-  constructor(private readonly factory: PreviewWindowFactory) {}
+  private diagnosticLog: PreviewDiagnostics;
+  constructor(private readonly factory: PreviewWindowFactory, private readonly projectPath?: string) { this.diagnosticLog = new PreviewDiagnostics(projectPath); }
 
   private async bounded<T>(task: Promise<T>, milliseconds: number): Promise<T> {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -44,11 +53,12 @@ export class ManagedPreview {
   }
 
   private status(): JsonObject {
-    return { running: Boolean(this.window && !this.window.isDestroyed()), pageReady: this.ready, sceneId: this.sceneId ?? null,
-      source: 'managed-preview-window', runtimeBridgeRegistration: this.runtimeRegistered ? 'succeeded' : 'not-requested', rows: this.diagnostics.slice(-50) };
+    return { diagnosticSessionId: this.diagnosticLog.sessionId, running: Boolean(this.window && !this.window.isDestroyed()), pageReady: this.ready, sceneId: this.sceneId ?? null,
+      viewport: this.window?.getContentSize ? this.window.getContentSize() : null, source: 'managed-preview-window', runtimeBridgeRegistration: this.runtimeRegistered ? 'succeeded' : 'not-requested', rows: this.diagnostics.slice(-50) };
   }
 
   async execute(method: string, params: JsonObject): Promise<JsonValue> {
+    if (method === 'logs') return this.diagnosticLog.query(params);
     if (method === 'status') return this.status();
     if (method === 'connect-runtime') {
       const window = this.window;
@@ -83,6 +93,8 @@ export class ManagedPreview {
       const window = this.factory.create({ width, height, useContentSize: true, show: params.visible !== false, title: 'CocosMCP Preview',
         webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, backgroundThrottling: false,
           partition: `cocos-mcp-preview-${randomBytes(8).toString('hex')}` } });
+      this.diagnosticLog.dispose(); this.diagnosticLog = new PreviewDiagnostics(this.projectPath);
+      const diagnosticLog = this.diagnosticLog;
       this.window = window; this.sceneId = sceneId; this.ready = false; this.diagnostics.length = 0;
       window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
       window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
@@ -95,13 +107,54 @@ export class ManagedPreview {
       window.webContents.on('console-message', (...args: unknown[]) => {
         const level = Number(args[1]), message = String(args[2]);
         if (level < 2) return;
+        diagnosticLog.record({ kind: 'console', level: level >= 3 ? 'error' : 'warning', message, line: Number(args[3]) || null, url: String(args[4] ?? '') });
         this.diagnostics.push({ level: level >= 3 ? 'error' : 'warning', message: String(message).slice(0, 2000) });
         if (this.diagnostics.length > 50) this.diagnostics.shift();
       });
+      window.webContents.on('did-fail-load', (...args: unknown[]) => diagnosticLog.record({ kind: 'navigation-failure', message: String(args[2] ?? ''), url: String(args[3] ?? '') }));
+      window.webContents.on('render-process-gone', () => diagnosticLog.record({ kind: 'renderer-crash', message: 'Preview renderer exited' }));
+      // Electron 在首次导航前可能挂起 CDP 命令；先建立空白目标，再为下一次工程导航安装监听。
+      try { await this.bounded(window.loadURL('about:blank'), 5000); }
+      catch (error) { this.dispose(); throw new CocosError('EDITOR_ERROR', 'Preview page failed to load', { cause: String(error) }); }
+      try { await this.bounded(diagnosticLog.attach(window.webContents.debugger), 8000); }
+      catch (error) { diagnosticLog.record({ kind: 'capture-gap', message: CocosError.from(error).message }); diagnosticLog.dispose(); }
       window.once('closed', () => { if (this.window === window) { this.window = undefined; this.ready = false; this.sceneId = undefined; this.runtimeRegistered = false; } });
       try { await this.bounded(window.loadURL(url), 15000); if (window.isDestroyed()) throw new Error('Preview closed while loading'); this.ready = true; }
       catch (error) { this.dispose(); throw new CocosError('EDITOR_ERROR', 'Preview page failed to load', { cause: String(error) }); }
       return this.status();
+    }
+    if (method === 'resize' || method === 'input') {
+      const window = this.window;
+      if (!window || window.isDestroyed() || !this.ready || !window.getContentSize) throw new CocosError('CONTEXT_UNAVAILABLE', 'Managed preview window is unavailable');
+      if (method === 'resize') {
+        const width = Number(params.width), height = Number(params.height);
+        if (![width, height].every(n => Number.isInteger(n) && n >= 256 && n <= 2048)) throw new CocosError('INVALID_ARGUMENT', 'Preview dimensions must be 256..2048');
+        if (!window.setContentSize) throw new CocosError('UNSUPPORTED_CAPABILITY', 'Preview resize API unavailable');
+        const previousSize = window.getContentSize(); window.setContentSize(width, height);
+        try {
+          const frame = await this.execute('capture', {}), actual = window.getContentSize();
+          if (actual[0] !== width || actual[1] !== height) throw new CocosError('VERIFICATION_FAILED', 'Window manager did not apply requested viewport');
+          return { ...frame as JsonObject, viewport: { width: actual[0]!, height: actual[1]! }, previousSize, layoutVerified: false };
+        } catch (error) { throw new CocosError('OUTCOME_UNKNOWN', 'Preview resize or capture incomplete; query current viewport before retrying', { previousSize, actualSize: window.getContentSize(), cause: CocosError.from(error).message }); }
+      }
+      const size = window.getContentSize(), x = Number(params.x), y = Number(params.y);
+      if (![x, y].every(n => Number.isInteger(n) && n >= 0) || x >= size[0]! || y >= size[1]!) throw new CocosError('INVALID_ARGUMENT', 'Input coordinates must be inside the preview content area');
+      if (!['click', 'wheel'].includes(String(params.action))) throw new CocosError('INVALID_ARGUMENT', 'Unsupported preview input action');
+      if (params.action === 'wheel' && ![Number(params.deltaX ?? 0), Number(params.deltaY ?? 0)].every(n => Number.isInteger(n) && Math.abs(n) <= 2000)) throw new CocosError('INVALID_ARGUMENT', 'Wheel delta exceeds bounds');
+      if (!window.webContents.sendInputEvent || !window.focus || !window.show || !window.isFocused) throw new CocosError('UNSUPPORTED_CAPABILITY', 'Preview input APIs unavailable');
+      // 先核对实际目标场景，再按 Electron 要求聚焦工具拥有的窗口；不向操作系统或其他窗口发输入。
+      await this.execute('capture', {}); window.show(); window.focus();
+      if (!window.isFocused()) throw new CocosError('CONTEXT_UNAVAILABLE', 'Preview window did not acquire input focus');
+      const sent: JsonObject[] = [];
+      const send = (event: JsonObject): void => { window.webContents.sendInputEvent!(event); sent.push(event); };
+      try {
+        send({ type: 'mouseMove', x, y });
+        if (params.action === 'click') {
+          try { send({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 }); }
+          finally { send({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 }); }
+        } else send({ type: 'mouseWheel', x, y, deltaX: params.deltaX ?? 0, deltaY: params.deltaY ?? 0, canScroll: true });
+        return { ...await this.execute('capture', {}) as JsonObject, sent, businessOutcomeVerified: false, coordinateSpace: 'preview-content-dip-top-left' };
+      } catch (error) { throw new CocosError('OUTCOME_UNKNOWN', 'Preview input may have executed; inspect game state before retrying', { sent, cause: CocosError.from(error).message }); }
     }
     if (method === 'capture') {
       const window = this.window;
@@ -128,6 +181,7 @@ export class ManagedPreview {
   }
 
   dispose(): void {
+    this.diagnosticLog.dispose();
     const window = this.window; this.window = undefined; this.sceneId = undefined; this.ready = false; this.runtimeRegistered = false;
     if (window && !window.isDestroyed()) window.destroy();
   }

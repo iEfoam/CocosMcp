@@ -22,13 +22,49 @@ class PanelHarness {
   registrations = 0;
   polls = new Set<() => void>();
   actions = new Map<string, { disabled: boolean; click: (() => void) | undefined }>();
-  command: (message: string) => Promise<unknown> = async () => {};
+  tabs = new Map<string, () => void>();
+  copies = new Map<string, { disabled: boolean; click?: () => void }>();
+  languages = new Map<string, () => void>();
+  pages = new Map<string, () => void>();
+  selects = new Map<string, { value: string; change?: () => void; focus?: () => void; blur?: () => void }>();
+  command: (message: string, value?: unknown) => Promise<unknown> = async () => {};
 
   root = {
     get innerHTML(): string { return ''; },
     set innerHTML(value: string) { void value; },
     querySelector: () => null,
     querySelectorAll: (selector: string) => {
+      if (selector === '[data-locale]') {
+        this.languages.clear();
+        return ['zh', 'en'].map(locale => ({ dataset: { locale }, disabled: false, addEventListener: (_event: string, callback: () => void) => { this.languages.set(locale, callback); } }));
+      }
+      if (selector === '[data-copy-log]') {
+        this.copies.clear();
+        return [...this.html.matchAll(/data-copy-log="([^"]+)"/g)].map(match => {
+          const copy = { disabled: false } as { disabled: boolean; click?: () => void };
+          this.copies.set(match[1]!, copy);
+          return { dataset: { copyLog: match[1] }, get disabled() { return copy.disabled; }, set disabled(value: boolean) { copy.disabled = value; }, addEventListener: (_event: string, callback: () => void) => { copy.click = callback; } };
+        });
+      }
+      if (selector === '[data-tab]' || selector === '[data-log-page]') {
+        const field = selector === '[data-tab]' ? 'tab' : 'logPage';
+        const attribute = field === 'tab' ? 'data-tab' : 'data-log-page';
+        const registrations = field === 'tab' ? this.tabs : this.pages;
+        registrations.clear();
+        return [...this.html.matchAll(new RegExp(`<button[^>]*${attribute}="([^"]+)"[^>]*>`, 'g'))].map(match => ({
+          dataset: { [field]: match[1] }, disabled: match[0].includes(' disabled'),
+          getAttribute: (name: string) => name === 'aria-label' ? /aria-label="([^"]+)"/.exec(match[0])?.[1] ?? null : null,
+          addEventListener: (_event: string, callback: () => void) => { registrations.set(match[1]!, callback); },
+        }));
+      }
+      if (selector === '[data-log-select]') {
+        this.selects.clear();
+        return [...this.html.matchAll(/<select data-log-select="([^"]+)"[^>]*>([\s\S]*?)<\/select>/g)].map(match => {
+          const control = { value: /<option value="([^"]+)" selected/.exec(match[2]!)?.[1] ?? '' } as { value: string; change?: () => void; focus?: () => void; blur?: () => void };
+          this.selects.set(match[1]!, control);
+          return { dataset: { logSelect: match[1] }, get value() { return control.value; }, addEventListener: (event: 'change' | 'focus' | 'blur', callback: () => void) => { control[event] = callback; } };
+        });
+      }
       if (selector !== '[data-action]') return [];
       this.actions.clear();
       return [...this.html.matchAll(/data-action="([^"]+)"/g)].map(match => {
@@ -52,14 +88,17 @@ class PanelHarness {
       require: (name: string) => { throw new Error(`Unexpected renderer dependency: ${name}`); },
       Editor: {
         Panel: major === 2 ? { extend: register } : legacy3 ? {} : { define: register },
-        Message: { request: (name: string, message: string) => {
-          assert.equal(major, 3); assert.equal(name, 'cocos-mcp-creator3'); assert.ok(['panel-state', 'start', 'stop', 'service-start', 'service-stop'].includes(message));
-          return message === 'panel-state' ? respond() : this.command(message);
+        Message: { request: (name: string, message: string, value?: unknown) => {
+          assert.equal(major, 3); assert.equal(name, 'cocos-mcp-creator3'); assert.ok(['panel-state', 'start', 'stop', 'service-start', 'service-stop', 'set-language', 'copy-log'].includes(message));
+          return message === 'panel-state' ? respond() : this.command(message, value);
         } },
-        Ipc: { sendToMain: (message: string, reply: (error: unknown, result?: unknown) => void) => {
+        Ipc: { sendToMain: (message: string, ...args: unknown[]) => {
+          const reply = args.pop() as (error: unknown, result?: unknown) => void;
+          assert.equal(typeof reply, 'function');
+          const value = args[0];
           assert.equal(major, 2); assert.ok(message.startsWith('cocos-mcp-creator2:'));
           const action = message.replace('cocos-mcp-creator2:', '');
-          void (action === 'panel-state' ? respond() : this.command(action)).then(result => reply(null, result), reply);
+          void (action === 'panel-state' ? respond() : this.command(action, value)).then(result => reply(null, result), reply);
         } },
       },
       setTimeout, clearTimeout,
@@ -74,6 +113,45 @@ class PanelHarness {
 }
 
 for (const major of [2, 3] as const) {
+  test(`Creator ${major}: log controls filter, page, refresh and preserve an active native select`, async () => {
+    const harness = new PanelHarness();
+    const current = { ...snapshot, logs: Array.from({ length: 135 }, (_, index) => ({ sequence: index + 1, level: index % 2 ? 'info' : 'error', message: `event-${index + 1}` })) };
+    const definition = await harness.load(major, async () => current);
+    await harness.ready(definition);
+    try {
+      harness.tabs.get('logs')!();
+      assert.match(harness.html, /1–20 \/ 共 135 条/);
+      harness.pages.get('2')!();
+      assert.match(harness.html, /21–40 \/ 共 135 条/);
+      assert.match(harness.html, /历史快照/);
+      const filter = harness.selects.get('level')!;
+      filter.focus!();
+      const before = harness.html;
+      current.logs.push({ sequence: 136, level: 'warn', message: 'new warning' });
+      for (const poll of harness.polls) poll();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(harness.html, before);
+      filter.value = 'error'; filter.change!();
+      assert.match(harness.html, /1–20 \/ 共 68 条/);
+      assert.doesNotMatch(harness.html, /class="log-level info"/);
+      const size = harness.selects.get('size')!;
+      size.value = '50'; size.change!();
+      assert.match(harness.html, /1–50 \/ 共 68 条/);
+      harness.pages.get('2')!();
+      assert.match(harness.html, /51–68 \/ 共 68 条/);
+      const empty = harness.selects.get('level')!;
+      empty.value = 'warn'; empty.change!();
+      assert.match(harness.html, /共 1 条/);
+      const info = harness.selects.get('level')!;
+      info.value = 'all'; info.change!();
+      harness.pages.get('2')!();
+      harness.actions.get('refresh')!.click!();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.match(harness.html, /1–50 \/ 共 136 条/);
+      assert.doesNotMatch(harness.html, /历史快照/);
+    } finally { definition.close(); }
+  });
+
   test(`Creator ${major}: installed manifest and menu resolve the bundled default panel`, async () => {
     const project = await mkdtemp(resolve('.codex-work/tmp/panel-install-'));
     const installer = new ExtensionInstaller();
@@ -270,6 +348,49 @@ for (const major of [2, 3] as const) {
       assert.match(harness.html, /启动桥接/);
       assert.equal(harness.actions.get('stop')?.disabled, true);
       assert.equal(harness.actions.get('service-stop')?.disabled, true);
+    } finally { definition.close(); }
+  });
+}
+
+for (const major of [2, 3] as const) {
+  test(`Creator ${major}: copy errors and switch panel language through IPC`, async () => {
+    const harness = new PanelHarness();
+    const current: PanelState = { ...snapshot, logs: Array.from({ length: 45 }, (_, index) => ({ sequence: index + 1, level: index % 2 ? 'info' : 'error', occurredAt: '2026-09-15T00:00:00Z', message: `原始错误 <tag> ${index}`, details: { stack: 'first\nsecond' } })) };
+    const copied: string[] = [];
+    harness.command = async (message, value) => {
+      if (message === 'copy-log') copied.push(String(value));
+      if (message === 'set-language') current.locale = value as 'zh' | 'en';
+    };
+    const definition = await harness.load(major, async () => current);
+    await harness.ready(definition);
+    try {
+      harness.tabs.get('logs')!();
+      assert.ok(harness.copies.has('45'));
+      assert.match(harness.html, /class="page-heading log-header"/);
+      assert.ok(!harness.html.includes('class="log-toolbar"'));
+      assert.match(harness.html, /aria-label="复制错误日志"[^>]*><svg/);
+      assert.ok(!harness.copies.has('44'));
+      harness.copies.get('45')!.click!();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(JSON.parse(copied[0]!).message, '原始错误 <tag> 44');
+      assert.equal(JSON.parse(copied[0]!).details.stack, 'first\nsecond');
+      harness.copies.get('all')!.click!();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal((copied[1]!.match(/"level": "error"/g) ?? []).length, 23);
+      assert.ok(!copied[1]!.includes('"level": "info"'));
+      harness.languages.get('en')!();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.match(harness.html, /Bridge logs/);
+      assert.match(harness.html, /Copy all errors/);
+      assert.match(harness.html, /原始错误 &lt;tag&gt;/);
+      for (const tab of ['overview', 'capabilities', 'runtime']) {
+        harness.tabs.get(tab)!();
+        const withoutLanguageChoice = harness.html.replace(/简体中文|中文/g, '');
+        assert.deepEqual(withoutLanguageChoice.match(/[\u3400-\u9fff]+/g), null);
+      }
+      harness.languages.get('zh')!();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.match(harness.html, /控制中心/);
     } finally { definition.close(); }
   });
 }

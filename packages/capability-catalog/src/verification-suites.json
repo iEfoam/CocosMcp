@@ -1,0 +1,231 @@
+[
+  {
+    "source": "tests/asset-organization.test.ts",
+    "level": "adapter-tested",
+    "entryIds": [
+      "asset.location",
+      "asset.organize.plan",
+      "asset.organize.apply",
+      "asset.create"
+    ]
+  },
+  {
+    "source": "tests/shader.test.ts",
+    "level": "adapter-tested",
+    "entryIds": [
+      "shader.read",
+      "shader.create",
+      "shader.update",
+      "shader.restore",
+      "shader.compile",
+      "shader.diagnostics",
+      "shader.variants.plan",
+      "runtime.material.update",
+      "runtime.material.reset"
+    ]
+  },
+  {
+    "source": "tests/creator3-regressions.test.ts",
+    "level": "adapter-tested",
+    "entryIds": [
+      "component.set",
+      "node.create",
+      "node.delete",
+      "prefab.create",
+      "scene.save_copy"
+    ]
+  },
+  {
+    "source": "tests/scene-production.test.ts",
+    "level": "adapter-tested",
+    "entryIds": [
+      "asset.query",
+      "geometry.create",
+      "geometry.array",
+      "rendering.configure",
+      "preview.start",
+      "preview.stop",
+      "preview.capture"
+    ]
+  },
+  {
+    "source": "tests/contracts.test.ts",
+    "level": "contract-tested",
+    "entryIds": [
+      "cocos_workflow_plan"
+    ]
+  },
+  {
+    "source": "tests/console.test.ts",
+    "level": "adapter-tested",
+    "entryIds": [
+      "console.query",
+      "selection.set"
+    ]
+  },
+  {
+    "source": "tests/build-session.test.ts",
+    "level": "adapter-tested",
+    "entryIds": [
+      "cocos_build_start",
+      "cocos_build_status",
+      "cocos_build_list"
+    ]
+  },
+  {
+    "source": "tests/capability-coverage.test.ts",
+    "level": "contract-tested",
+    "entryIds": [
+      "cocos_coverage",
+      "cocos_capability_search",
+      "cocos_capability_describe",
+      "cocos_capability_execute"
+    ]
+  },
+  {
+    "source": "tests/ui.test.ts",
+    "level": "adapter-tested",
+    "entryIds": [
+      "ui.plan",
+      "ui.build",
+      "ui.inspect_layout",
+      "ui.validate_interaction"
+    ]
+  },
+  {
+    "source": "tests/texture.test.ts",
+    "level": "adapter-tested",
+    "entryIds": [
+      "texture.inspect",
+      "texture.plan_import",
+      "texture.apply_import",
+      "texture.restore_import"
+    ]
+  },
+  {
+    "source": "tests/animation-font.test.ts",
+    "level": "adapter-tested",
+    "entryIds": [
+      "animation.clip.inspect",
+      "animation.clip.sample",
+      "font.inspect"
+    ]
+  },
+  {
+    "source": "tests/runtime-assets.test.ts",
+    "level": "adapter-tested",
+    "entryIds": [
+      "runtime.asset.load",
+      "runtime.asset.preload",
+      "runtime.asset.inspect",
+      "runtime.asset.release",
+      "runtime.bundle.inspect"
+    ]
+  },
+  {
+    "source": "tests/ui-update.test.ts",
+    "level": "adapter-tested",
+    "entryIds": [
+      "ui.diff",
+      "ui.apply"
+    ]
+  },
+  {
+    "source": "tests/animation-edit.test.ts",
+    "level": "adapter-tested",
+    "entryIds": [
+      "animation.clip.read",
+      "animation.clip.patch",
+      "animation.clip.restore"
+    ]
+  },
+  {
+    "source": "tests/animation-control.test.ts",
+    "level": "adapter-tested",
+    "entryIds": [
+      "runtime.animation.state",
+      "runtime.animation.play",
+      "runtime.animation.pause",
+      "runtime.animation.resume",
+      "runtime.animation.stop",
+      "runtime.animation.seek",
+      "runtime.animation.blend"
+    ]
+  },
+  {
+    "source": "tests/preview-input.test.ts",
+    "level": "adapter-tested",
+    "entryIds": [
+      "preview.resize",
+      "preview.input"
+    ]
+  },
+  {
+    "source": "tests/physics-media.test.ts",
+    "level": "adapter-tested",
+    "entryIds": [
+      "runtime.physics3d.inspect",
+      "runtime.physics2d.raycast",
+      "runtime.physics3d.raycast",
+      "runtime.audio.state",
+      "runtime.audio.play",
+      "runtime.audio.pause",
+      "runtime.audio.stop",
+      "runtime.audio.seek",
+      "runtime.video.state",
+      "runtime.video.play",
+      "runtime.video.pause",
+      "runtime.video.stop",
+      "runtime.video.seek",
+      "runtime.webview.inspect"
+    ]
+  },
+  {
+    "source": "tests/render-runtime.test.ts",
+    "level": "adapter-tested",
+    "entryIds": [
+      "runtime.graphics.inspect",
+      "runtime.graphics.formats",
+      "runtime.particle2d.state",
+      "runtime.particle2d.restart",
+      "runtime.particle2d.stop_emitting",
+      "runtime.particle3d.state",
+      "runtime.particle3d.play",
+      "runtime.particle3d.pause",
+      "runtime.particle3d.stop",
+      "runtime.particle3d.stop_emitting"
+    ]
+  },
+  {
+    "source": "tests/ui-inspector.test.ts",
+    "level": "adapter-tested",
+    "entryIds": [
+      "ui.inspect_layout",
+      "ui.validate_interaction"
+    ]
+  },
+  {
+    "source": "tests/runtime-disconnect.test.ts",
+    "level": "adapter-tested",
+    "entryIds": [
+      "runtime.query",
+      "runtime.get",
+      "runtime.subscribe",
+      "runtime.events"
+    ]
+  },
+  {
+    "source": "tests/build-artifacts.test.ts",
+    "level": "adapter-tested",
+    "entryIds": [
+      "cocos_build_artifacts"
+    ]
+  },
+  {
+    "source": "tests/preview-diagnostics.test.ts",
+    "level": "adapter-tested",
+    "entryIds": [
+      "preview.logs"
+    ]
+  }
+]

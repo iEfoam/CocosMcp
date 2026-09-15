@@ -8,7 +8,7 @@ import { MaterialController } from '../packages/runtime3-bridge/src/material.js'
 import { CapabilityCatalog } from '../packages/capability-catalog/src/index.js';
 import { Json, type JsonObject, type JsonValue } from '../packages/contracts/src/index.js';
 import type { EditorPort } from '../packages/creator3-adapter/src/port.js';
-import type { RuntimeObject } from '../packages/runtime3-bridge/src/access.js';
+import { RuntimeAccess, type RuntimeObject } from '../packages/runtime3-bridge/src/access.js';
 
 class AssetHarness {
   root = '';
@@ -58,6 +58,34 @@ test('material value validation rejects unknown names, malformed vectors and non
   assert.throws(() => validator.validate({ tint: { type: 'vec4', value: [1, 2] } }, { tint: {} }), /vector/);
   assert.throws(() => validator.validate({ tint: Number.NaN }, { tint: {} }), /finite/);
   assert.throws(() => validator.validate({ tint: 'asset-path' }, { tint: {} }), /explicit/);
+});
+
+test('material values normalize Creator component objects and reject declarations with a property-specific hint', () => {
+  const values = new MaterialValues();
+  assert.deepEqual(values.properties({ tint: { __type__: 'cc.Color', r: 255, g: 128, b: 0, a: 255 }, offset: { x: 1, y: 2, z: 3 }, weights: [1, 2] }), {
+    tint: { type: 'color', value: [255, 128, 0, 255] }, offset: { type: 'vec3', value: [1, 2, 3] }, weights: [1, 2],
+  });
+  assert.throws(() => values.properties({ tint: { type: 16, value: [1, 1, 1, 1] } }), /Material property "tint".*property declarations/);
+  assert.throws(() => values.properties({ tint: { r: 1, g: 2, b: 3 } }), /Material property "tint"/);
+  assert.throws(() => values.properties({ offset: { x: 1, y: Number.NaN } }), /vector/);
+});
+
+test('invalid material input is rejected before reading assets or entering the Scene process', async () => {
+  const service = new ShaderService({ version: '3.8.8', scene: async () => { throw new Error('Must not reach Scene'); } } as unknown as EditorPort);
+  await assert.rejects(service.execute('material.create', { url: 'db://assets/Materials/test.mtl', effectUrl: 'db://assets/Effects/test.effect', properties: { tint: { type: 16 } } }), /Material property "tint"/);
+});
+
+test('owned cleanup respects deferred native destruction and never destroys an object twice', () => {
+  let calls = 0;
+  const pending = new Set<unknown>();
+  const cc = { isValid: (object: unknown, strict: boolean) => { assert.equal(strict, true); return !pending.has(object); } };
+  const object = { isValid: true, destroy: () => { calls++; pending.add(object); } };
+  RuntimeAccess.destroyOwned(cc, object);
+  RuntimeAccess.destroyOwned(cc, object);
+  assert.equal(calls, 1);
+  const externallyDestroyed = { isValid: true, destroy: () => { throw new Error('already queued by native owner'); } };
+  pending.add(externallyDestroyed);
+  RuntimeAccess.destroyOwned(cc, externallyDestroyed);
 });
 
 test('resource updates preserve conflicting edits and restore only expected content', async () => {

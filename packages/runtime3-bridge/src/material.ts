@@ -107,6 +107,7 @@ export class MaterialController {
     }
   }
   async properties(material: RuntimeObject, properties: JsonObject, passIndex?: number): Promise<void> {
+    properties = new MaterialValues().properties(properties);
     if (passIndex !== undefined && (!Number.isInteger(passIndex) || !this.passes(material)[passIndex])) throw new CocosError('INVALID_ARGUMENT', 'Pass index out of range');
     const declared: JsonObject = {};
     for (const pass of this.passes(material)) Object.assign(declared, A.safeData(pass.properties));
@@ -182,7 +183,7 @@ export class MaterialController {
       if (Object.keys(defines).length) A.call(instance, 'recompileShaders', defines, passIndex);
       if (Object.keys(states).length) A.call(instance, 'overridePipelineStates', states, passIndex);
       await this.properties(instance, Json.object(p.properties ?? {}), passIndex); return instance;
-    } catch (error) { A.call(instance, 'destroy'); throw error; }
+    } catch (error) { A.destroyOwned(this.environment.cc, instance); throw error; }
   }
   compile(material: RuntimeObject): JsonObject {
     const rows = this.passes(material).map((pass, index) => ({ pass: index, status: A.call(pass, 'tryCompile') === true ? 'passed' : 'failed', defines: A.safeData(pass.defines) }));
@@ -234,12 +235,12 @@ export class MaterialController {
         if (passIndex !== undefined && (!Number.isInteger(passIndex) || !this.passes(material)[passIndex])) throw new CocosError('INVALID_ARGUMENT', 'Pass index out of range');
         const patch = (value: JsonValue): JsonValue => passIndex === undefined ? value : this.passes(material).map((_pass, index) => index === passIndex ? value : {});
         try { A.call(copy, 'copy', material, { technique, defines: patch(p.defines ?? {}), states: patch(p.states ?? {}) }); A.call(material, 'copy', copy); }
-        finally { A.call(copy, 'destroy'); }
+        finally { A.destroyOwned(this.environment.cc, copy); }
       }
       await this.properties(material, Json.object(p.properties ?? {}), p.passIndex === undefined ? undefined : Number(p.passIndex));
       const serialized = this.environment.serialize(material);
       return { serialized: Json.value(typeof serialized === 'string' ? JSON.parse(serialized) : serialized), migration, material: this.describe(material) };
-    } finally { A.call(material, 'destroy'); if (previous) A.call(previous, 'destroy'); }
+    } finally { A.destroyOwned(this.environment.cc, material); if (previous) A.destroyOwned(this.environment.cc, previous); }
   }
   async execute(id: string, p: JsonObject): Promise<JsonObject> {
     if (this.environment.major !== 3) throw new CocosError('UNSUPPORTED_VERSION', 'Shader material operations require Creator 3');
@@ -250,7 +251,7 @@ export class MaterialController {
       const plan = new ShaderVariants().plan(Json.object(p.axes), Number(p.limit ?? 64)); const rows: JsonObject[] = [];
       for (const defines of plan.rows as JsonObject[]) {
         const instance = await this.instance(material, { defines });
-        try { rows.push({ defines, compilation: this.compile(instance) }); } finally { A.call(instance, 'destroy'); }
+        try { rows.push({ defines, compilation: this.compile(instance) }); } finally { A.destroyOwned(this.environment.cc, instance); }
       }
       return { rows, total: rows.length };
     }
@@ -269,22 +270,22 @@ export class MaterialController {
       if (A.call(component, 'getRenderMaterial', slot) !== instance) throw new CocosError('VERIFICATION_FAILED', 'Material instance binding failed');
     } catch (error) {
       if (A.call(component, 'getRenderMaterial', slot) === instance) this.restore({ component, slot, original: material, current: instance });
-      else A.call(instance, 'destroy');
+      else A.destroyOwned(this.environment.cc, instance);
       throw error;
     }
     this.owned.set(key, { component, slot, original: owned?.original ?? material, current: instance });
-    if (owned) A.call(owned.current, 'destroy');
+    if (owned) A.destroyOwned(this.environment.cc, owned.current);
     return this.describe(instance);
   }
   dispose(): void {
     for (const row of this.owned.values()) {
       if (row.component.isValid !== false && A.call(row.component, 'getRenderMaterial', row.slot) === row.current) this.restore(row);
-      else if (row.current.isValid !== false) A.call(row.current, 'destroy');
+      else if (row.current.isValid !== false) A.destroyOwned(this.environment.cc, row.current);
     }
     this.owned.clear();
   }
   private restore(row: OwnedMaterial): void {
-    if (row.original.parent) { A.call(row.component, 'setMaterialInstance', row.original, row.slot); A.call(row.current, 'destroy'); }
+    if (row.original.parent) { A.call(row.component, 'setMaterialInstance', row.original, row.slot); A.destroyOwned(this.environment.cc, row.current); }
     // setMaterialInstance(shared) 在共享引用相同时会提前返回，必须 forceUpdate 才会真正清除实例。
     else A.call(row.component, 'setSharedMaterial', row.original, row.slot, true);
     if (A.call(row.component, 'getRenderMaterial', row.slot) !== row.original) throw new CocosError('VERIFICATION_FAILED', 'Original material was not restored');

@@ -34,8 +34,8 @@ export class ShaderPreview {
       try {
         if (this.materials.compile(candidate).status !== 'passed') throw new CocosError('VERIFICATION_FAILED', 'Preview candidate failed compilation');
         A.call(preview.renderer, 'setMaterialInstance', candidate, 0);
-      } catch (error) { A.call(candidate, 'destroy'); throw error; }
-      const previous = preview.material; preview.material = candidate; A.call(previous, 'destroy');
+      } catch (error) { A.destroyOwned(this.environment.cc, candidate); throw error; }
+      const previous = preview.material; preview.material = candidate; A.destroyOwned(this.environment.cc, previous);
       await this.frame(); return this.materials.describe(candidate);
     }
     await this.frame();
@@ -114,7 +114,7 @@ export class ShaderPreview {
       if (this.preview) this.dispose();
       else {
         for (const row of masks) if (row.camera.visibility === row.after) row.camera.visibility = row.before;
-        A.call(root, 'destroy'); A.call(texture, 'destroy'); A.call(material, 'destroy'); if (mesh) A.call(mesh, 'destroy');
+        A.destroyOwned(this.environment.cc, root); A.destroyOwned(this.environment.cc, texture); A.destroyOwned(this.environment.cc, material); if (mesh) A.destroyOwned(this.environment.cc, mesh);
       }
       throw error;
     }
@@ -135,6 +135,6 @@ export class ShaderPreview {
     const preview = this.preview; this.preview = undefined; this.baselines.clear();
     if (!preview) return;
     for (const row of preview.masks) if (row.camera.isValid !== false && row.camera.visibility === row.after) row.camera.visibility = row.before;
-    for (const object of [preview.root, preview.material, preview.mesh, preview.texture]) if (object.isValid !== false) A.call(object, 'destroy');
+    for (const object of [preview.root, preview.material, preview.mesh, preview.texture]) if (object.isValid !== false) A.destroyOwned(this.environment.cc, object);
   }
 }

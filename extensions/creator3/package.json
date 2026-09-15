@@ -70,6 +70,16 @@
         "methods": [
           "updateExtension"
         ]
+      },
+      "set-language": {
+        "methods": [
+          "setLanguage"
+        ]
+      },
+      "copy-log": {
+        "methods": [
+          "copyLog"
+        ]
       }
     },
     "scene": {

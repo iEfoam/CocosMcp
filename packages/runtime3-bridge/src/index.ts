@@ -1,8 +1,14 @@
+import { GraphicsInspector } from './graphics.js';
+import { ParticleController } from './particle.js';
 import { CocosError, Json, type JsonObject, type JsonValue } from '../../contracts/src/index.js';
 import { RuntimeAccess as A, RuntimePolicy, type RuntimeObject } from './access.js';
 import { SceneInspector, type SceneEnvironment } from './scene.js';
 import { MaterialController } from './material.js';
 import { ShaderPreview } from './shader-preview.js';
+import { PhysicsQueries } from './physics.js';
+import { MediaController } from './media.js';
+import { AnimationController } from './animation-control.js';
+import { RuntimeAssets } from './assets.js';
 
 interface Handle { value: unknown; owned: boolean; generation: number }
 interface Subscription { owner: RuntimeObject; event: string; callback: (...args: unknown[]) => void }
@@ -16,20 +22,22 @@ export class RuntimeController {
   private nextHandle = 0;
   private nextEvent = 0;
   private scene: unknown;
+  private cleanupErrors: JsonObject[] = [];
   private readonly materials: MaterialController;
   private readonly shaderPreview: ShaderPreview;
+  private readonly assets: RuntimeAssets;
 
   constructor(private readonly environment: SceneEnvironment, private readonly eventCapacity = 1000, private readonly policy = new RuntimePolicy()) {
     this.inspector = new SceneInspector(environment);
     this.materials = new MaterialController(environment);
     this.shaderPreview = new ShaderPreview(environment, this.materials);
+    this.assets = new RuntimeAssets(environment.cc);
   }
 
   private synchronize(): void {
     const current = A.call(this.environment.cc.director, 'getScene');
     if (current !== this.scene) {
-      this.shaderPreview.dispose(); this.materials.dispose();
-      this.clearSubscriptions(); this.handles.clear(); this.scene = current; this.generation++;
+      this.clearSession(); this.scene = current;
     }
   }
 
@@ -92,11 +100,27 @@ export class RuntimeController {
 
   async execute(id: string, p: JsonObject): Promise<JsonValue> {
     this.synchronize();
+    if (id.startsWith('runtime.graphics.') || /^runtime\.particle[23]d\./.test(id)) {
+      if (this.environment.major !== 3 || A.engineVersion(this.environment.cc) !== '3.8.8') throw new CocosError('UNSUPPORTED_VERSION', 'Graphics and particle tools require Creator 3.8.8');
+      return id.startsWith('runtime.graphics.') ? new GraphicsInspector(this.environment.cc).execute(id, p) : new ParticleController(this.inspector).execute(id, p);
+    }
+    if (/^runtime\.(physics[23]d|audio|video|webview)\./.test(id)) {
+      if (this.environment.major !== 3 || A.engineVersion(this.environment.cc) !== '3.8.8') throw new CocosError('UNSUPPORTED_VERSION', 'Physics and media tools require Creator 3.8.8');
+      return id.startsWith('runtime.physics') ? new PhysicsQueries(this.environment.cc).execute(id, p) : new MediaController(this.inspector).execute(id, p);
+    }
+    if (id.startsWith('runtime.animation.')) {
+      if (this.environment.major !== 3 || A.engineVersion(this.environment.cc) !== '3.8.8') throw new CocosError('UNSUPPORTED_VERSION', 'Animation controls require Creator 3.8.8');
+      return new AnimationController(this.inspector).execute(id, p);
+    }
+    if (id.startsWith('runtime.asset.') || id === 'runtime.bundle.inspect') {
+      if (this.environment.major !== 3 || A.engineVersion(this.environment.cc) !== '3.8.8') throw new CocosError('UNSUPPORTED_VERSION', 'Runtime asset tools require Creator 3.8.8');
+      return this.assets.execute(id, p);
+    }
     if (id.startsWith('runtime.material.') || id === 'runtime.shader.variants.compile') return this.materials.execute(id, p);
     if (id.startsWith('runtime.shader.')) return this.shaderPreview.execute(id, p);
     const str = (key: string): string => Json.string(p[key], key);
     switch (id) {
-      case 'runtime.query': return { scene: this.inspector.sceneInfo(), engineVersion: String(this.environment.cc.ENGINE_VERSION ?? 'unknown'), generation: this.generation };
+      case 'runtime.query': return { scene: this.inspector.sceneInfo(), engineVersion: A.engineVersion(this.environment.cc), generation: this.generation, cleanupErrors: this.cleanupErrors };
       case 'runtime.hierarchy': return this.inspector.hierarchy(p);
       case 'runtime.types': return { rows: A.propertyNames(this.environment.cc).map(name => {
         const descriptor = A.descriptor(this.environment.cc, name);
@@ -142,13 +166,22 @@ export class RuntimeController {
       }
       case 'runtime.subscribe': {
         const owner = A.object(this.target(String(p.target ?? 'scene'))); const event = str('event');
-        const subscriptionId = `${this.generation}:event:${++this.nextHandle}`;
+        if (this.subscriptions.size >= 128) throw new CocosError('RESOURCE_BUSY', 'At most 128 active or pending-cleanup subscriptions are allowed');
+        const subscriptionId = `${this.generation}:event:${++this.nextHandle}`, generation = this.generation;
+        let listening = false;
         const callback = (...args: unknown[]): void => {
+          if (!listening || generation !== this.generation) return;
           this.events.push({ sequence: ++this.nextEvent, subscriptionId, event, occurredAt: new Date().toISOString(), args: args.map(value => A.safeData(value)) });
           if (this.events.length > this.eventCapacity) this.events.splice(0, this.events.length - this.eventCapacity);
         };
-        A.call(owner, 'on', event, callback);
-        this.subscriptions.set(subscriptionId, { owner, event, callback }); return { subscriptionId };
+        this.subscriptions.set(subscriptionId, { owner, event, callback });
+        try { A.call(owner, 'on', event, callback); listening = true; }
+        catch (error) {
+          // on 可能先注册再抛错；回调保持失活，若 off 也失败则保留记录供清理重试。
+          try { A.call(owner, 'off', event, callback); this.subscriptions.delete(subscriptionId); } catch { /* 保留 pending cleanup。 */ }
+          throw new CocosError('OUTCOME_UNKNOWN', 'Subscription registration failed; inspect cleanup before retrying', { subscriptionId, cause: CocosError.from(error).message });
+        }
+        return { subscriptionId };
       }
       case 'runtime.unsubscribe': {
         const id = str('subscriptionId'); const subscription = this.subscriptions.get(id);
@@ -180,13 +213,28 @@ export class RuntimeController {
   }
 
   private clearSubscriptions(): void {
-    for (const subscription of this.subscriptions.values()) {
-      try { A.call(subscription.owner, 'off', subscription.event, subscription.callback); } catch { /* 场景销毁后原订阅目标可能已经失效。 */ }
+    const failed: string[] = [];
+    for (const [id, subscription] of this.subscriptions) {
+      try { A.call(subscription.owner, 'off', subscription.event, subscription.callback); this.subscriptions.delete(id); }
+      catch { failed.push(id); }
     }
-    this.subscriptions.clear();
+    if (failed.length) throw new CocosError('OUTCOME_UNKNOWN', 'Some native listeners could not be removed; callbacks are invalidated and cleanup can be retried', { subscriptionIds: failed });
   }
 
-  dispose(): void { this.shaderPreview.dispose(); this.materials.dispose(); this.clearSubscriptions(); this.handles.clear(); this.events.length = 0; }
+  private clearSession(): void {
+    // 每项独立收敛；一项原生释放异常不能阻止取消订阅和使旧句柄失效。
+    this.generation++;
+    const cleanup: Array<[string, () => void]> = [['assets', () => this.assets.dispose()], ['shader-preview', () => this.shaderPreview.dispose()], ['materials', () => this.materials.dispose()], ['subscriptions', () => this.clearSubscriptions()]];
+    const failures: JsonObject[] = [];
+    for (const [scope, action] of cleanup) {
+      try { action(); } catch (error) { failures.push({ scope, message: CocosError.from(error).message }); }
+    }
+    if (failures.length) this.cleanupErrors = [...this.cleanupErrors, ...failures].slice(-20);
+    this.handles.clear(); this.events.length = 0;
+  }
+  connectionLost(): void { this.clearSession(); }
+  dispose(): void { this.clearSession(); }
+
 }
 
 export { SceneInspector } from './scene.js';

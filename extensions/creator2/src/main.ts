@@ -1,3 +1,4 @@
+import { PanelPreferences, type PanelMenuHost } from '../../shared/panel-preferences.js';
 import { ExtensionUpdate } from '../../shared/extension-update.js';
 import { McpService } from '../../shared/mcp-service.js';
 import { dirname } from 'path';
@@ -8,7 +9,7 @@ import type { PanelState } from '../../../packages/editor-bridge/src/panel-state
 
 interface ReplyEvent { reply?(error: { message: string } | null, result?: unknown): void }
 
-interface CreatorEditor {
+interface CreatorEditor extends PanelMenuHost {
   versions?: { creator?: string };
   App?: { version?: string };
   Project: { path: string };
@@ -45,14 +46,14 @@ class ExtensionLifecycle {
   private getService(): McpService { return this.service ??= new McpService(Editor.Project.path, dirname(__dirname)); }
   async startService(): Promise<void> { await this.start(); await this.getService().start(); }
   async stopService(): Promise<void> { await this.service?.stop(); }
-  async unload(): Promise<void> { await this.stopService(); await this.stop(); }
+  async unload(): Promise<void> { try { await this.stopService(); await this.stop(); } finally { preferences.restoreMenu(); } }
   private bridge: EditorBridge | undefined;
   private starting: Promise<void> | undefined;
   private getBridge(): EditorBridge {
     if (!this.bridge) { const host = new CreatorHost(); this.bridge = new EditorBridge(new Creator2Adapter(host), host.projectPath, host.version); }
     return this.bridge;
   }
-  async panelState(): Promise<PanelState> { const state = await this.getBridge().panelStateWithRuntime(); state.service = this.getService().snapshot(); this.getUpdater().check(); state.extension = this.getUpdater().snapshot(); return state; }
+  async panelState(): Promise<PanelState> { const state = await this.getBridge().panelStateWithRuntime(); state.service = this.getService().snapshot(); this.getUpdater().check(); state.extension = this.getUpdater().snapshot(); state.locale = preferences.read(); preferences.applyMenu(); return state; }
   async start(): Promise<void> {
     this.getUpdater();
     // 菜单与面板可同时请求启动，必须复用同一次初始化以免留下重复监听器。
@@ -70,11 +71,14 @@ class ExtensionLifecycle {
     });
   }
 }
+const preferences = new PanelPreferences(() => Editor.Project.path, 2, Editor);
 const lifecycle = new ExtensionLifecycle();
 export = {
-  load(): void { void lifecycle.start().catch(error => console.error('[CocosMCP]', error)); },
+  load(): void { void lifecycle.start().then(() => preferences.applyMenu()).catch(error => console.error('[CocosMCP]', error)); },
   unload(): void { void lifecycle.unload().catch(error => console.error('[CocosMCP]', error)); },
   messages: {
+    'set-language'(event: ReplyEvent, locale: unknown): void { lifecycle.reply(event, () => preferences.set(locale)); },
+    'copy-log'(event: ReplyEvent, text: unknown): void { lifecycle.reply(event, () => preferences.copy(text)); },
     'extension-update'(event?: ReplyEvent): void { lifecycle.reply(event, () => lifecycle.updateExtension()); },
     'service-start'(event?: ReplyEvent): void { lifecycle.reply(event, () => lifecycle.startService()); },
     'service-stop'(event?: ReplyEvent): void { lifecycle.reply(event, () => lifecycle.stopService()); },

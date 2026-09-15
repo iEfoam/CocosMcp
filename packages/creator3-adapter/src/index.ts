@@ -9,6 +9,9 @@ import { AssetQuery } from './asset-query.js';
 import { PreviewService } from './preview.js';
 import { GeometryService } from './geometry.js';
 import { RenderingService } from './rendering.js';
+import { AnimationEditService } from './animation-edit.js';
+import { UiService } from './ui.js';
+import { TextureService } from './texture.js';
 
 export class Creator3Adapter implements EditorAdapter {
   readonly major = 3 as const;
@@ -16,11 +19,13 @@ export class Creator3Adapter implements EditorAdapter {
   constructor(private readonly port: EditorPort) { this.shaders = new ShaderService(port); }
 
   supportedCapabilities(): string[] {
-    const excluded = new Set(['ui.build']);
-    if (!this.port.preview || this.port.version !== '3.8.8') for (const id of ['preview.start', 'preview.stop', 'preview.status', 'preview.capture']) excluded.add(id);
+    const excluded = new Set<string>();
+    if (!this.port.consoleAvailable || !this.port.consoleQuery || this.port.version !== '3.8.8') excluded.add('console.query');
+    if (!this.port.preview || this.port.version !== '3.8.8') for (const id of ['preview.start', 'preview.stop', 'preview.status', 'preview.capture', 'preview.resize', 'preview.input', 'preview.logs']) excluded.add(id);
     return new Operations().list().filter(row => row.context === 'editor' && row.supportedMajors?.includes(3) && !excluded.has(row.id)
       && (row.module !== 'F22' || row.id === 'shader.environment' || this.port.version === '3.8.8')
-      && (!row.id.startsWith('rendering.') || this.port.version === '3.8.8')).map(row => row.id);
+      && (!row.id.startsWith('rendering.') || this.port.version === '3.8.8')
+      && (!row.id.startsWith('ui.') && !row.id.startsWith('texture.') && !row.id.startsWith('animation.') && row.id !== 'font.inspect' || this.port.version === '3.8.8')).map(row => row.id);
   }
 
   async revision(): Promise<string> {
@@ -96,6 +101,30 @@ export class Creator3Adapter implements EditorAdapter {
   }
 
   private async executePrepared(id: string, p: JsonObject): Promise<JsonValue> {
+    if (['animation.clip.read', 'animation.clip.patch', 'animation.clip.restore'].includes(id)) return new AnimationEditService(this.port).execute(id, p);
+    if (id.startsWith('animation.clip.')) {
+      if (this.port.version !== '3.8.8') throw new CocosError('UNSUPPORTED_VERSION', 'Animation tools require Creator 3.8.8');
+      if (id === 'animation.clip.create') {
+        const url = Json.string(p.url, 'url');
+        if (!url.endsWith('.anim')) throw new CocosError('INVALID_ARGUMENT', 'Animation URL must end in .anim');
+        const content = await this.port.scene('animation.clip.serialize', p);
+        const result = Json.object(await this.execute('asset.create', { url, content: JSON.stringify(content) }));
+        const asset = Json.object(result.asset);
+        try { return { ...result, clip: Json.value(await this.port.scene('animation.clip.inspect', { uuid: asset.uuid })) }; }
+        catch (error) { throw new CocosError('OUTCOME_UNKNOWN', 'Animation created but native readback failed', { ...result, cause: CocosError.from(error).message }); }
+      }
+      return Json.value(await this.port.scene(id, p));
+    }
+    if (id === 'font.inspect') {
+      if (this.port.version !== '3.8.8') throw new CocosError('UNSUPPORTED_VERSION', 'Font inspection requires Creator 3.8.8');
+      return Json.value(await this.port.scene(id, p));
+    }
+    if (id.startsWith('texture.')) return new TextureService(this.port).execute(id, p);
+    if (id.startsWith('ui.')) return new UiService(this.port, (id, params) => this.execute(id, params)).execute(id, p);
+    if (id === 'console.query') {
+      if (!this.port.consoleAvailable || !this.port.consoleQuery || this.port.version !== '3.8.8') throw new CocosError('UNSUPPORTED_CAPABILITY', 'Creator console reader unavailable');
+      return this.port.consoleQuery(p);
+    }
     if (id === 'geometry.create') return new GeometryService(this.port, (id, params) => this.execute(id, params)).create(p);
     if (id === 'geometry.array') return new GeometryService(this.port, (id, params) => this.execute(id, params)).array(p);
     if (id.startsWith('rendering.')) {

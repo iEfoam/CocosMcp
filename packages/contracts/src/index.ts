@@ -8,6 +8,11 @@ export type Effect = 'read' | 'scene' | 'asset' | 'runtime' | 'configuration' | 
 export type Verification = 'source-only' | 'unverified' | 'contract-tested' | 'adapter-tested' | 'editor-verified' | 'runtime-verified' | 'device-verified';
 export type Implementation = 'implemented' | 'planned';
 
+export interface VerificationEvidence {
+  id: string; level: Verification; source: string; sourceFingerprint?: string; reportSha256?: string;
+  creatorVersion?: string; limitations: string; applicability: 'current-source' | 'historical';
+}
+
 export interface Capability {
   id: string;
   title: string;
@@ -22,6 +27,7 @@ export interface Capability {
   requires?: string[];
   implementation: Implementation;
   verification: Verification;
+  verificationEvidence?: VerificationEvidence[];
   source?: string;
   platforms?: string[];
   prerequisites?: string[];

@@ -19,6 +19,7 @@
 - 显式 `operationId` 支持进程内幂等复用，操作完成结果可通过 `cocos_operation_query` 查询；审计日志只记录操作元信息。
 - 工作流编排支持 `cocos_workflow_plan` 和 `cocos_workflow_execute`：先批量校验参数、版本、风险和副作用，再按顺序执行多步场景生产流程；默认失败即停，并返回已完成步骤和补偿提示。
 - Creator 2.x/3.x 扩展提供可停靠的 CocosMCP 控制中心，展示工程、编辑器实例、能力状态、桥接日志和开发运行时状态，并支持桥接启停。
+- 控制中心右上角支持简体中文 / English 切换，默认中文，按工程保存偏好并同步 CocosMCP 顶部菜单。原始日志和项目路径保留原文；错误行可单条复制，也可复制当前保留记录中的全部错误（包含完整字段，不受分页限制）。
 - 工作流状态会持久化到 `.codex-work/cache/cocos-mcp/workflows/`，可使用 `cocos_workflow_status` 在服务重启后查询进度和失败步骤。
 - 能力目录会分别报告 Creator 2.x/3.x 的 `creator2Operations` 和 `creator3Operations`；不支持的版本会在执行前返回版本错误。
 - `scene.diff` 返回 `added`、`removed`、`changed` 路径记录，支持节点、组件、属性和数组的递归比较。
@@ -113,3 +114,7 @@ device-verified   已在目标设备或平台验证
 自有代码采用 MIT。Cocos Creator、引擎、Spine、DragonBones、平台 SDK 和其他第三方依赖分别遵循其各自许可证；本项目不改变第三方条款。
 
 资源创建目录规则与项目整理功能：[项目资源整理](docs/asset-organization.md)。
+
+完整功能的分阶段实施设计：[实施方案](docs/capability-roadmap.md)。功能完成度与验收证据：[清单说明](docs/capability-verification.md)。
+
+新增能力与示例：[阶段实现说明](docs/roadmap-implementation.md)。

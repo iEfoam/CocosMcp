@@ -24,7 +24,7 @@ test('capability catalog contains all proposal modules and executable operations
   assert.equal(catalog.search().total >= 70, true);
   assert.equal(catalog.describe('scene.open').versions.includes(2), true);
   assert.deepEqual(catalog.describe('runtime.invoke').platforms, ['development-runtime']);
-  assert.equal(catalog.describe('ui.build').implementation, 'planned');
+  assert.equal(catalog.describe('ui.build').implementation, 'implemented');
   assert.equal(typeof catalog.coverage().rows[0]!.verification, 'object');
   assert.throws(() => catalog.validate('scene.open', {}), (error: unknown) => error instanceof CocosError && error.code === 'INVALID_ARGUMENT');
 });

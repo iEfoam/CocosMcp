@@ -12,5 +12,7 @@ export interface EditorPort {
   messages(packageName?: string): Array<{ package: string; message: string; public: boolean }>;
   preview?(method: string, params: import('../../contracts/src/index.js').JsonObject): Promise<JsonValue>;
   disposePreview?(): void;
+  consoleAvailable?: boolean;
+  consoleQuery?(params: import('../../contracts/src/index.js').JsonObject): Promise<JsonValue>;
   shader?(method: string, params: import('../../contracts/src/index.js').JsonObject): Promise<JsonValue>;
 }

@@ -5,6 +5,9 @@ import type { JsonValue } from '../../../packages/contracts/src/index.js';
 import { Json } from '../../../packages/contracts/src/index.js';
 import { MaterialController } from '../../../packages/runtime3-bridge/src/material.js';
 import { CreatorShaderHost } from './shader-host.js';
+import { UiDocumentModel } from '../../../packages/ui-core/src/index.js';
+import { FontInspector } from '../../../packages/runtime3-bridge/src/font.js';
+import { AnimationTools } from '../../../packages/runtime3-bridge/src/animation.js';
 
 declare const Editor: { App: { path: string } };
 declare const EditorExtends: { serialize(value: unknown): unknown };
@@ -29,6 +32,18 @@ class SceneLifecycle {
     if (method === 'shader.binding') return this.materials!.binding(Json.object(args[0]));
     if (method === 'shader.bindings') return this.materials!.bindings(String(args[0]));
     if (method === 'shader.checkMaterial') { await this.materials!.load(String(args[0]), 'Material'); return { valid: true }; }
+    if (method === 'font.inspect') return new FontInspector(this.inspector, this.materials!).inspect(Json.object(args[0]));
+    if (method === 'animation.clip.patchSource') return new AnimationTools(this.inspector, this.materials!).patchSource(Json.object(args[0]));
+    if (method === 'animation.clip.serialize') return new AnimationTools(this.inspector, this.materials!).serialize(Json.object(args[0]));
+    if (method === 'animation.clip.inspect' || method === 'animation.clip.sample') return new AnimationTools(this.inspector, this.materials!).inspect(Json.object(args[0]));
+    if (method === 'ui.preflight' || method === 'ui.preflight_update') {
+      const rows = new UiDocumentModel().parse(Json.object(args[0]).document);
+      for (const row of rows) for (const spec of row.node.components ?? []) for (const [property, value] of Object.entries(spec.properties ?? {})) {
+        if (value && typeof value === 'object' && !Array.isArray(value) && typeof value.assetUuid === 'string') {
+          await this.materials!.load(value.assetUuid, ['spriteFrame', 'backgroundImage'].includes(property) ? 'SpriteFrame' : spec.type === 'cc.RichText' ? 'TTFFont' : 'Font');
+        }
+      }
+    }
     return this.inspector.execute(method, args);
   }
   clear(): void { this.materials?.dispose(); this.materials = undefined; this.inspector = undefined; }

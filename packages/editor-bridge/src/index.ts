@@ -63,7 +63,8 @@ export class EditorBridge {
         endpoint: descriptor.endpoint, pid: descriptor.pid, startedAt: descriptor.startedAt,
       } : null,
       supportedCapabilities: this.adapter.supportedCapabilities(),
-      logs: this.events.slice(-100).map(row => ({ ...row })),
+      // 面板在有界日志快照上筛选和分页，不能提前截断而隐藏历史错误。
+      logs: this.events.map(row => ({ ...row })),
       runtimeConfigured: this.hasRuntimeConfiguration(),
     };
   }
@@ -146,6 +147,11 @@ export class EditorBridge {
     const capability = this.catalog.get(request.capabilityId);
     if (!capability || !this.adapter.supportedCapabilities().includes(request.capabilityId)) throw new CocosError('UNSUPPORTED_CAPABILITY', `Not supported by this editor: ${request.capabilityId}`);
     this.validatePaths(request);
+    if (request.capabilityId === 'console.query') {
+      // 控制台诊断必须在场景脚本加载失败时仍可用；它不依赖场景 revision 或操作账本。
+      if (request.expectedRevision !== undefined) throw new CocosError('INVALID_ARGUMENT', 'Console queries do not accept a scene revision');
+      return { result: await this.adapter.execute(request.capabilityId, request.params), revision: '' };
+    }
     const fingerprint = createHash('sha256').update(Json.canonical({ capabilityId: request.capabilityId, params: request.params, expectedRevision: request.expectedRevision ?? null })).digest('hex');
     const ledger = this.ledgerPath(Json.string(request.operationId, 'operationId'));
     if (existsSync(ledger)) {
