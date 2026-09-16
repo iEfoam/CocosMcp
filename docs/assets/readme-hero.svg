@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="300" viewBox="0 0 1120 300" role="img" aria-labelledby="title desc">
+  <title id="title">CocosMCP</title>
+  <desc id="desc">Connect AI to Cocos Creator. Editor tools, runtime inspection, and structured workflows.</desc>
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#0f172a"/><stop offset="1" stop-color="#173c50"/></linearGradient>
+    <linearGradient id="accent" x2="1" y2="1"><stop stop-color="#67e8f9"/><stop offset="1" stop-color="#60a5fa"/></linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0H0v32" fill="none" stroke="#ffffff" stroke-opacity=".035"/></pattern>
+  </defs>
+  <rect width="1120" height="300" rx="24" fill="url(#bg)"/>
+  <rect width="1120" height="300" rx="24" fill="url(#grid)"/>
+  <g font-family="Arial, Helvetica, sans-serif">
+    <text x="56" y="65" font-size="13" font-weight="700" letter-spacing="3" fill="#67e8f9">CREATOR TOOLS · MODEL CONTEXT PROTOCOL</text>
+    <text x="52" y="142" font-size="64" font-weight="700" fill="#f8fafc">CocosMCP</text>
+    <text x="56" y="186" font-size="23" fill="#cbd5e1">Connect AI to Cocos Creator.</text>
+    <text x="56" y="244" font-size="15" fill="#94a3b8">CREATOR 2.x / 3.x   •   LOCAL FIRST   •   MIT LICENSE</text>
+  </g>
+  <g transform="translate(830 56)" fill="none" stroke="url(#accent)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <path d="m92 12 78 45v90l-78 45-78-45V57z" fill="#38bdf8" fill-opacity=".06"/>
+    <path d="m14 57 78 45 78-45M92 102v90" opacity=".5"/>
+    <path d="m69 70-25 25 25 25m47-50 25 25-25 25M103 60l-22 70" stroke-width="5"/>
+    <circle cx="14" cy="57" r="5" fill="#67e8f9"/><circle cx="170" cy="57" r="5" fill="#67e8f9"/><circle cx="92" cy="192" r="5" fill="#60a5fa"/>
+  </g>
+</svg>
