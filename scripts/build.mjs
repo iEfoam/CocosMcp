@@ -7,6 +7,7 @@ import { resolve, join } from 'node:path';
 const root = process.cwd();
 const define = await new VerificationBuild().definitions();
 const output = resolve(root, '.codex-work/build');
+const builtAt = new Date().toISOString();
 await mkdir(join(output, 'server'), { recursive: true });
 await build({ define, entryPoints: ['apps/server/src/cli.ts'], outfile: join(output, 'server/cli.mjs'), bundle: true, platform: 'node', target: 'node24', format: 'esm',
   packages: 'external', sourcemap: true });
@@ -24,12 +25,24 @@ for (const major of [2, 3]) {
   await writeFile(join(extensionRoot, 'service-config.json'), JSON.stringify({ nodeExecutable: process.execPath }));
   const manifest = JSON.parse(await readFile(`extensions/creator${major}/package.json`, 'utf8'));
   const hash = createHash('sha256');
+  // 展示资料变化也必须更新构建身份，否则更新器会把新包误认为已经安装。
+  hash.update(JSON.stringify(manifest));
+  for (const path of ['README.en.md', 'README.zh.md', 'logo.png']) hash.update(await readFile(join('extensions/shared', path)));
   for (const file of [`main.${extension}`, `scene.${extension}`, `panel.${extension}`, 'service.mjs', 'update.mjs']) hash.update(await readFile(join(extensionRoot, 'dist', file)));
   if (major === 3) hash.update(await readFile(join(extensionRoot, 'dist/runtime.js')));
   manifest.buildId = process.env.COCOS_RELEASE_TAG || hash.digest('hex').slice(0, 12);
   if (process.env.COCOS_RELEASE_TAG) manifest.version = process.env.COCOS_RELEASE_TAG.replace(/^v/, '');
+  manifest.buildTime = builtAt;
   await writeFile(join(extensionRoot, 'package.json'), JSON.stringify(manifest, null, 2) + '\n');
   await copyFile('LICENSE', join(extensionRoot, 'LICENSE'));
+  await copyFile('extensions/shared/logo.png', join(extensionRoot, 'logo.png'));
+  // Creator 3.8.8 精确匹配当前语言的 README，不会自动从 README.md 回退。
+  for (const [language, names] of [['en', ['README.md', 'README.en.md']], ['zh', ['README.zh.md', 'README.zh-CN.md']]]) {
+    const template = await readFile(`extensions/shared/README.${language}.md`, 'utf8');
+    const values = { major, version: manifest.version, buildId: manifest.buildId, builtAt };
+    const content = template.replace(/\{\{(major|version|buildId|builtAt)\}\}/g, (_, key) => String(values[key]));
+    for (const name of names) await writeFile(join(extensionRoot, name), content);
+  }
 }
 await mkdir(join(output, 'runtime'), { recursive: true });
 await build({ define, entryPoints: ['packages/runtime3-bridge/src/bootstrap.ts'], outfile: join(output, 'runtime/cocos-mcp.js'), bundle: true,

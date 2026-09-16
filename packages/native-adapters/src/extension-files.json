@@ -1,0 +1,5 @@
+{
+  "2": ["package.json", "LICENSE", "dist/main.js", "dist/scene.js", "dist/panel.js", "dist/service.mjs", "dist/update.mjs"],
+  "3": ["package.json", "LICENSE", "dist/main.cjs", "dist/scene.cjs", "dist/panel.cjs", "dist/service.mjs", "dist/update.mjs", "dist/runtime.js"],
+  "presentation": ["README.md", "README.en.md", "README.zh.md", "README.zh-CN.md", "logo.png"]
+}

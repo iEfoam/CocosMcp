@@ -1,10 +1,14 @@
 {
   "name": "cocos-mcp-creator3",
+  "title": "CocosMCP · Creator 3",
   "version": "0.1.0",
   "package_version": 2,
   "editor": ">=3.0.0 <4.0.0",
-  "description": "免费开源 CocosMCP 编辑器桥接（Creator 3.x）",
-  "author": "CocosMCP contributors",
+  "description": "免费开源的 AI 编辑器桥接：连接 MCP 客户端与 Creator 场景、资源和开发运行时。",
+  "author": "iefoam@foxmail.com",
+  "homepage": "https://github.com/iEfoam/CocosMcp",
+  "repository": { "type": "git", "url": "https://github.com/iEfoam/CocosMcp.git" },
+  "bugs": { "url": "https://github.com/iEfoam/CocosMcp/issues" },
   "license": "MIT",
   "main": "./dist/main.cjs",
   "contributions": {
