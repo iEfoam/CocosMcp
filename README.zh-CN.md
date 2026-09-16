@@ -116,6 +116,8 @@ HTTP 仅绑定 `127.0.0.1`，要求 Bearer token，并拒绝非本地 Host/Origi
 
 计划阶段校验参数、版本、风险和副作用。计划有效且所需授权已具备后，使用 `cocos_workflow_execute` 执行。默认失败即停，并返回已完成步骤和补偿提示。工作流不提供通用回滚，应根据各项能力的 `rollback` 提示设计补偿步骤。服务重启后可通过 `cocos_workflow_status` 查询已持久化的进度。
 
+步骤支持 `paramRefs` 引用之前的结果、`runtimeRef` 绑定预览运行实例，以及只读 `waitFor` 就绪等待。同一工作流 ID 不可重复执行。详见[预览可靠性与性能工作流](docs/mcp-reliability-and-performance.md)。
+
 ## 验证与安全边界
 
 能力的 `verification` 字段表示证据层级：

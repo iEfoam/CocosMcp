@@ -47,7 +47,7 @@ export class ShaderCapabilities {
     add('runtime.shader.preview.capture', '读取预览 RenderTexture 像素并生成图像', 'read', {});
     add('runtime.shader.preview.compare', '比较本次预览与已保存的运行时基线', 'read', { baselineId: str, tolerance: { type: 'number', minimum: 0, maximum: 1 } }, ['baselineId']);
     add('runtime.shader.preview.close', '释放预览自有节点、材质和纹理', 'runtime', {});
-    add('runtime.shader.profile', '按真实帧事件采样整帧性能；不伪称 GPU 耗时', 'read', { frames: { type: 'integer', minimum: 2, maximum: 300 } });
+    add('runtime.shader.profile', '按真实帧事件采样整帧性能及预算；不伪称 GPU 耗时', 'read', { frames: { type: 'integer', minimum: 2, maximum: 300 }, warmupFrames: { type: 'integer', minimum: 1, maximum: 120 }, maxFrameMs: { type: 'number', exclusiveMinimum: 0, maximum: 1000 } });
     return rows;
   }
 }

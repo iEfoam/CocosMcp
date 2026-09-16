@@ -46,12 +46,17 @@ export class CocosMcpServer {
     server.registerTool('cocos_assets_organize_apply', { title: '执行项目资源整理', description: '执行已审查计划；必须保留预览范围和 planHash。通过 AssetDB 移动保留 UUID，遇到变化拒绝，部分失败返回恢复记录。',
       inputSchema: z.object({ ...envelope, ...organizationScope, planHash: z.string().min(1) }), annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false } },
       ({ scopeUrl, recursive, urls, planHash, ...request }, context) => this.execute({ ...request, capabilityId: 'asset.organize.apply', params: { planHash, ...(scopeUrl !== undefined ? { scopeUrl } : {}), ...(recursive !== undefined ? { recursive } : {}), ...(urls !== undefined ? { urls } : {}) } }, context));
+    const resultReference = z.object({ step: z.number().int().min(0), path: z.string().min(1) });
     const workflowStep = z.object({ capabilityId: z.string().min(1), params: z.record(z.string(), z.unknown()).default({}),
+      paramRefs: z.record(z.string(), resultReference).optional(), runtimeRef: resultReference.optional(),
+      waitFor: z.object({ path: z.string().min(1), equals: z.json(), timeoutMs: z.number().int().min(1).max(30000).optional(), intervalMs: z.number().int().min(10).max(5000).optional() }).optional(),
       instanceId: z.string().optional(), runtimeInstanceId: z.string().optional(), operationId: z.string().optional(), expectedRevision: z.string().optional() });
     server.registerTool('cocos_workflow_plan', { title: '规划工作流', description: '批量校验能力参数、版本、风险和副作用；规划不会修改工程',
       inputSchema: z.object({ ...project, steps: z.array(workflowStep).min(1).max(100) }), annotations: read },
       args => this.result(() => {
         const steps = args.steps.map(step => ({ capabilityId: step.capabilityId, params: Json.object(Json.value(step.params)),
+          ...(step.paramRefs ? { paramRefs: step.paramRefs } : {}), ...(step.runtimeRef ? { runtimeRef: step.runtimeRef } : {}),
+          ...(step.waitFor ? { waitFor: { path: step.waitFor.path, equals: Json.value(step.waitFor.equals), ...(step.waitFor.timeoutMs !== undefined ? { timeoutMs: step.waitFor.timeoutMs } : {}), ...(step.waitFor.intervalMs !== undefined ? { intervalMs: step.waitFor.intervalMs } : {}) } } : {}),
           ...(step.instanceId ? { instanceId: step.instanceId } : {}), ...(step.runtimeInstanceId ? { runtimeInstanceId: step.runtimeInstanceId } : {}),
           ...(step.operationId ? { operationId: step.operationId } : {}), ...(step.expectedRevision ? { expectedRevision: step.expectedRevision } : {}) }));
         return this.application.plan(args.projectId, steps);
@@ -60,6 +65,8 @@ export class CocosMcpServer {
       inputSchema: z.object({ ...project, workflowId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/).optional(), steps: z.array(workflowStep).min(1).max(100), continueOnError: z.boolean().default(false) }),
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true } },
       (args, context) => this.result(() => this.application.executeWorkflow(args.projectId, args.steps.map(step => ({ capabilityId: step.capabilityId, params: Json.object(Json.value(step.params)),
+          ...(step.paramRefs ? { paramRefs: step.paramRefs } : {}), ...(step.runtimeRef ? { runtimeRef: step.runtimeRef } : {}),
+          ...(step.waitFor ? { waitFor: { path: step.waitFor.path, equals: Json.value(step.waitFor.equals), ...(step.waitFor.timeoutMs !== undefined ? { timeoutMs: step.waitFor.timeoutMs } : {}), ...(step.waitFor.intervalMs !== undefined ? { intervalMs: step.waitFor.intervalMs } : {}) } } : {}),
         ...(step.instanceId ? { instanceId: step.instanceId } : {}), ...(step.runtimeInstanceId ? { runtimeInstanceId: step.runtimeInstanceId } : {}),
         ...(step.operationId ? { operationId: step.operationId } : {}), ...(step.expectedRevision ? { expectedRevision: step.expectedRevision } : {}) })), context.mcpReq.signal, args.continueOnError, args.workflowId)));
     server.registerTool('cocos_workflow_status', { title: '工作流状态', description: '查询持久化工作流的步骤进度、失败位置和最终结果',

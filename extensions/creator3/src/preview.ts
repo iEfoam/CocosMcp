@@ -57,6 +57,18 @@ export class ManagedPreview {
       viewport: this.window?.getContentSize ? this.window.getContentSize() : null, source: 'managed-preview-window', runtimeBridgeRegistration: this.runtimeRegistered ? 'succeeded' : 'not-requested', rows: this.diagnostics.slice(-50) };
   }
 
+  private engineReadySource(): string {
+    // 页面 load 早于引擎就绪，且 Creator 的 System.resolve 是异步接口。
+    // 只读取已完成注册的模块，等待预览自身加载引擎，不主动启动第二条模块加载链。
+    return `let cc;
+      for(let attempt=0;attempt<100;attempt++) {
+        try { cc=globalThis.System?.get(await globalThis.System.resolve('cc')); } catch {}
+        if(cc?.director?.getScene()) break;
+        await new Promise(resolve=>setTimeout(resolve,100));
+      }
+      if(!cc?.director?.getScene()) throw new Error('Target preview engine or scene has not launched');`;
+  }
+
   async execute(method: string, params: JsonObject): Promise<JsonValue> {
     if (method === 'logs') return this.diagnosticLog.query(params);
     if (method === 'status') return this.status();
@@ -66,20 +78,23 @@ export class ManagedPreview {
       await this.bounded(window.webContents.executeJavaScript(String(params.source)), 5000);
       // 凭证来自本工程受控配置，只进入同源开发预览；返回值和错误信息不包含凭证。
       const result = await this.bounded(window.webContents.executeJavaScript(`(async () => {
-        const cc = await System.import('cc');
-        // 页面 load 完成时引擎仍可能在加载场景；不能把注册网关当作场景可操作。
-        for (let attempt=0; !cc.director.getScene() && attempt<60; attempt++) await new Promise(resolve => setTimeout(resolve,100));
+        ${this.engineReadySource()}
         if (!cc.director.getScene() || cc.director.getScene().uuid !== ${JSON.stringify(this.sceneId)}) throw new Error('Target preview scene has not launched');
-        if (globalThis.__cocosMcpDevelopmentConnection) await globalThis.__cocosMcpDevelopmentConnection.stop().catch(() => {});
+        if (globalThis.__cocosMcpDevelopmentConnection) await Promise.race([
+          globalThis.__cocosMcpDevelopmentConnection.stop().catch(() => {}), new Promise(resolve=>setTimeout(resolve,1000))
+        ]);
         globalThis.__cocosMcpDevelopmentConnection = await CocosMCPRuntime.CocosMCP.connect({
           ...${JSON.stringify(params.config)}, cc, major: 3, development: true
         });
-        return {connected:true, sceneId:cc.director.getScene()?.uuid ?? null};
-      })()`), 10000);
+        return {connected:true, runtimeInstanceId:globalThis.__cocosMcpDevelopmentConnection.instanceId, sceneId:cc.director.getScene()?.uuid ?? null};
+      })()`), 28000);
       this.runtimeRegistered = Boolean(result && typeof result === 'object' && (result as { connected?: boolean }).connected === true);
       return result as JsonValue;
     }
-    if (method === 'stop') { this.dispose(); return { stopped: true, scope: 'mcp-owned-preview-window' }; }
+    if (method === 'stop') {
+      if (this.window && !this.window.isDestroyed()) await this.bounded(this.window.webContents.executeJavaScript('globalThis.__cocosMcpDevelopmentConnection?.stop()'), 1000).catch(() => {});
+      this.dispose(); return { stopped: true, scope: 'mcp-owned-preview-window' };
+    }
     if (method === 'start') {
       const sceneId = String(params.sceneId ?? '');
       if (!sceneId) throw new CocosError('INVALID_ARGUMENT', 'Preview requires a saved scene UUID');
@@ -151,6 +166,29 @@ export class ManagedPreview {
       if (!window.isFocused()) { this.factory.activate?.(); window.focus(); }
       for (let attempt = 0; attempt < 10 && !window.isFocused(); attempt++) await new Promise(resolve => setTimeout(resolve, 50));
       if (!window.isFocused()) throw new CocosError('CONTEXT_UNAVAILABLE', 'Preview window did not acquire input focus');
+      const focusTarget = String(params.focusTarget ?? (params.action === 'key' ? 'game-canvas' : 'window'));
+      if (!['game-canvas', 'window'].includes(focusTarget)) throw new CocosError('INVALID_ARGUMENT', 'Invalid focus target');
+      let focus: JsonValue = { target: 'window' };
+      if (focusTarget === 'game-canvas') {
+        // DOM 聚焦不产生游戏点击，避免用点击变通时触发攻击、购买等业务行为。
+        focus = await this.bounded(window.webContents.executeJavaScript(`(async () => {
+          const cc = await System.import('cc');
+          const canvas = cc.game.canvas;
+          if (!canvas || !canvas.isConnected) throw new Error('Game canvas unavailable');
+          if (canvas.tabIndex < 0) canvas.tabIndex = 0;
+          canvas.focus({preventScroll:true});
+          const rect = canvas.getBoundingClientRect();
+          return {target:'game-canvas', focused:document.activeElement === canvas, devicePixelRatio:devicePixelRatio,
+            rect:{x:rect.x,y:rect.y,width:rect.width,height:rect.height}};
+        })()`), 5000) as JsonValue;
+        if (!focus || typeof focus !== 'object' || Array.isArray(focus) || focus.focused !== true) throw new CocosError('CONTEXT_UNAVAILABLE', 'Game canvas did not acquire focus');
+      }
+      if (params.action === 'key') await this.bounded(window.webContents.executeJavaScript(`(() => {
+        globalThis.__cocosMcpInputAck?.dispose();
+        const rows=[]; const listener=e=>rows.push({type:e.type,key:e.key,code:e.code,isTrusted:e.isTrusted});
+        window.addEventListener('keydown',listener,true); window.addEventListener('keyup',listener,true);
+        globalThis.__cocosMcpInputAck={rows,dispose:()=>{window.removeEventListener('keydown',listener,true);window.removeEventListener('keyup',listener,true);delete globalThis.__cocosMcpInputAck;}};
+      })()`), 5000);
       const sent: JsonObject[] = [];
       const send = (event: JsonObject): void => { window.webContents.sendInputEvent!(event); sent.push(event); };
       const wait = async (milliseconds: number): Promise<void> => { await new Promise(resolve => setTimeout(resolve, milliseconds)); if (this.window !== window || window.isDestroyed()) throw new CocosError('STALE_HANDLE', 'Preview changed during input'); };
@@ -175,23 +213,24 @@ export class ManagedPreview {
           try { send({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 }); }
           finally { send({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 }); }
         } else send({ type: 'mouseWheel', x, y, deltaX: params.deltaX ?? 0, deltaY: params.deltaY ?? 0, canScroll: true });
-        return { ...await this.execute('capture', {}) as JsonObject, sent, businessOutcomeVerified: false, coordinateSpace: 'preview-content-dip-top-left' };
+        const frame = await this.execute('capture', {});
+        const inputEvents = params.action === 'key' ? await this.bounded(window.webContents.executeJavaScript('globalThis.__cocosMcpInputAck?.rows ?? []'), 5000) as JsonValue : null;
+        return { ...frame as JsonObject, sent, focus, inputEvents, businessOutcomeVerified: false, coordinateSpace: 'preview-content-dip-top-left' };
       } catch (error) { throw new CocosError('OUTCOME_UNKNOWN', 'Preview input may have executed; inspect game state before retrying', { sent, cause: CocosError.from(error).message }); }
+      finally { if (params.action === 'key' && !window.isDestroyed()) await this.bounded(window.webContents.executeJavaScript('globalThis.__cocosMcpInputAck?.dispose()'), 1000).catch(() => {}); }
     }
     if (method === 'capture') {
       const window = this.window;
       if (!window || window.isDestroyed() || !this.ready) throw new CocosError('CONTEXT_UNAVAILABLE', 'Start an MCP preview before capturing it');
       // 等待引擎实际完成一帧，而不是把页面加载或 Canvas 存在误当作场景已经渲染。
       const frame = await this.bounded(window.webContents.executeJavaScript(`(async () => {
-        if (!globalThis.System) return {ready:false, reason:'engine-loader-unavailable'};
-        const cc = await System.import('cc');
-        if (!cc.director.getScene()) return {ready:false, reason:'scene-not-launched'};
+        ${this.engineReadySource()}
         return new Promise(resolve => {
           const timer=setTimeout(() => {cc.director.off(cc.Director.EVENT_AFTER_DRAW, done);resolve({ready:false, reason:'frame-timeout'});},5000);
           function done(){clearTimeout(timer);resolve({ready:true, sceneId:cc.director.getScene().uuid});}
           cc.director.once(cc.Director.EVENT_AFTER_DRAW,done);
         });
-      })()`), 8000);
+      })()`), 18000);
       if (!frame || typeof frame !== 'object' || (frame as { ready?: boolean }).ready !== true) throw new CocosError('CONTEXT_UNAVAILABLE', 'Preview has not rendered a game frame', frame as JsonValue);
       if ((frame as { sceneId?: string }).sceneId !== this.sceneId) throw new CocosError('VERIFICATION_FAILED', 'Preview launched a different scene', frame as JsonValue);
       const image = await window.webContents.capturePage();

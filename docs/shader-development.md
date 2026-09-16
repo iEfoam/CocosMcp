@@ -47,7 +47,7 @@ MCP 自有材质、临时场景和 Shader 预览的清理使用 `cc.isValid(obje
 | runtime.shader.preview.capture | 无 | PNG、尺寸、空白检测、baselineId 和编译证据 |
 | runtime.shader.preview.compare | baselineId、可选 tolerance | RGB 平均归一化误差、变化像素、差异图 |
 | runtime.shader.preview.close | 无 | 恢复相机遮罩并销毁自有资源 |
-| runtime.shader.profile | 可选 frames | 真实帧完成事件的帧耗时均值与分位数 |
+| runtime.shader.profile | 可选 frames、warmupFrames、maxFrameMs | 预热、整帧均值/P95/P99、内部渲染尺寸和性能预算 |
 
 ## 参数示例
 

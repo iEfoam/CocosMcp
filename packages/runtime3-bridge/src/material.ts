@@ -12,8 +12,12 @@ export class MaterialController {
   async load(uuid: string, type: string): Promise<RuntimeObject> {
     const asset = await new Promise<unknown>((accept, reject) => A.call(this.environment.cc.assetManager, 'loadAny', uuid,
       (error: Error | null, result: unknown) => error ? reject(error) : accept(result)));
-    const expected = this.environment.cc[type];
-    if (typeof expected !== 'function' || !(asset instanceof expected)) throw new CocosError('INVALID_ARGUMENT', `Expected ${type} asset`);
+    // Creator 3 的 cc 模块不保证导出 TextureBase，使用公开具体类型校验，不能放宽为任意 Asset。
+    const types = type === 'TextureBase' ? ['Texture2D', 'TextureCube', 'RenderTexture', 'TextureBase'] : [type];
+    if (!types.some(name => {
+      const expected = this.environment.cc[name];
+      return typeof expected === 'function' && asset instanceof expected;
+    })) throw new CocosError('INVALID_ARGUMENT', `Expected ${type} asset`);
     return A.object(asset);
   }
   private slot(p: JsonObject): { component: RuntimeObject; slot: number; material: RuntimeObject } {

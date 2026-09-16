@@ -7,7 +7,7 @@ import type { RuntimeExecutor } from './index.js';
 import type { ProjectRegistry } from './registry.js';
 
 interface Command { id: string; capabilityId: string; params: JsonObject }
-interface Pending { resolve(value: JsonValue): void; reject(error: Error): void; timer: NodeJS.Timeout }
+interface Pending { sessionId: string; resolve(value: JsonValue): void; reject(error: Error): void; timer: NodeJS.Timeout }
 interface RuntimeSession { id: string; projectId: string; version: string; platform: string; lastSeen: string; commands: Command[]; wake?: () => void }
 
 export class RuntimeGateway implements RuntimeExecutor {
@@ -17,7 +17,18 @@ export class RuntimeGateway implements RuntimeExecutor {
   private readonly pending = new Map<string, Pending>();
   private readonly configPaths: string[] = [];
 
-  constructor(private readonly projects: ProjectRegistry, private readonly timeoutMs = 30_000) {}
+  constructor(private readonly projects: ProjectRegistry, private readonly timeoutMs = 30_000, private readonly sessionTtlMs = 30_000, private readonly now = Date.now) {}
+
+  private removeSession(session: RuntimeSession): void {
+    session.wake?.(); this.sessions.delete(session.id);
+    // 已派发的操作可能已生效；断线只清理等待，不能重发写操作。
+    for (const pending of this.pending.values()) if (pending.sessionId === session.id) pending.reject(new CocosError('OUTCOME_UNKNOWN', 'Runtime disconnected before replying'));
+  }
+
+  private liveSessions(): RuntimeSession[] {
+    for (const session of this.sessions.values()) if (this.now() - Date.parse(session.lastSeen) >= this.sessionTtlMs) this.removeSession(session);
+    return [...this.sessions.values()];
+  }
 
   async start(port = 0): Promise<number> {
     this.server = createServer((request, response) => { void this.handle(request, response); });
@@ -36,11 +47,11 @@ export class RuntimeGateway implements RuntimeExecutor {
 
   list(projectId: string): JsonValue {
     this.projects.paths(projectId);
-    return { rows: [...this.sessions.values()].filter(session => session.projectId === projectId && Date.now() - Date.parse(session.lastSeen) < 30_000).map(session => ({ runtimeInstanceId: session.id, version: session.version, platform: session.platform, lastSeen: session.lastSeen })) };
+    return { rows: this.liveSessions().filter(session => session.projectId === projectId).map(session => ({ runtimeInstanceId: session.id, version: session.version, platform: session.platform, lastSeen: session.lastSeen })) };
   }
 
   async execute(projectId: string, runtimeInstanceId: string | undefined, capabilityId: string, params: JsonObject, signal?: AbortSignal): Promise<JsonValue> {
-    const rows = [...this.sessions.values()].filter(session => session.projectId === projectId && (!runtimeInstanceId || session.id === runtimeInstanceId));
+    const rows = this.liveSessions().filter(session => session.projectId === projectId && (!runtimeInstanceId || session.id === runtimeInstanceId));
     if (!rows.length) throw new CocosError('CONTEXT_UNAVAILABLE', 'No matching development runtime is connected');
     if (rows.length > 1) throw new CocosError('AMBIGUOUS_TARGET', 'Specify runtimeInstanceId when several runtimes are connected');
     if (signal?.aborted) throw new CocosError('CANCELLED', 'Runtime operation cancelled');
@@ -54,7 +65,7 @@ export class RuntimeGateway implements RuntimeExecutor {
         if (error) reject(error); else accept(result ?? null);
       };
       const timer = setTimeout(() => finish(new CocosError('OUTCOME_UNKNOWN', 'Runtime did not reply before timeout')), this.timeoutMs);
-      this.pending.set(id, { resolve: result => finish(undefined, result), reject: error => finish(error), timer });
+      this.pending.set(id, { sessionId: session.id, resolve: result => finish(undefined, result), reject: error => finish(error), timer });
       signal?.addEventListener('abort', cancel, { once: true });
       session.commands.push({ id, capabilityId, params }); session.wake?.();
     });
@@ -89,12 +100,13 @@ export class RuntimeGateway implements RuntimeExecutor {
       if (!token || provided.length !== expected.length || !timingSafeEqual(provided, expected)) throw new CocosError('UNAUTHORIZED', 'Runtime authentication failed');
       if (request.url === '/runtime/sessions') { reply(200, this.list(projectId)); return; }
       if (request.url === '/runtime/register') {
-        const session: RuntimeSession = { id: randomUUID(), projectId, version: String(body.version ?? 'unknown'), platform: String(body.platform ?? 'unknown'), lastSeen: new Date().toISOString(), commands: [] };
+        this.liveSessions();
+        const session: RuntimeSession = { id: randomUUID(), projectId, version: String(body.version ?? 'unknown'), platform: String(body.platform ?? 'unknown'), lastSeen: new Date(this.now()).toISOString(), commands: [] };
         this.sessions.set(session.id, session); reply(200, { runtimeInstanceId: session.id }); return;
       }
       const session = this.sessions.get(Json.string(body.runtimeInstanceId, 'runtimeInstanceId'));
       if (!session || session.projectId !== projectId) throw new CocosError('UNAUTHORIZED', 'Runtime session is unavailable');
-      session.lastSeen = new Date().toISOString();
+      session.lastSeen = new Date(this.now()).toISOString();
       if (request.url === '/runtime/poll') {
         if (!session.commands.length) await new Promise<void>(accept => {
           const timer = setTimeout(() => { delete session.wake; accept(); }, 5000);
@@ -103,14 +115,15 @@ export class RuntimeGateway implements RuntimeExecutor {
         reply(200, { command: session.commands.shift() ?? null }); return;
       }
       if (request.url === '/runtime/reply') {
-        const id = Json.string(body.commandId, 'commandId'); const pending = this.pending.get(id);
+        const id = Json.string(body.commandId, 'commandId'); const candidate = this.pending.get(id);
+        const pending = candidate?.sessionId === session.id ? candidate : undefined;
         if (pending) {
           if (body.error) { const error = Json.object(body.error); pending.reject(new CocosError('RUNTIME_ERROR', String(error.message), body.error)); }
           else pending.resolve(body.result ?? null);
         }
         reply(200, { accepted: Boolean(pending) }); return;
       }
-      if (request.url === '/runtime/disconnect') { session.wake?.(); this.sessions.delete(session.id); reply(200, { disconnected: true }); return; }
+      if (request.url === '/runtime/disconnect') { this.removeSession(session); reply(200, { disconnected: true }); return; }
       reply(404, { error: { code: 'NOT_FOUND', message: 'Unknown runtime endpoint' } });
     } catch (error) { const failure = CocosError.from(error); reply(failure.code === 'UNAUTHORIZED' ? 403 : 400, { error: failure.toJSON() }); }
   }

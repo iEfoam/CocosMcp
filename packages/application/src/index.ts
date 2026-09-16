@@ -7,9 +7,10 @@ import { CapabilityCatalog } from '../../capability-catalog/src/index.js';
 import { BridgeClient } from './bridge-client.js';
 import { ProjectRegistry } from './registry.js';
 import { ProjectQueue } from './queue.js';
+import { WorkflowValues, type WorkflowOptions } from './workflow-values.js';
 
 export interface RuntimeExecutor { execute(projectId: string, runtimeInstanceId: string | undefined, capabilityId: string, params: import('../../contracts/src/index.js').JsonObject, signal?: AbortSignal): Promise<JsonValue> }
-export interface WorkflowStep { capabilityId: string; params: import('../../contracts/src/index.js').JsonObject; instanceId?: string; runtimeInstanceId?: string; operationId?: string; expectedRevision?: string }
+export interface WorkflowStep extends WorkflowOptions { capabilityId: string; params: import('../../contracts/src/index.js').JsonObject; instanceId?: string; runtimeInstanceId?: string; operationId?: string; expectedRevision?: string }
 
 export class CocosApplication {
   private readonly queue = new ProjectQueue();
@@ -23,10 +24,11 @@ export class CocosApplication {
       this.outcomes.delete(oldest); this.operationInputs.delete(oldest);
     }
   }
-  private async persistWorkflow(projectId: string, workflowId: string, state: JsonValue): Promise<void> {
+  private async persistWorkflow(projectId: string, workflowId: string, state: JsonValue, exclusive = false): Promise<void> {
     if (!/^[a-zA-Z0-9_-]{1,128}$/.test(workflowId)) throw new CocosError('INVALID_ARGUMENT', 'Invalid workflowId');
     const path = await this.projects.paths(projectId).work('cache', 'cocos-mcp/workflows');
-    await writeFile(join(path, `${workflowId}.json`), JSON.stringify(state, null, 2), { mode: 0o600 });
+    try { await writeFile(join(path, `${workflowId}.json`), JSON.stringify(state, null, 2), { mode: 0o600, flag: exclusive ? 'wx' : 'w' }); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new CocosError('OPERATION_CONFLICT', 'Workflow ID already exists; query its status and reconcile before creating a recovery workflow'); throw error; }
   }
   constructor(readonly projects: ProjectRegistry, readonly catalog = new CapabilityCatalog(), private readonly bridge = new BridgeClient(),
     private readonly allowExternal = false, private readonly runtime?: RuntimeExecutor) {}
@@ -38,7 +40,7 @@ export class CocosApplication {
     const operationId = request.operationId ?? randomUUID();
     if (request.operationId) {
       const key = `${request.projectId}:${request.operationId}`;
-      const fingerprint = Json.canonical({ capabilityId: capability.id, params: request.params });
+      const fingerprint = Json.canonical({ capabilityId: capability.id, params: request.params, instanceId: request.instanceId ?? null, runtimeInstanceId: request.runtimeInstanceId ?? null, expectedRevision: request.expectedRevision ?? null });
       const previousInput = this.operationInputs.get(key);
       if (previousInput && previousInput !== fingerprint) throw new CocosError('OPERATION_CONFLICT', 'operationId is already bound to different capability parameters');
       this.operationInputs.set(key, fingerprint);
@@ -90,14 +92,17 @@ export class CocosApplication {
     this.projects.paths(projectId);
     const rows = steps.map((step, index) => {
       try {
-        const capability = this.catalog.validate(step.capabilityId, step.params);
+        new WorkflowValues().validate(step, index);
+        if (step.runtimeRef && step.runtimeInstanceId) throw new CocosError('INVALID_ARGUMENT', 'Specify runtimeRef or runtimeInstanceId, not both');
+        const capability = this.catalog.validateDeferred(step.capabilityId, step.params, Object.keys(step.paramRefs ?? {}));
+        if (step.waitFor && capability.effect !== 'read') throw new CocosError('INVALID_ARGUMENT', 'Only read capabilities may be polled');
         if (capability.implementation !== 'implemented' || !(capability.supportedMajors?.length ?? 0)) {
           return { index, capabilityId: capability.id, valid: false, error: { code: 'UNSUPPORTED_CAPABILITY', message: 'Capability is registered but has no executable adapter' } };
         }
         if (capability.effect === 'external' && !this.allowExternal) {
           return { index, capabilityId: capability.id, valid: false, error: { code: 'UNAUTHORIZED', message: 'External project code requires --allow-project-code' } };
         }
-        return { index, capabilityId: capability.id, title: capability.title, valid: true,
+        return { index, capabilityId: capability.id, title: capability.title, valid: true, deferredValidation: Object.keys(step.paramRefs ?? {}).length > 0,
           implementation: capability.implementation, verification: capability.verification, versions: capability.versions, supportedMajors: capability.supportedMajors ?? capability.versions,
           effect: capability.effect, context: capability.context, prerequisites: capability.prerequisites ?? [],
           sideEffects: capability.sideEffects ?? [], risks: capability.risks ?? [], rollback: capability.rollback ?? null };
@@ -116,17 +121,33 @@ export class CocosApplication {
     const plan = Json.object(this.plan(projectId, steps));
     if (plan.valid !== true) throw new CocosError('INVALID_ARGUMENT', 'Workflow contains invalid steps', plan);
     const rows: JsonValue[] = [];
-    await this.persistWorkflow(projectId, workflowId, { workflowId, projectId, status: 'running', startedAt: new Date().toISOString(), total: steps.length, rows });
+    await this.persistWorkflow(projectId, workflowId, { workflowId, projectId, status: 'running', startedAt: new Date().toISOString(), total: steps.length, rows }, true);
     for (let index = 0; index < steps.length; index++) {
       const step = steps[index]!;
+      const operationId = step.operationId ?? randomUUID();
       try {
-        const result = await this.execute({ projectId, capabilityId: step.capabilityId, params: step.params,
-          ...(step.instanceId ? { instanceId: step.instanceId } : {}), ...(step.runtimeInstanceId ? { runtimeInstanceId: step.runtimeInstanceId } : {}),
-          ...(step.operationId ? { operationId: step.operationId } : {}), ...(step.expectedRevision ? { expectedRevision: step.expectedRevision } : {}) }, signal);
+        await this.persistWorkflow(projectId, workflowId, { workflowId, projectId, status: 'running', total: steps.length, currentIndex: index, operationId, rows });
+        const values = new WorkflowValues(), params = values.params(step.params, step, rows);
+        const runtimeInstanceId = step.runtimeRef ? Json.string(values.resolve(step.runtimeRef, rows), 'runtimeInstanceId') : step.runtimeInstanceId;
+        const started = Date.now(); let result: ExecutionResult;
+        while (true) {
+          if (signal?.aborted) throw new CocosError('CANCELLED', 'Workflow cancelled');
+          const remaining = step.waitFor ? (step.waitFor.timeoutMs ?? 10000) - (Date.now() - started) : null;
+          if (remaining !== null && remaining <= 0) throw new CocosError('TIMEOUT', 'Workflow readiness deadline exceeded');
+          const pollSignal = remaining === null ? signal : AbortSignal.any([AbortSignal.timeout(remaining), ...(signal ? [signal] : [])]);
+          result = await this.execute({ projectId, capabilityId: step.capabilityId, params,
+            ...(step.instanceId ? { instanceId: step.instanceId } : {}), ...(runtimeInstanceId ? { runtimeInstanceId } : {}),
+            // 只读轮询每次都需要新结果，不能复用 operationId 的缓存响应。
+            ...(!step.waitFor ? { operationId } : {}), ...(step.expectedRevision ? { expectedRevision: step.expectedRevision } : {}) }, pollSignal);
+          if (!step.waitFor || Json.canonical(values.path(result.result, step.waitFor.path)) === Json.canonical(step.waitFor.equals)) break;
+          if (Date.now() - started >= (step.waitFor.timeoutMs ?? 10000)) throw new CocosError('TIMEOUT', 'Workflow readiness condition was not met', { lastResult: result.result });
+          const delay = Math.min(step.waitFor.intervalMs ?? 200, (step.waitFor.timeoutMs ?? 10000) - (Date.now() - started));
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
         rows.push({ index, capabilityId: step.capabilityId, status: 'succeeded', result: Json.value(result) });
         await this.persistWorkflow(projectId, workflowId, { workflowId, projectId, status: 'running', total: steps.length, currentIndex: index, rows });
       } catch (error) {
-        rows.push({ index, capabilityId: step.capabilityId, status: 'failed', error: Json.value(CocosError.from(error).toJSON()) });
+        rows.push({ index, capabilityId: step.capabilityId, operationId, status: 'failed', error: Json.value(CocosError.from(error).toJSON()), recovery: 'Inspect operation and current resource state; never blindly replay writes' });
         await this.persistWorkflow(projectId, workflowId, { workflowId, projectId, status: 'failed', total: steps.length, currentIndex: index, rows, completedAt: new Date().toISOString() });
         if (!continueOnError) break;
       }

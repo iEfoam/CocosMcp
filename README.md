@@ -116,6 +116,8 @@ Pass a sequence like this to `cocos_workflow_plan`, replacing the scene URL with
 
 Planning checks parameters, versions, risks, and side effects. Use `cocos_workflow_execute` after the plan is valid and any required authorization is in place. Execution stops on failure by default and returns completed steps and compensation hints. There is no universal rollback: use each capability's `rollback` guidance. Query persisted progress with `cocos_workflow_status` after a service restart.
 
+Steps support `paramRefs` for earlier results, `runtimeRef` for explicit preview session binding, and read-only `waitFor` conditions. Workflow IDs cannot be replayed. Keyboard input now focuses the game canvas by default; frame profiling reports warmup, P99, render dimensions and optional P95 budgets. See the [reliability and performance guide](docs/mcp-reliability-and-performance.md) (Chinese).
+
 ## Verification and safety
 
 The `verification` field describes the evidence behind a capability:

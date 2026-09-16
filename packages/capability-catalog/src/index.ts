@@ -40,6 +40,18 @@ export class CapabilityCatalog {
     return capability;
   }
 
+  validateDeferred(id: string, params: JsonObject, fields: string[]): Capability {
+    if (!fields.length) return this.validate(id, params);
+    const capability = this.describe(id);
+    const schema = structuredClone(capability.inputSchema);
+    const properties = schema.properties as Record<string, unknown>;
+    for (const field of fields) if (!Object.hasOwn(properties, field) || Object.hasOwn(params, field)) throw new CocosError('INVALID_ARGUMENT', `Invalid or duplicate parameter reference: ${field}`);
+    schema.required = (schema.required as string[] ?? []).filter(field => !fields.includes(field));
+    const validate = this.ajv.compile(schema);
+    if (!validate(params)) throw new CocosError('INVALID_ARGUMENT', this.ajv.errorsText(validate.errors));
+    return capability;
+  }
+
   search(query = '', module?: string, offset = 0, limit = 100) {
     const terms = query.toLocaleLowerCase().split(/\s+/).filter(Boolean);
     const rows = [...this.capabilities.values()].filter(row => (!module || row.module === module)

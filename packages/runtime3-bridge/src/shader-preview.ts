@@ -26,7 +26,7 @@ export class ShaderPreview {
   }
   async execute(id: string, p: JsonObject): Promise<JsonObject> {
     if (id === 'runtime.shader.preview.close') { this.dispose(); return { closed: true }; }
-    if (id === 'runtime.shader.profile') return this.profile(Number(p.frames ?? 60));
+    if (id === 'runtime.shader.profile') return this.profile(p);
     if (id === 'runtime.shader.preview.open') return this.open(p);
     const preview = this.active();
     if (id === 'runtime.shader.preview.update') {
@@ -119,17 +119,33 @@ export class ShaderPreview {
       throw error;
     }
   }
-  private async profile(frames: number): Promise<JsonObject> {
+  private async profile(p: JsonObject): Promise<JsonObject> {
+    const frames = Number(p.frames ?? 60), warmupFrames = Number(p.warmupFrames ?? 10);
+    const maxFrameMs = p.maxFrameMs === undefined ? null : Number(p.maxFrameMs);
     if (!Number.isInteger(frames) || frames < 2 || frames > 300) throw new CocosError('INVALID_ARGUMENT', 'Frame count must be 2..300');
+    if (!Number.isInteger(warmupFrames) || warmupFrames < 1 || warmupFrames > 120 || (maxFrameMs !== null && (!Number.isFinite(maxFrameMs) || maxFrameMs <= 0 || maxFrameMs > 1000))) throw new CocosError('INVALID_ARGUMENT', 'Invalid warmup or frame budget');
     const started = performance.now(); const rows: number[] = [];
-    await this.frame(); let previous = performance.now();
+    for (let index = 0; index < warmupFrames; index++) {
+      if (performance.now() - started > 15000) throw new CocosError('CONTEXT_UNAVAILABLE', 'Frame warmup exceeded 15 seconds');
+      await this.frame();
+    }
+    let previous = performance.now();
     for (let index = 0; index < frames; index++) {
       if (performance.now() - started > 15000) throw new CocosError('CONTEXT_UNAVAILABLE', 'Frame sampling exceeded 15 seconds');
       await this.frame(); const now = performance.now(); rows.push(now - previous); previous = now;
     }
     const sorted = [...rows].sort((a, b) => a - b);
-    return { frames, meanMs: rows.reduce((sum, value) => sum + value, 0) / frames, p50Ms: sorted[Math.floor(frames * 0.5)]!, p95Ms: sorted[Math.floor(frames * 0.95)]!,
-      rows, scope: 'whole-frame-wall-time', gpuMs: null, unavailableMetrics: ['isolated-shader-gpu-time', 'gpu-memory'], warmupFrames: 1 };
+    const meanMs = rows.reduce((sum, value) => sum + value, 0) / frames;
+    const p95Ms = sorted[Math.ceil(frames * 0.95) - 1]!;
+    const canvas = A.object(this.environment.cc.game ?? {}).canvas as HTMLCanvasElement | undefined;
+    const rect = canvas?.getBoundingClientRect?.();
+    const exceededFrames = maxFrameMs === null ? null : rows.filter(value => value > maxFrameMs).length;
+    return { frames, meanMs, estimatedFps: meanMs > 0 ? 1000 / meanMs : null,
+      p50Ms: sorted[Math.ceil(frames * 0.5) - 1]!, p95Ms, p99Ms: sorted[Math.ceil(frames * 0.99) - 1]!, maxMs: sorted.at(-1)!,
+      viewport: { width: canvas?.width ?? null, height: canvas?.height ?? null, cssWidth: rect?.width ?? null, cssHeight: rect?.height ?? null, devicePixelRatio: globalThis.devicePixelRatio ?? null },
+      budget: maxFrameMs === null ? null : { maxFrameMs, metric: 'p95Ms', passed: p95Ms <= maxFrameMs, exceededFrames },
+      warnings: maxFrameMs !== null && p95Ms > maxFrameMs ? ['Frame-time budget exceeded; reduce effect complexity or render resolution and measure again'] : [],
+      rows, scope: 'whole-frame-wall-time', gpuMs: null, unavailableMetrics: ['isolated-shader-gpu-time', 'gpu-memory'], warmupFrames };
   }
   dispose(): void {
     const preview = this.preview; this.preview = undefined; this.baselines.clear();

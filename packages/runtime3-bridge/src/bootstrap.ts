@@ -15,6 +15,7 @@ declare const XMLHttpRequest: new () => XhrLike;
 export class DevelopmentConnection {
   private active = false;
   private runtimeInstanceId = '';
+  get instanceId(): string { return this.runtimeInstanceId; }
   private readonly controller: RuntimeController;
   constructor(private readonly options: RuntimeConnectionOptions) {
     if (!options.development) throw new CocosError('UNAUTHORIZED', 'Runtime bridge must only be enabled in a development build');
