@@ -76,6 +76,7 @@ export class EditorBridge {
     let connected = 0;
     const errors: string[] = [];
     for (const name of rows) {
+      if (!this.runtimeProcessExists(name)) continue;
       try {
         const config = JSON.parse(readFileSync(this.safePath(join(directory, name)), 'utf8'));
         const projectId = createHash('sha256').update(realpathSync(this.projectPath)).digest('hex').slice(0, 24);
@@ -99,22 +100,33 @@ export class EditorBridge {
           request.end(JSON.stringify({ projectId }));
         });
         connected += count;
-      } catch { errors.push('运行时网关查询失败，请检查 MCP 服务版本及运行状态'); }
+      } catch {
+        // 网关可能在查询期间退出；残留文件不应盖过其他健康网关的状态。
+        if (this.runtimeProcessExists(name)) errors.push('运行时网关查询失败，请检查 MCP 服务版本及运行状态');
+      }
     }
+    state.runtimeConfigured = this.hasRuntimeConfiguration();
     state.runtimeStatus = { connected, error: errors.length ? errors[0]! : null };
     return state;
+  }
+
+  private runtimeProcessExists(name: string): boolean {
+    const match = /^runtime-(\d+)\.json$/.exec(name);
+    const pid = Number(match?.[1]);
+    if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+    try { process.kill(pid, 0); return true; }
+    catch (error) {
+      // 只有 ESRCH 能确认进程退出；EPERM 等错误不能当作失效配置隐藏。
+      return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+    }
   }
 
   private hasRuntimeConfiguration(): boolean {
     const directory = this.safePath('.codex-work/cache/cocos-mcp');
     if (!existsSync(directory)) return false;
     return readdirSync(directory).some(name => {
-      const match = /^runtime-(\d+)\.json$/.exec(name);
-      if (!match) return false;
+      if (!this.runtimeProcessExists(name)) return false;
       try {
-        const pid = Number(match[1]);
-        if (!Number.isSafeInteger(pid) || pid <= 0) return false;
-        process.kill(pid, 0);
         const config = JSON.parse(readFileSync(this.safePath(join(directory, name)), 'utf8')) as { projectId?: string; url?: string };
         const projectId = createHash('sha256').update(realpathSync(this.projectPath)).digest('hex').slice(0, 24);
         // 文件存在只说明网关配置就绪，不代表有游戏运行实例连接。

@@ -14,7 +14,7 @@ const TYPES: Record<string, { folder: string; aliases: string[]; extensions: str
   texture: { folder: 'Textures', aliases: ['textures', 'texture', 'images', 'sprites', '图片', '贴图'], extensions: ['.png', '.jpg', '.jpeg', '.webp', '.tga', '.bmp', '.hdr'] },
   model: { folder: 'Models', aliases: ['models', 'model', 'meshes', 'mesh', '模型'], extensions: ['.gltf', '.glb', '.fbx', '.obj'] },
   audio: { folder: 'Audio', aliases: ['audio', 'sounds', 'sound', 'music', '音频'], extensions: ['.mp3', '.wav', '.ogg', '.m4a'] },
-  animation: { folder: 'Animations', aliases: ['animations', 'animation', 'clips', '动画'], extensions: ['.anim'] },
+  animation: { folder: 'Animations', aliases: ['animations', 'animation', 'clips', '动画'], extensions: ['.anim', '.animgraph', '.animask'] },
   font: { folder: 'Fonts', aliases: ['fonts', 'font', '字体'], extensions: ['.ttf', '.otf', '.fnt'] },
   script: { folder: 'Scripts', aliases: ['scripts', 'script', '脚本'], extensions: ['.ts', '.js'] },
   data: { folder: 'Data', aliases: ['data', 'configs', 'config', '数据'], extensions: ['.json', '.txt', '.csv'] },

@@ -84,7 +84,10 @@ export class CatalogGenerator {
     const add = (node: ts.Node, kind: SourceCapability['kind'], name: string, owner: string, isPublic: boolean): void => {
       const text = node.getFullText(file);
       const tags = ts.getJSDocTags(node).map(tag => tag.tagName.text);
-      const internal = tags.includes('internal') || tags.includes('mangle') || name.startsWith('_');
+      // 引擎内部类的成员即使声明 public，也不能被能力挖掘器当成稳定公共 API。
+      const inheritedTags = node.parent && (ts.isClassDeclaration(node.parent) || ts.isInterfaceDeclaration(node.parent))
+        ? ts.getJSDocTags(node.parent).map(tag => tag.tagName.text) : [];
+      const internal = [...tags, ...inheritedTags].some(tag => ['internal', 'engineInternal', 'mangle'].includes(tag)) || name.startsWith('_');
       const scopes: string[] = []; let scope: ts.Node | undefined = node;
       while (scope && !ts.isSourceFile(scope)) { scopes.push(scope.getText(file)); scope = scope.parent; }
       const conditions = [...new Set([...scopes.join('\n').matchAll(/\b(EDITOR|PREVIEW|NATIVE|HTML5|WEBGL|WEBGPU|JSB|MINIGAME|XR)\b/g)].map(match => match[1]!))];

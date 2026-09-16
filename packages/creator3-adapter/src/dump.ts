@@ -52,6 +52,9 @@ export class PropertyDump {
   }
 
   static matches(actual: JsonValue, expected: JsonValue): boolean {
+    // 原生数组元素会补齐默认字段；逐项验证请求值，同时保持长度和顺序严格一致。
+    if (Array.isArray(expected)) return Array.isArray(actual) && actual.length === expected.length
+      && expected.every((value, index) => PropertyDump.matches(actual[index]!, value));
     if (expected && typeof expected === 'object' && !Array.isArray(expected) && actual && typeof actual === 'object' && !Array.isArray(actual)) {
       return Object.entries(expected).every(([key, value]) => key in actual && PropertyDump.matches(actual[key]!, value));
     }

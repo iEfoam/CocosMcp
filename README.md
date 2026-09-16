@@ -167,6 +167,7 @@ The detailed guides below are currently written in Chinese. Both README editions
 | --- | --- |
 | [User guide](docs/user-guide.md) | Installation, startup, client configuration, and examples |
 | [Feature reference](docs/feature-reference.md) | Capabilities by domain and version limits |
+| [2D development](docs/2d-development.md) · [Delivery & verification](docs/2d-implementation.md) | SpriteFrame, animation, UI, physics, Spine, Tilemap, and 13 editable gameplay templates for Creator 3.8.8 |
 | [Implementation & acceptance](docs/implementation-guide.md) | Architecture, version differences, safety, and real-environment checks |
 | [Scene production & preview](docs/scene-production.md) | Creator 3.8.8 geometry, arrays, rendering, preview windows, and screenshots |
 | [Shader development](docs/shader-development.md) | Native Effect compilation, materials, and validation boundaries |

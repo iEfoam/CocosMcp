@@ -18,6 +18,9 @@ export class UiDocumentModel {
   static readonly positive = { type: 'number', minimum: 0, maximum: 100000 };
   static readonly size = S.object({ width: this.positive, height: this.positive }, ['width', 'height']);
   static readonly componentProperties: Record<string, Record<string, JsonSchema>> = {
+    'cc.SafeArea': {},
+    'cc.BlockInputEvents': {},
+    'cc.UIOpacity': { opacity: { type: 'number', minimum: 0, maximum: 255 } },
     'cc.UITransform': { contentSize: this.size, anchorPoint: S.object({ x: { type: 'number', minimum: 0, maximum: 1 }, y: { type: 'number', minimum: 0, maximum: 1 } }, ['x', 'y']) },
     'cc.Canvas': { alignCanvasWithScreen: S.boolean() },
     'cc.Sprite': { spriteFrame: this.asset, sizeMode: { type: 'integer', enum: [0, 1, 2] }, type: { type: 'integer', enum: [0, 1, 2, 3] } },

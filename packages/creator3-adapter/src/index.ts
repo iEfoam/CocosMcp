@@ -1,4 +1,7 @@
 import { createHash } from 'crypto';
+import { EngineFeatureService } from './engine-features.js';
+import { TwoDProduction } from './two-d-production.js';
+import { FeatureSupport } from '../../runtime3-bridge/src/feature-support.js';
 import { CocosError, Json, type EditorAdapter, type JsonObject, type JsonValue } from '../../contracts/src/index.js';
 import { Operations } from '../../capability-catalog/src/operations.js';
 import { PropertyDump } from './dump.js';
@@ -91,6 +94,8 @@ export class Creator3Adapter implements EditorAdapter {
   }
 
   async execute(id: string, p: JsonObject): Promise<JsonValue> {
+    if (/^(animation2d|gameplay2d|level2d|navigation2d|ui\.template)\./.test(id)) return new TwoDProduction(this.port, (id, params) => this.execute(id, params)).execute(id, p);
+    if (FeatureSupport.owns(id)) return new EngineFeatureService(this.port, (id, params) => this.execute(id, params)).execute(id, p);
     const organization = new AssetOrganization(this.port);
     if (id === 'asset.location') return organization.location(Json.string(p.url, 'url'));
     if (id === 'asset.organize.plan') return organization.plan(p);
@@ -120,6 +125,7 @@ export class Creator3Adapter implements EditorAdapter {
       return Json.value(await this.port.scene(id, p));
     }
     if (id.startsWith('texture.')) return new TextureService(this.port).execute(id, p);
+    if (id.startsWith('spriteframe.')) return new TextureService(this.port, 'spriteframe').execute(id, p);
     if (id.startsWith('ui.')) return new UiService(this.port, (id, params) => this.execute(id, params)).execute(id, p);
     if (id === 'console.query') {
       if (!this.port.consoleAvailable || !this.port.consoleQuery || this.port.version !== '3.8.8') throw new CocosError('UNSUPPORTED_CAPABILITY', 'Creator console reader unavailable');

@@ -1,15 +1,17 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile, writeFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { Ajv } from 'ajv';
 import { CocosError, Json, type JsonObject, type JsonValue } from '../../contracts/src/index.js';
 import { ProjectPaths } from '../../application/src/paths.js';
 import { TextureCapabilities } from '../../capability-catalog/src/texture.js';
+import { TwoDCapabilities } from '../../capability-catalog/src/two-d.js';
 import type { EditorPort } from './port.js';
 
 /** 原生导入设置只通过 AssetDB 保存；备份和源码指纹限定在当前工程。 */
 export class TextureService {
-  constructor(private readonly port: EditorPort) {}
+  constructor(private readonly port: EditorPort, private readonly family: 'texture' | 'spriteframe' = 'texture') {}
   private hash(value: JsonValue): string { return createHash('sha256').update(Json.canonical(value)).digest('hex'); }
   private async read(url: string): Promise<JsonObject> {
     const paths = await ProjectPaths.open(this.port.projectPath), path = await paths.asset(url);
@@ -21,15 +23,20 @@ export class TextureService {
     return { url, asset, meta, sourceHash, expectedHash: this.hash({ meta, sourceHash }) };
   }
   private target(meta: JsonObject, uuid?: JsonValue): JsonObject {
-    const rows = [meta, ...Object.values(Json.object(meta.subMetas ?? {})).map(value => Json.object(value))].filter(row => row.importer === 'texture');
+    const rows = [meta, ...Object.values(Json.object(meta.subMetas ?? {})).map(value => Json.object(value))].filter(row => row.importer === (this.family === 'texture' ? 'texture' : 'sprite-frame'));
     const candidates = uuid ? rows.filter(row => row.uuid === uuid) : rows;
     if (candidates.length !== 1) throw new CocosError('INVALID_ARGUMENT', 'Specify textureUuid identifying exactly one texture subresource');
     return candidates[0]!;
   }
   async plan(p: JsonObject): Promise<JsonObject> {
     const before = await this.read(Json.string(p.url, 'url')), meta = Json.object(Json.value(before.meta));
-    const target = this.target(meta, p.textureUuid), settings = Json.object(p.settings), original = Json.object(target.userData ?? {});
+    const target = this.target(meta, p.textureUuid ?? p.spriteFrameUuid), settings = Json.object(p.settings), original = Json.object(target.userData ?? {});
     target.userData = { ...original, ...settings };
+    if (this.family === 'spriteframe') {
+      const data = Json.object(target.userData), width = Number(data.width), height = Number(data.height);
+      if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) throw new CocosError('UNSUPPORTED_CAPABILITY', 'SpriteFrame importer dimensions are unavailable');
+      if (Number(data.borderLeft ?? 0) + Number(data.borderRight ?? 0) > width || Number(data.borderTop ?? 0) + Number(data.borderBottom ?? 0) > height) throw new CocosError('INVALID_ARGUMENT', 'Nine-slice borders exceed frame dimensions');
+    }
     const rows = Object.entries(settings).map(([property, value]) => ({ property, before: original[property] ?? null, after: value }));
     return { ...before, textureUuid: target.uuid!, plannedMeta: meta, rows, planHash: this.hash({ before, meta, textureUuid: target.uuid! }), requiresReimport: rows.some(row => Json.canonical(row.before) !== Json.canonical(row.after)) };
   }
@@ -38,19 +45,30 @@ export class TextureService {
     if (saved === false) throw new CocosError('EDITOR_ERROR', 'AssetDB rejected texture metadata');
     const imported = await this.port.request('asset-db', 'reimport-asset', url);
     if (imported === false) throw new CocosError('EDITOR_ERROR', 'AssetDB texture reimport failed');
+    // reimport-asset 返回时子资源仍可能 imported=false；等待稳定指纹后才交付恢复令牌。
+    // 不修改或忽略 imported/files 字段，否则会把尚未完成的导入错误当作成功。
+    let previous: JsonValue | undefined;
+    for (let attempt = 0; attempt < 30; attempt++) {
+      const state = await this.read(url), pending = [Json.object(state.meta)]; let ready = true;
+      while (pending.length) { const entry = pending.pop()!; if (entry.imported === false) ready = false; for (const child of Object.values(Json.object(entry.subMetas ?? {}))) pending.push(Json.object(child)); }
+      if (ready && state.expectedHash === previous) return;
+      previous = ready ? state.expectedHash : undefined;
+      await delay(100);
+    }
+    throw new CocosError('CONTEXT_UNAVAILABLE', 'Texture subresource import did not settle within 3 seconds');
   }
   async execute(id: string, p: JsonObject): Promise<JsonValue> {
     if (this.port.version !== '3.8.8') throw new CocosError('UNSUPPORTED_VERSION', 'Texture import tools require Creator 3.8.8');
-    const capability = new TextureCapabilities().list().find(row => row.id === id);
+    const capability = [...new TextureCapabilities().list(), ...new TwoDCapabilities().list()].find(row => row.id === id);
     if (!capability) throw new CocosError('UNSUPPORTED_CAPABILITY', `Unknown texture tool: ${id}`);
     const valid = new Ajv({ strict: true }).compile(capability.inputSchema);
     if (!valid(p)) throw new CocosError('INVALID_ARGUMENT', 'Invalid texture parameters', { errors: JSON.stringify(valid.errors) });
-    if (id === 'texture.inspect') {
+    if (id === `${this.family}.inspect`) {
       const result = await this.read(Json.string(p.url, 'url'));
       return { ...result, users: Json.value(await this.port.request('asset-db', 'query-asset-users', p.url)), limitations: ['未验证目标平台压缩结果或 GPU 采样画面'] };
     }
-    if (id === 'texture.plan_import') return this.plan(p);
-    if (id === 'texture.apply_import') {
+    if (id === 'texture.plan_import' || id === 'spriteframe.plan') return this.plan(p);
+    if (id === 'texture.apply_import' || id === 'spriteframe.apply') {
       const plan = await this.plan(p);
       if (p.planHash !== plan.planHash) throw new CocosError('STALE_REVISION', 'Texture import plan changed; plan again');
       if (!plan.requiresReimport) return { changed: false, expectedHash: plan.expectedHash! };

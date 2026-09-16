@@ -1,4 +1,6 @@
 import { RenderRuntimeCapabilities } from './render-runtime.js';
+import { TwoDCapabilities } from './two-d.js';
+import { EngineFeatureCapabilities } from './engine-features.js';
 import type { Capability, CreatorMajor, Effect, JsonSchema } from '../../contracts/src/index.js';
 import { Schema as S } from './schema.js';
 import { ShaderCapabilities } from './shader.js';
@@ -28,6 +30,8 @@ export class Operations {
 
   list(): Capability[] {
     if (this.rows.length) return this.rows;
+    this.rows.push(...new EngineFeatureCapabilities().list());
+    this.rows.push(...new TwoDCapabilities().list());
     const str = S.string(); const bool = S.boolean(); const obj = S.record(); const strings = S.array(str);
     const node = { nodeId: str }; const component = { componentId: str }; const asset = { url: str };
     this.add('editor.status', 'F01', '读取编辑器实例、版本和场景状态', 'read');
@@ -93,7 +97,7 @@ export class Operations {
       risks: ['扩展脚本可能修改工程外部状态'], prerequisites: ['--allow-project-code'], rollback: '由扩展提供补偿操作' });
     this.add('preview.start', 'F43', '启动项目预览；3.8.8 使用独立 MCP 窗口并要求场景已保存', 'runtime', { width: { type: 'integer', minimum: 256, maximum: 2048 }, height: { type: 'integer', minimum: 256, maximum: 2048 }, visible: bool });
     this.add('preview.resize', 'F43', '调整 MCP 预览内容尺寸并等待实际绘制；返回截图，不自动判定布局正确', 'runtime', { width: { type: 'integer', minimum: 256, maximum: 2048 }, height: { type: 'integer', minimum: 256, maximum: 2048 } }, ['width', 'height'], [3]);
-    this.add('preview.input', 'F36', '向 MCP 自有预览窗口发送点击或滚轮并截取下一帧；会聚焦窗口，须另行验证业务结果', 'runtime', { action: S.enum('click', 'wheel'), x: { type: 'integer', minimum: 0, maximum: 2047 }, y: { type: 'integer', minimum: 0, maximum: 2047 }, deltaX: { type: 'integer', minimum: -2000, maximum: 2000 }, deltaY: { type: 'integer', minimum: -2000, maximum: 2000 } }, ['action', 'x', 'y'], [3], { rollback: '点击可能已产生业务副作用，失败先查询游戏状态；不自动重复点击' });
+    this.add('preview.input', 'F36', '向 MCP 自有预览窗口发送点击、拖拽、长按、键盘或单指触摸并截取下一帧；会聚焦窗口，须另行验证业务结果', 'runtime', { action: S.enum('click', 'wheel', 'drag', 'long_press', 'key', 'touch_drag', 'touch_cancel'), endX: { type: 'integer', minimum: 0, maximum: 2047 }, endY: { type: 'integer', minimum: 0, maximum: 2047 }, durationMs: { type: 'integer', minimum: 0, maximum: 2000 }, steps: { type: 'integer', minimum: 1, maximum: 60 }, key: { type: 'string', pattern: '^(?:[A-Za-z0-9]|Space|Enter|Escape|Tab|Backspace|Left|Right|Up|Down)$' }, x: { type: 'integer', minimum: 0, maximum: 2047 }, y: { type: 'integer', minimum: 0, maximum: 2047 }, deltaX: { type: 'integer', minimum: -2000, maximum: 2000 }, deltaY: { type: 'integer', minimum: -2000, maximum: 2000 } }, ['action', 'x', 'y'], [3], { rollback: '点击可能已产生业务副作用，失败先查询游戏状态；不自动重复点击' });
     this.add('preview.stop', 'F43', '停止项目预览', 'runtime', {}, [], [2, 3], { supportedMajors: [3] });
     this.add('preview.logs', 'F44', '分页查询 Web 预览异常与网络失败；按会话持久化，返回截断和捕捉缺口', 'read', { sessionId: { type: 'string', pattern: '^[a-f0-9]{32}$' }, cursor: S.integer(), limit: { type: 'integer', minimum: 1, maximum: 500 }, level: S.enum('warning', 'error'), kind: str, contains: str }, [], [3]);
     this.add('preview.status', 'F43', '查询 MCP 预览窗口和最近的渲染诊断', 'read', {}, [], [3]);

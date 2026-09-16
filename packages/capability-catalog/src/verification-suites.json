@@ -99,7 +99,10 @@
       "texture.inspect",
       "texture.plan_import",
       "texture.apply_import",
-      "texture.restore_import"
+      "texture.restore_import",
+      "spriteframe.plan",
+      "spriteframe.apply",
+      "spriteframe.restore"
     ]
   },
   {
@@ -219,6 +222,21 @@
     "level": "adapter-tested",
     "entryIds": [
       "cocos_build_artifacts"
+    ]
+  },
+  {
+    "source": "tests/two-d.test.ts",
+    "level": "adapter-tested",
+    "entryIds": [
+      "runtime.ui.assert",
+      "runtime.physics2d.test_point",
+      "runtime.physics2d.test_aabb",
+      "runtime.physics2d.trace_contacts",
+      "runtime.tilemap.plan",
+      "runtime.tilemap.apply",
+      "navigation2d.find_path",
+      "gameplay2d.plan",
+      "preview.validate_viewports"
     ]
   },
   {

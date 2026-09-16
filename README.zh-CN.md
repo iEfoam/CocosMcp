@@ -167,6 +167,7 @@ pnpm start catalog --project /path/to/project --engine /path/to/cocos-engine
 | --- | --- |
 | [使用文档](docs/user-guide.md) | 安装、启动、客户端配置与调用示例 |
 | [功能介绍](docs/feature-reference.md) | 按领域划分的能力与版本限制 |
+| [2D 开发指南](docs/2d-development.md) · [交付与验证记录](docs/2d-implementation.md) | SpriteFrame、动画、UI、物理、Spine、Tilemap 与 13 种可编辑玩法模板 |
 | [实施与验收指南](docs/implementation-guide.md) | 架构、版本差异、安全与真实环境验收 |
 | [场景生产与预览](docs/scene-production.md) | Creator 3.8.8 几何体、阵列、渲染、预览窗口与截图 |
 | [Shader 开发指南](docs/shader-development.md) | 原生 Effect 编译、材质与验证边界 |

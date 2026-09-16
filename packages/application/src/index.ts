@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { FeatureSupport } from '../../runtime3-bridge/src/feature-support.js';
 import { appendFile, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { CocosError, Json, type ExecutionRequest, type ExecutionResult, type JsonValue } from '../../contracts/src/index.js';
@@ -48,7 +49,7 @@ export class CocosApplication {
     }
     const execution = this.queue.run(request.projectId, async () => {
       if (capability.context === 'runtime') {
-        if (!this.runtime) throw new CocosError('CONTEXT_UNAVAILABLE', 'Runtime gateway is not enabled');
+        if (!this.runtime) throw new CocosError(FeatureSupport.owns(capability.id) ? 'UNSUPPORTED_CAPABILITY' : 'CONTEXT_UNAVAILABLE', 'Runtime gateway is not enabled');
         const result = await this.runtime.execute(request.projectId, request.runtimeInstanceId, capability.id, request.params, signal);
         const execution: ExecutionResult = { operationId, capabilityId: capability.id, projectId: request.projectId, result, verification: capability.verification, completedAt: new Date().toISOString() };
         if (request.operationId) this.remember(`${request.projectId}:${request.operationId}`, execution);
@@ -67,7 +68,12 @@ export class CocosApplication {
         instanceId: descriptor.instanceId, revision: response.revision, completedAt: result.completedAt }) + '\n', { mode: 0o600 });
       if (request.operationId) this.remember(`${request.projectId}:${request.operationId}`, result);
       return result;
-    }, signal);
+    }, signal).catch((error: unknown) => {
+      if (!FeatureSupport.owns(capability.id) || !(error instanceof CocosError) || !['UNSUPPORTED_CAPABILITY', 'UNSUPPORTED_VERSION'].includes(error.code)) throw error;
+      const execution: ExecutionResult = { operationId, capabilityId: capability.id, projectId: request.projectId, result: FeatureSupport.unsupported(capability.id, error.message), verification: capability.verification, completedAt: new Date().toISOString() };
+      if (request.operationId) this.remember(`${request.projectId}:${request.operationId}`, execution);
+      return execution;
+    });
     if (!request.operationId) return execution;
     const key = `${request.projectId}:${request.operationId}`;
     this.inFlight.set(key, execution);

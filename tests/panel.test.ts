@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, access, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, access, writeFile, unlink } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { runInNewContext } from 'node:vm';
@@ -252,7 +252,7 @@ test('panel snapshot omits credentials, ignores stale files, and never requires 
   assert.equal(bridge.panelState().instance, null);
 });
 
-test('panel reads authenticated runtime sessions without exposing tokens and reports gateway failure', async () => {
+test('panel reads authenticated runtime sessions without exposing tokens and reports gateway failure', async (t) => {
   const { ProjectRegistry } = await import('../packages/application/src/registry.js');
   const { RuntimeGateway } = await import('../packages/application/src/runtime-gateway.js');
   const project = await mkdtemp(resolve('.codex-work/tmp/panel-runtime-'));
@@ -264,6 +264,15 @@ test('panel reads authenticated runtime sessions without exposing tokens and rep
   const path = join(project, `.codex-work/cache/cocos-mcp/runtime-${process.pid}.json`);
   const configText = await readFile(path, 'utf8');
   const config = JSON.parse(configText);
+  const stalePath = join(project, '.codex-work/cache/cocos-mcp/runtime-2147483647.json');
+  const originalKill = process.kill.bind(process);
+  t.mock.method(process, 'kill', (pid: number, signal?: string | number) => {
+    if (pid === 2147483647) throw Object.assign(new Error('Exited gateway'), { code: 'ESRCH' });
+    return originalKill(pid, signal);
+  });
+  // 即使旧配置损坏，也应在读取或联网前跳过；不能污染健康网关的状态。
+  await writeFile(stalePath, '{stale');
+
   try {
     const forbidden = await fetch(`${config.url}/runtime/sessions`, { method: 'POST', body: JSON.stringify({ projectId }) });
     assert.equal(forbidden.status, 403);
@@ -278,6 +287,12 @@ test('panel reads authenticated runtime sessions without exposing tokens and rep
   } finally { await gateway.close(); }
   await writeFile(path, configText);
   assert.match((await bridge.panelStateWithRuntime()).runtimeStatus?.error ?? '', /查询失败/);
+  await unlink(path);
+  const staleOnly = await bridge.panelStateWithRuntime();
+  assert.equal(staleOnly.runtimeConfigured, false);
+  assert.deepEqual(staleOnly.runtimeStatus, { connected: 0, error: null });
+  assert.equal(await readFile(stalePath, 'utf8'), '{stale');
+
 });
 
 test('managed MCP service starts once, serves HTTP, detects external gateway and cleans up on stop', async () => {

@@ -1,4 +1,13 @@
 import { GraphicsInspector } from './graphics.js';
+import { TwoDInspector } from './two-d-inspector.js';
+import { TwoDControl } from './two-d-control.js';
+import { FeatureSupport } from './feature-support.js';
+import { FrameSession } from './frame-session.js';
+import { PathSampler } from './path.js';
+import { SkinningCompatibility } from './skinning-compatibility.js';
+import { AnimationGraphObserver } from './animation-graph.js';
+import { DebugOverlayController } from './debug-overlay.js';
+import { EngineFeatureInspector } from './engine-inspector.js';
 import { ParticleController } from './particle.js';
 import { CocosError, Json, type JsonObject, type JsonValue } from '../../contracts/src/index.js';
 import { RuntimeAccess as A, RuntimePolicy, type RuntimeObject } from './access.js';
@@ -26,12 +35,16 @@ export class RuntimeController {
   private readonly materials: MaterialController;
   private readonly shaderPreview: ShaderPreview;
   private readonly assets: RuntimeAssets;
+  private readonly frames: FrameSession;
+  private readonly debug: DebugOverlayController;
 
   constructor(private readonly environment: SceneEnvironment, private readonly eventCapacity = 1000, private readonly policy = new RuntimePolicy()) {
     this.inspector = new SceneInspector(environment);
     this.materials = new MaterialController(environment);
     this.shaderPreview = new ShaderPreview(environment, this.materials);
     this.assets = new RuntimeAssets(environment.cc);
+    this.frames = new FrameSession(environment.cc);
+    this.debug = new DebugOverlayController(this.inspector);
   }
 
   private synchronize(): void {
@@ -99,7 +112,35 @@ export class RuntimeController {
   }
 
   async execute(id: string, p: JsonObject): Promise<JsonValue> {
+    if (FeatureSupport.owns(id) && A.engineVersion(this.environment.cc) !== '3.8.8') return FeatureSupport.unsupported(id, '当前适配仅支持 Creator 3.8.8', { actualVersion: A.engineVersion(this.environment.cc) });
     this.synchronize();
+    if (/^runtime\.(ui|render2d|label|atlas|spine|tilemap)\./.test(id) || id === 'runtime.physics2d.trace_contacts') return FeatureSupport.run(id, A.engineVersion(this.environment.cc), async () => {
+      const control = new TwoDControl(this.inspector, this.frames);
+      if (id.startsWith('runtime.spine.')) return control.spine(id, p);
+      if (id.startsWith('runtime.tilemap.')) return control.tilemap(id, p);
+      if (id === 'runtime.physics2d.trace_contacts') return control.contacts(p);
+      return new TwoDInspector(this.inspector).execute(id, p);
+    });
+    if (FeatureSupport.owns(id)) return FeatureSupport.run(id, A.engineVersion(this.environment.cc), async () => {
+      if (id.startsWith('runtime.debug.')) return this.debug.execute(id, p);
+      if (id === 'runtime.skinning.plan') return new SkinningCompatibility(this.inspector).plan(p);
+      if (id.startsWith('runtime.animation_graph.')) return new AnimationGraphObserver(this.inspector, this.frames).execute(id, p);
+      if (id === 'runtime.path.preview') {
+        const sampled = new PathSampler(this.environment.cc).sample(p), parent = this.inspector.node(Json.string(p.parentId, 'parentId'));
+        const vector = FeatureSupport.require(this.environment.cc.Vec3, 'Vec3'); FeatureSupport.methods(vector, ['transformMat4']);
+        const points = (sampled.rows as JsonObject[]).map(row => { const value = Json.object(row.position), v = A.construct(vector, [value.x, value.y, value.z]); return A.safeData(A.call(vector, 'transformMat4', v, v, parent.worldMatrix)); });
+        return this.debug.execute('runtime.debug.draw', { ...p, lines: points.slice(1).map((point, index) => ({ start: points[index]!, end: point })) });
+      }
+      const inspector = new EngineFeatureInspector(this.inspector, this.frames);
+      if (id === 'runtime.probe.preview') {
+        const points=inspector.probePoints(p);
+        const drawing=Json.object(this.debug.execute('runtime.debug.shape',{...p,shape:{kind:'points',points:points.rows!,radius:p.radius??0.05}}));
+        return {...drawing,...points};
+      }
+      if (id === 'runtime.postprocess.inspect') return inspector.postprocess(p);
+      if (id === 'runtime.character.test_route') return inspector.route(p);
+      return inspector.inspect(id.split('.')[1]!, p);
+    });
     if (id.startsWith('runtime.graphics.') || /^runtime\.particle[23]d\./.test(id)) {
       if (this.environment.major !== 3 || A.engineVersion(this.environment.cc) !== '3.8.8') throw new CocosError('UNSUPPORTED_VERSION', 'Graphics and particle tools require Creator 3.8.8');
       return id.startsWith('runtime.graphics.') ? new GraphicsInspector(this.environment.cc).execute(id, p) : new ParticleController(this.inspector).execute(id, p);
@@ -224,7 +265,7 @@ export class RuntimeController {
   private clearSession(): void {
     // 每项独立收敛；一项原生释放异常不能阻止取消订阅和使旧句柄失效。
     this.generation++;
-    const cleanup: Array<[string, () => void]> = [['assets', () => this.assets.dispose()], ['shader-preview', () => this.shaderPreview.dispose()], ['materials', () => this.materials.dispose()], ['subscriptions', () => this.clearSubscriptions()]];
+    const cleanup: Array<[string, () => void]> = [['frames', () => this.frames.dispose()], ['debug', () => this.debug.dispose()], ['assets', () => this.assets.dispose()], ['shader-preview', () => this.shaderPreview.dispose()], ['materials', () => this.materials.dispose()], ['subscriptions', () => this.clearSubscriptions()]];
     const failures: JsonObject[] = [];
     for (const [scope, action] of cleanup) {
       try { action(); } catch (error) { failures.push({ scope, message: CocosError.from(error).message }); }

@@ -36,7 +36,10 @@ class CreatorHost implements EditorPort {
   }
   private managedPreview: ManagedPreview | undefined;
   preview(method: string, params: import('../../../packages/contracts/src/index.js').JsonObject): Promise<JsonValue> {
-    this.managedPreview ??= new ManagedPreview({ create: options => {
+    this.managedPreview ??= new ManagedPreview({ activate: () => {
+      // macOS 前台焦点切换是异步的；仅在用户请求自有预览输入时激活应用。
+      (require('electron') as { app: { focus(options: { steal: boolean }): void } }).app.focus({ steal: true });
+    }, create: options => {
       const electron = require('electron') as { BrowserWindow: new (options: unknown) => PreviewWindow };
       return new electron.BrowserWindow(options);
     } }, Editor.Project.path);

@@ -39,3 +39,25 @@ test('diagnostic listeners are installed after a blank target exists and before 
   assert.ok(order.indexOf('Page.addScriptToEvaluateOnNewDocument') < order.findIndex(url => url.startsWith('http://127.0.0.1')));
   h.preview.dispose();
 });
+
+test('drag and held-key sequences release input and reject invalid gestures before delivery', async () => {
+  const h = new InputHarness(); await h.start();
+  await h.preview.execute('input', { action: 'drag', x: 10, y: 20, endX: 60, endY: 80, durationMs: 0, steps: 2 });
+  assert.deepEqual(h.events.map(row => row.type), ['mouseMove', 'mouseDown', 'mouseMove', 'mouseMove', 'mouseUp']);
+  assert.equal(h.events.at(-1)!.x, 60);
+  h.events.length = 0;
+  await h.preview.execute('input', { action: 'key', x: 0, y: 0, key: 'Space', durationMs: 0 });
+  assert.deepEqual(h.events.map(row => row.type), ['mouseMove', 'keyDown', 'keyUp']);
+  h.events.length = 0;
+  await assert.rejects(h.preview.execute('input', { action: 'drag', x: 0, y: 0, endX: 900 }), /bounded/);
+  assert.equal(h.events.length, 0);
+});
+
+test('touch cancellation is delivered through the managed debugger without overwriting game listeners', async () => {
+  const h = new InputHarness(), commands: Array<{ method: string; params?: Record<string, unknown> }> = [];
+  h.window.webContents.debugger = { isAttached: () => true, attach: () => {}, detach: () => {}, on: () => {}, removeListener: () => {}, sendCommand: async (method, params) => { commands.push({ method, ...(params ? { params } : {}) }); return {}; } };
+  await h.start(); commands.length = 0;
+  await h.preview.execute('input', { action: 'touch_cancel', x: 10, y: 20, endX: 30, endY: 40, durationMs: 0, steps: 2 });
+  assert.deepEqual(commands.filter(row => row.method === 'Input.dispatchTouchEvent').map(row => row.params!.type), ['touchStart', 'touchMove', 'touchMove', 'touchCancel']);
+  h.preview.dispose();
+});

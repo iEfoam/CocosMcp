@@ -24,7 +24,7 @@ export interface PreviewWindow {
   };
 }
 
-export interface PreviewWindowFactory { create(options: JsonObject): PreviewWindow }
+export interface PreviewWindowFactory { create(options: JsonObject): PreviewWindow; activate?(): void }
 
 /** 窗口仅承载本工程的本地预览；关闭、重载扩展时不触碰用户浏览器或其他会话。 */
 export class ManagedPreview {
@@ -139,17 +139,39 @@ export class ManagedPreview {
       }
       const size = window.getContentSize(), x = Number(params.x), y = Number(params.y);
       if (![x, y].every(n => Number.isInteger(n) && n >= 0) || x >= size[0]! || y >= size[1]!) throw new CocosError('INVALID_ARGUMENT', 'Input coordinates must be inside the preview content area');
-      if (!['click', 'wheel'].includes(String(params.action))) throw new CocosError('INVALID_ARGUMENT', 'Unsupported preview input action');
+      if (!['click', 'wheel', 'drag', 'long_press', 'key', 'touch_drag', 'touch_cancel'].includes(String(params.action))) throw new CocosError('INVALID_ARGUMENT', 'Unsupported preview input action');
+      const duration = Number(params.durationMs ?? 300), steps = Number(params.steps ?? 10), endX = Number(params.endX ?? x), endY = Number(params.endY ?? y);
+      if (!Number.isInteger(duration) || duration < 0 || duration > 2000 || !Number.isInteger(steps) || steps < 1 || steps > 60 || ![endX, endY].every(n => Number.isInteger(n) && n >= 0) || endX >= size[0]! || endY >= size[1]!) throw new CocosError('INVALID_ARGUMENT', 'Invalid bounded gesture');
+      if (params.action === 'key' && !/^(?:[A-Za-z0-9]|Space|Enter|Escape|Tab|Backspace|Left|Right|Up|Down)$/.test(String(params.key ?? ''))) throw new CocosError('INVALID_ARGUMENT', 'Unsupported key');
+      if (String(params.action).startsWith('touch_') && !window.webContents.debugger?.isAttached()) throw new CocosError('UNSUPPORTED_CAPABILITY', 'Touch input requires the managed preview debugger');
       if (params.action === 'wheel' && ![Number(params.deltaX ?? 0), Number(params.deltaY ?? 0)].every(n => Number.isInteger(n) && Math.abs(n) <= 2000)) throw new CocosError('INVALID_ARGUMENT', 'Wheel delta exceeds bounds');
       if (!window.webContents.sendInputEvent || !window.focus || !window.show || !window.isFocused) throw new CocosError('UNSUPPORTED_CAPABILITY', 'Preview input APIs unavailable');
       // 先核对实际目标场景，再按 Electron 要求聚焦工具拥有的窗口；不向操作系统或其他窗口发输入。
       await this.execute('capture', {}); window.show(); window.focus();
+      if (!window.isFocused()) { this.factory.activate?.(); window.focus(); }
+      for (let attempt = 0; attempt < 10 && !window.isFocused(); attempt++) await new Promise(resolve => setTimeout(resolve, 50));
       if (!window.isFocused()) throw new CocosError('CONTEXT_UNAVAILABLE', 'Preview window did not acquire input focus');
       const sent: JsonObject[] = [];
       const send = (event: JsonObject): void => { window.webContents.sendInputEvent!(event); sent.push(event); };
+      const wait = async (milliseconds: number): Promise<void> => { await new Promise(resolve => setTimeout(resolve, milliseconds)); if (this.window !== window || window.isDestroyed()) throw new CocosError('STALE_HANDLE', 'Preview changed during input'); };
       try {
         send({ type: 'mouseMove', x, y });
-        if (params.action === 'click') {
+        if (String(params.action).startsWith('touch_')) {
+          const touch = async (type: string, points: JsonObject[]): Promise<void> => { const event = { type, touchPoints: points }; sent.push(event); await window.webContents.debugger!.sendCommand('Input.dispatchTouchEvent', event); };
+          try {
+            await touch('touchStart', [{ x, y, id: 0 }]);
+            for (let i = 1; i <= steps; i++) { await wait(duration / steps); await touch('touchMove', [{ x: x + (endX - x) * i / steps, y: y + (endY - y) * i / steps, id: 0 }]); }
+          } finally { await touch(params.action === 'touch_cancel' ? 'touchCancel' : 'touchEnd', []); }
+        } else if (params.action === 'key') {
+          try { send({ type: 'keyDown', keyCode: params.key! }); await wait(duration); }
+          finally { send({ type: 'keyUp', keyCode: params.key! }); }
+        } else if (params.action === 'drag' || params.action === 'long_press') {
+          try {
+            send({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
+            if (params.action === 'long_press') await wait(duration);
+            else for (let i = 1; i <= steps; i++) { await wait(duration / steps); send({ type: 'mouseMove', x: Math.round(x + (endX - x) * i / steps), y: Math.round(y + (endY - y) * i / steps), button: 'left' }); }
+          } finally { send({ type: 'mouseUp', x: params.action === 'drag' ? endX : x, y: params.action === 'drag' ? endY : y, button: 'left', clickCount: 1 }); }
+        } else if (params.action === 'click') {
           try { send({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 }); }
           finally { send({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 }); }
         } else send({ type: 'mouseWheel', x, y, deltaX: params.deltaX ?? 0, deltaY: params.deltaY ?? 0, canScroll: true });
