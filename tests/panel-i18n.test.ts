@@ -34,7 +34,7 @@ for (const major of [2, 3] as const) {
     preferences.set('en');
     assert.equal(applications, 1);
     assert.ok(calls.every(row => row.path === 'CocosMCP' || row.path.startsWith('CocosMCP/')));
-    assert.equal(calls.filter(row => row.operation === 'add').length, major === 3 ? 4 : 3);
+    assert.equal(calls.filter(row => row.operation === 'add').length, 3);
     assert.equal(new PanelPreferences(() => project, major, host).read(), 'en');
     assert.equal(JSON.parse(readFileSync(join(project, '.codex-work/cache/cocos-mcp/panel-preferences.json'), 'utf8')).locale, 'en');
     preferences.applyMenu();

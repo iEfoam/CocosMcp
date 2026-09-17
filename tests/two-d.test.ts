@@ -93,6 +93,26 @@ class TwoDFixture {
   readonly scene = { environment: { cc: this.cc }, component: () => this.layer } as unknown as SceneInspector;
   readonly control = new TwoDControl(this.scene, this.frames);
 }
+
+class Creator2TileLayer {
+  uuid = 'creator2-layer'; gid = 2; flags = 0;
+  getLayerSize() { return { width: 2, height: 2 }; }
+  getTileGIDAt(point: { x: number; y: number }) { assert.equal(typeof point, 'object'); return this.gid; }
+  getTileFlagsAt(point: { x: number; y: number }) { assert.equal(typeof point, 'object'); return this.flags; }
+  getPositionAt(point: { x: number; y: number }) { assert.equal(typeof point, 'object'); return point; }
+  setTileGIDAt(gid: number, point: { x: number; y: number }, flags: number) { assert.equal(typeof point, 'object'); this.gid = gid; this.flags = flags; }
+}
+test('Creator 2 tile access uses Vec2 overloads at zero coordinates and preserves flip bits', () => {
+  class Vec2 { constructor(public x: number, public y: number) {} }
+  const layer = new Creator2TileLayer(), cc = { Vec2, TiledLayer: Creator2TileLayer, Director: { EVENT_AFTER_DRAW: 'draw' }, director: new EventEmitter() };
+  const scene = { environment: { major: 2, cc }, component: () => layer } as unknown as SceneInspector;
+  const control = new TwoDControl(scene, new FrameSession(cc));
+  const params = { componentId: layer.uuid, rows: [{ x: 0, y: 0, gid: 1, flags: 0xe0000000 }] };
+  const plan = Json.object(control.tilemap('runtime.tilemap.plan', params));
+  control.tilemap('runtime.tilemap.apply', { ...params, planHash: plan.planHash! });
+  assert.equal(layer.flags, 0xe0000000); assert.equal(layer.gid, 1);
+  assert.throws(() => control.tilemap('runtime.tilemap.apply', { ...params, planHash: plan.planHash! }), { code: 'STALE_REVISION' });
+});
 test('tile plans reject changed regions, duplicates and invalid flags before writes', () => {
   const fixture = new TwoDFixture(), p = { componentId: 'layer', rows: [{ x: 0, y: 0, gid: 3 }] };
   const plan = Json.object(fixture.control.tilemap('runtime.tilemap.plan', p)); fixture.layer.grid[0] = 2;

@@ -1,0 +1,67 @@
+import assert from 'node:assert/strict';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { CocosApplication, ProjectRegistry } from '../packages/application/src/index.js';
+import { CocosError, Json, type JsonObject } from '../packages/contracts/src/index.js';
+
+const project = resolve('.codex-work/build/creator2-test-project'), registry = new ProjectRegistry();
+const { projectId } = await registry.add(project), app = new CocosApplication(registry);
+const results: JsonObject[] = [];
+const call = async (id: string, params: JsonObject = {}): Promise<JsonObject> => {
+  const result = Json.object((await app.execute({ projectId, capabilityId: id, params })).result);
+  results.push({ id, result }); console.log(`PASS ${id}`); return result;
+};
+try {
+  const scene = Json.object((await call('scene.query')).scene).sceneId!;
+  const root = (await call('node.create', { parentId: scene, name: `ReferenceCoverage-${Date.now()}` })).nodeId!;
+  const target = (await call('node.create', { parentId: root, name: 'Referenced' })).nodeId!;
+  const owner = (await call('node.create', { parentId: scene, name: `ReferenceOwner-${Date.now()}` })).nodeId!;
+  const scroll = (await call('component.add', { nodeId: owner, type: 'cc.ScrollView' })).componentId!;
+  const slider = (await call('component.add', { nodeId: owner, type: 'cc.Slider' })).componentId!;
+  const button = (await call('component.add', { nodeId: target, type: 'cc.Button' })).componentId!;
+  await call('component.set', { componentId: scroll, properties: { content: { uuid: target } } });
+  await call('component.set', { componentId: slider, properties: { handle: { uuid: button } } });
+  const audit = await call('scene.references');
+  assert.ok((audit.rows as JsonObject[]).some(row => row.sourceId === scroll && row.targetId === target));
+  assert.ok((audit.rows as JsonObject[]).some(row => row.sourceId === slider && row.targetId === button));
+  const params = { rootId: root, rows: [{ action: 'remove', node: target }] };
+  const blocked = await call('ui.structure.plan', params);
+  assert.equal(Json.object(blocked.references).deletionAllowed, false);
+  assert.deepEqual(new Set((Json.object(blocked.references).blockers as JsonObject[]).map(row => row.sourceId)), new Set([scroll, slider]));
+  await assert.rejects(() => call('ui.structure.apply', { ...params, planHash: blocked.planHash! }), error => CocosError.from(error).code === 'OPERATION_CONFLICT');
+  assert.ok((await call('node.query', { nodeId: target })).node);
+  await call('component.set', { componentId: scroll, properties: { content: null } });
+  await call('component.set', { componentId: slider, properties: { handle: null } });
+  await assert.rejects(() => call('ui.structure.apply', { ...params, planHash: blocked.planHash! }), error => CocosError.from(error).code === 'STALE_REVISION');
+  const ready = await call('ui.structure.plan', params);
+  assert.equal(Json.object(ready.references).deletionAllowed, true);
+  await call('ui.structure.apply', { ...params, planHash: ready.planHash! });
+  await call('scene.undo');
+  assert.ok((await call('node.query', { nodeId: target })).node);
+  assert.ok((await call('component.query', { componentId: button })).component);
+  const document = { version: 1, root: { key: 'eventSender', name: 'EventSender', components: [{ type: 'cc.Button', properties: { clickEvents: [{ componentId: button, handler: 'onDisable' }] } }] } };
+  const eventPlan = await call('ui.plan', { parentId: owner, document });
+  const built = await call('ui.build', { parentId: owner, document, planHash: eventPlan.planHash! });
+  const eventAudit = await call('scene.references');
+  assert.ok((eventAudit.rows as JsonObject[]).some(row => row.kind === 'event-component' && row.targetId === button));
+  assert.equal((await call('ui.validate_interaction', { rootId: built.rootId! })).valid, true);
+  const removal = { rootId: root, rows: [{ action: 'remove_component', componentId: button }] };
+  const eventBlocked = await call('ui.structure.plan', removal);
+  assert.equal(Json.object(eventBlocked.references).deletionAllowed, false);
+  await assert.rejects(() => call('ui.structure.apply', { ...removal, planHash: eventBlocked.planHash! }), error => CocosError.from(error).code === 'OPERATION_CONFLICT');
+  const sender = ((eventAudit.events as JsonObject[]).find(row => row.targetComponentId === button))!.sourceId!;
+  await call('component.set', { componentId: sender, properties: { 'clickEvents.0.handler': 'MissingHandlerForAudit' } });
+  const broken = await call('scene.references');
+  assert.ok((broken.issues as JsonObject[]).some(row => row.sourceId === sender && row.code === 'EVENT_HANDLER_MISSING'));
+  assert.equal((await call('ui.validate_interaction', { rootId: built.rootId! })).valid, false);
+  await call('component.set', { componentId: sender, properties: { clickEvents: [] } });
+  const eventReady = await call('ui.structure.plan', removal);
+  assert.equal(Json.object(eventReady.references).deletionAllowed, true);
+  await call('ui.structure.apply', { ...removal, planHash: eventReady.planHash! });
+  await call('scene.undo');
+  assert.ok((await call('component.query', { componentId: button })).component);
+  results.push({ eventDependencyVerified: true, callbacksInvoked: false });
+  await call('scene.save');
+  results.push({ passed: true, assertions: 'native serialized node and component references, outside-scope owner, two referencing owners (including serialized alias paths), no deletion on conflict, stale plan, explicit unlink, Undo UUID preservation' });
+} catch (error) { results.push({ passed: false, error: CocosError.from(error).message }); process.exitCode = 1; console.error(error); }
+finally { await mkdir(resolve('.codex-work/logs/creator2-expansion'), { recursive: true }); await writeFile(resolve('.codex-work/logs/creator2-expansion/references.json'), JSON.stringify({ project, results }, null, 2)); }

@@ -62,7 +62,7 @@ test('UI schemas validate recursive documents and Creator 3 build requires a rev
   const h = new UiHarness(), catalog = new CapabilityCatalog();
   catalog.validate('ui.plan', h.params());
   assert.throws(() => catalog.validate('ui.build', h.params()), /planHash/);
-  assert.deepEqual(catalog.describe('ui.build').supportedMajors, [3]);
+  assert.deepEqual(catalog.describe('ui.build').supportedMajors, [2, 3]);
   await assert.rejects(() => h.service.execute('ui.build', { ...h.params(), planHash: 'old' }), /plan changed/);
   assert.equal(h.writes, 0);
   const plan = await h.service.plan(h.params()); h.revision = 'user-change';

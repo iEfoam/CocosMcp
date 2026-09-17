@@ -1,7 +1,6 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { readFile, writeFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
 import { Ajv } from 'ajv';
 import { CocosError, Json, type JsonObject, type JsonValue } from '../../contracts/src/index.js';
 import { ProjectPaths } from '../../application/src/paths.js';
@@ -11,7 +10,8 @@ import type { EditorPort } from './port.js';
 
 /** 原生导入设置只通过 AssetDB 保存；备份和源码指纹限定在当前工程。 */
 export class TextureService {
-  constructor(private readonly port: EditorPort, private readonly family: 'texture' | 'spriteframe' = 'texture') {}
+  constructor(private readonly port: Pick<EditorPort, 'version' | 'projectPath' | 'request'>, private readonly family: 'texture' | 'spriteframe' = 'texture') {}
+  private backupId(): string { const bytes = randomBytes(16); bytes[6] = (bytes[6]! & 15) | 64; bytes[8] = (bytes[8]! & 63) | 128; const hex = bytes.toString('hex'); return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`; }
   private hash(value: JsonValue): string { return createHash('sha256').update(Json.canonical(value)).digest('hex'); }
   private async read(url: string): Promise<JsonObject> {
     const paths = await ProjectPaths.open(this.port.projectPath), path = await paths.asset(url);
@@ -53,12 +53,12 @@ export class TextureService {
       while (pending.length) { const entry = pending.pop()!; if (entry.imported === false) ready = false; for (const child of Object.values(Json.object(entry.subMetas ?? {}))) pending.push(Json.object(child)); }
       if (ready && state.expectedHash === previous) return;
       previous = ready ? state.expectedHash : undefined;
-      await delay(100);
+      await new Promise(resolve => setTimeout(resolve, 100));
     }
     throw new CocosError('CONTEXT_UNAVAILABLE', 'Texture subresource import did not settle within 3 seconds');
   }
   async execute(id: string, p: JsonObject): Promise<JsonValue> {
-    if (this.port.version !== '3.8.8') throw new CocosError('UNSUPPORTED_VERSION', 'Texture import tools require Creator 3.8.8');
+    if (!['3.8.8', '2.4.15'].includes(this.port.version)) throw new CocosError('UNSUPPORTED_VERSION', 'Texture import tools require Creator 3.8.8');
     const capability = [...new TextureCapabilities().list(), ...new TwoDCapabilities().list()].find(row => row.id === id);
     if (!capability) throw new CocosError('UNSUPPORTED_CAPABILITY', `Unknown texture tool: ${id}`);
     const valid = new Ajv({ strict: true }).compile(capability.inputSchema);
@@ -72,7 +72,7 @@ export class TextureService {
       const plan = await this.plan(p);
       if (p.planHash !== plan.planHash) throw new CocosError('STALE_REVISION', 'Texture import plan changed; plan again');
       if (!plan.requiresReimport) return { changed: false, expectedHash: plan.expectedHash! };
-      const paths = await ProjectPaths.open(this.port.projectPath), backupId = randomUUID(), directory = await paths.work('cache', 'texture-backups');
+      const paths = await ProjectPaths.open(this.port.projectPath), backupId = this.backupId(), directory = await paths.work('cache', 'texture-backups');
       await writeFile(join(directory, `${backupId}.json`), JSON.stringify({ url: p.url, meta: plan.meta, sourceHash: plan.sourceHash }), { flag: 'wx' });
       // 备份写盘期间用户也可能改动资源；再次核对后才进入 AssetDB。
       if ((await this.read(String(p.url))).expectedHash !== plan.expectedHash) throw new CocosError('STALE_REVISION', 'Texture changed while backing up');

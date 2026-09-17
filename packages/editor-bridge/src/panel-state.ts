@@ -3,6 +3,7 @@ import type { BridgeDescriptor, CreatorMajor, JsonObject } from '../../contracts
 /** 面板仅接收展示信息；桥接 token 始终留在扩展主进程。 */
 export interface PanelState {
   locale?: 'zh' | 'en';
+  navigation?: { page: 'overview' | 'about' | 'updates'; revision: number };
   extension?: { version: string; buildId: string; installedVersion: string; installedBuildId: string; reloadRequired: boolean; updating: boolean; message: string | null; latestVersion?: string; checking?: boolean };
   projectPath: string;
   editorVersion: string;

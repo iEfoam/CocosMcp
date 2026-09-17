@@ -1,0 +1,50 @@
+import assert from 'node:assert/strict';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { CocosApplication, ProjectRegistry } from '../packages/application/src/index.js';
+import { RuntimeGateway } from '../packages/application/src/runtime-gateway.js';
+import { CocosError, Json, type JsonObject } from '../packages/contracts/src/index.js';
+
+const project = resolve('.codex-work/build/creator2-test-project'), registry = new ProjectRegistry(), { projectId } = await registry.add(project);
+const gateway = new RuntimeGateway(registry), gatewayPort = await gateway.start(), app = new CocosApplication(registry, undefined, undefined, true, gateway);
+const rows: JsonObject[] = []; let preview = false;
+const call = async (id: string, params: JsonObject = {}): Promise<JsonObject> => { const result = Json.object((await app.execute({ projectId, capabilityId: id, params })).result); rows.push({ id, result }); console.log(`PASS ${id}`); return result; };
+try {
+  const old = (await call('scene.hierarchy', { limit: 2000 })).rows as JsonObject[];
+  for (const row of old) if (String(row.name).startsWith('CollisionCoverage-')) await call('node.set', { nodeId: row.nodeId!, properties: { active: false } });
+  const scene = Json.object((await call('scene.query')).scene).sceneId!;
+  const root = (await call('node.create', { parentId: scene, name: `CollisionCoverage-${Date.now()}` })).nodeId!;
+  const nodeA = (await call('node.create', { parentId: root, name: 'Circle' })).nodeId!;
+  const nodeB = (await call('node.create', { parentId: root, name: 'Box' })).nodeId!;
+  const circle = (await call('component.add', { nodeId: nodeA, type: 'cc.CircleCollider' })).componentId!;
+  await call('component.set', { componentId: circle, properties: { radius: 25 } });
+  const box = (await call('component.add', { nodeId: nodeB, type: 'cc.BoxCollider' })).componentId!;
+  await call('component.set', { componentId: box, properties: { size: { width: 50, height: 50 } } });
+  await call('node.set', { nodeId: nodeB, properties: { position: { x: 200, y: 0, z: 0 } } });
+  const location = await call('asset.location', { url: `db://assets/Animations/CollisionMotion-${Date.now()}.anim` });
+  const clip = await call('animation.clip.create', { url: location.url!, rootId: nodeB, document: { name: 'CollisionMotion', duration: 1.2, tracks: [{ path: '', property: 'position', keys: [[0,200],[0.3,200],[0.5,0],[0.7,0],[0.9,200],[1.2,200]].map(([time,x]) => ({ time: time!, value: { x: x!, y: 0, z: 0 } })) }] } });
+  const animation = (await call('component.add', { nodeId: nodeB, type: 'cc.Animation' })).componentId!;
+  await call('component.set', { componentId: animation, properties: { _clips: [{ uuid: clip.uuid! }], defaultClip: { uuid: clip.uuid! } } });
+  await call('scene.save'); await call('preview.start', { width: 800, height: 600, visible: true }); preview = true;
+  await call('shader.preview.connect', { gatewayPort });
+  const manager = Json.object((await call('runtime.invoke', { target: 'cc.director', method: 'getCollisionManager' })).value).handle!;
+  await call('runtime.set', { target: manager, path: 'enabled', value: true });
+  await call('runtime.shader.profile', { frames: 2, warmupFrames: 1 });
+  const before = await call('runtime.collision2d.inspect', { rootId: root });
+  assert.equal((before.rows as JsonObject[]).length, 2);
+  const baseline = await call('runtime.hierarchy', { limit: 2000 });
+  const animationId = (((baseline.rows as JsonObject[]).find(row => row.nodeId === nodeB)!.components as JsonObject[]).find(row => row.type === 'cc.Animation'))!.componentId!;
+  const states = await call('runtime.animation.state', { componentId: animationId });
+  const clipName = (states.rows as JsonObject[])[0]!.name!;
+  await call('runtime.animation.play', { componentId: animationId, name: clipName });
+  const trace = await call('runtime.collision2d.trace', { rootId: root, frames: 300, limit: 1000 });
+  const deliveries = (trace.rows as JsonObject[]).filter(row => [nodeA, nodeB].includes(row.receiverNodeId!) && [nodeA, nodeB].includes(row.otherNodeId!));
+  for (const event of ['enter', 'stay', 'exit']) assert.ok(deliveries.some(row => row.event === event), event);
+  await call('runtime.shader.profile', { frames: 2, warmupFrames: 1 });
+  const after = await call('runtime.hierarchy', { limit: 2000 });
+  const count = (hierarchy: JsonObject) => (hierarchy.rows as JsonObject[]).filter(row => [nodeA, nodeB].includes(row.nodeId!)).map(row => (row.components as unknown[]).length);
+  assert.deepEqual(count(after), count(baseline));
+  await call('runtime.set', { target: `node:${root}`, path: 'active', value: false });
+  rows.push({ passed: true, assertions: 'native Circle/Box world geometry, enter/stay/exit deliveries, temporary observer cleanup' });
+} catch (error) { rows.push({ passed: false, error: CocosError.from(error).toJSON() as unknown as JsonObject }); process.exitCode = 1; console.error(error); }
+finally { try { if (preview) await call('preview.stop'); } finally { await gateway.close(); await mkdir(resolve('.codex-work/logs/creator2-expansion'), { recursive: true }); await writeFile(resolve('.codex-work/logs/creator2-expansion/collision.json'), JSON.stringify({ project, rows }, null, 2)); } }

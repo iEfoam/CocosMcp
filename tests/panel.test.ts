@@ -18,6 +18,7 @@ const snapshot: PanelState = {
 };
 
 class PanelHarness {
+  major: 2 | 3 = 3;
   html = '';
   registrations = 0;
   polls = new Set<() => void>();
@@ -79,6 +80,7 @@ class PanelHarness {
     Object.defineProperty(this.root, 'innerHTML', { get: () => this.html, set: (value: string) => { this.html = value; } });
   }
   async load(major: 2 | 3, respond: () => Promise<PanelState>, legacy3 = false): Promise<Definition> {
+    this.major = major;
     const path = join(buildRoot, `extensions/creator${major}/dist/panel.${major === 2 ? 'js' : 'cjs'}`);
     const module = { exports: {} };
     const register = (definition: Definition): Definition => { this.registrations++; return definition; };
@@ -89,7 +91,7 @@ class PanelHarness {
       Editor: {
         Panel: major === 2 ? { extend: register } : legacy3 ? {} : { define: register },
         Message: { request: (name: string, message: string, value?: unknown) => {
-          assert.equal(major, 3); assert.equal(name, 'cocos-mcp-creator3'); assert.ok(['panel-state', 'start', 'stop', 'service-start', 'service-stop', 'set-language', 'copy-log'].includes(message));
+          assert.equal(major, 3); assert.equal(name, 'cocos-mcp-creator3'); assert.ok(['panel-state', 'extension-check', 'extension-update', 'start', 'stop', 'service-start', 'service-stop', 'set-language', 'copy-log'].includes(message));
           return message === 'panel-state' ? respond() : this.command(message, value);
         } },
         Ipc: { sendToMain: (message: string, ...args: unknown[]) => {
@@ -108,9 +110,21 @@ class PanelHarness {
     return module.exports as Definition;
   }
   async ready(definition: Definition): Promise<void> {
-    await definition.ready.call({ $: { root: this.root as unknown as HTMLElement } });
+    // 模拟各版本真实的选择器绑定，不能让 Creator 2 测试误用 Creator 3 的宿主。
+    const root = this.root as unknown as HTMLElement;
+    await definition.ready.call(this.major === 2 ? { $root: root } : { $: { root } });
   }
 }
+
+test('Creator 2: native selector binding renders and close permits window disposal', async () => {
+  const harness = new PanelHarness();
+  const definition = await harness.load(2, async () => ({ ...snapshot, creatorMajor: 2, editorVersion: '2.4.15' }));
+  await harness.ready(definition);
+  assert.match(harness.html, /2\.4\.15/);
+  assert.equal(harness.polls.size, 1);
+  assert.equal(definition.close(), true);
+  assert.equal(harness.polls.size, 0);
+});
 
 for (const major of [2, 3] as const) {
   test(`Creator ${major}: log controls filter, page, refresh and preserve an active native select`, async () => {
@@ -160,6 +174,7 @@ for (const major of [2, 3] as const) {
     assert.equal(installed.installedPath, first.installedPath);
     assert.ok(installed.backupPath);
     const manifest = JSON.parse(await readFile(join(installed.installedPath, 'package.json'), 'utf8'));
+    assert.deepEqual(major === 2 ? Object.keys(manifest['main-menu']).map(key => key.split('/')[1]) : manifest.contributions.menu.map((row: { label: string }) => row.label), ['关于 CocosMCP', '打开控制中心', '检查更新']);
     const panel = major === 2 ? manifest.panel : manifest.panels.default;
     const require = createRequire(join(installed.installedPath, 'package.json'));
     assert.equal(require.resolve(join(installed.installedPath, panel.main)), join(installed.installedPath, `dist/panel.${major === 2 ? 'js' : 'cjs'}`));
@@ -172,6 +187,28 @@ for (const major of [2, 3] as const) {
     const exported = module.exports as { methods: { open(): Promise<unknown> }; messages: { open(): void } };
     if (major === 3) await exported.methods.open(); else exported.messages.open();
     assert.deepEqual(opened, [manifest.name]);
+  });
+
+  test(`Creator ${major}: menu navigation opens about and updates without installing`, async () => {
+    const harness = new PanelHarness();
+    const current: PanelState = { ...snapshot, creatorMajor: major, navigation: { page: 'about', revision: 1 }, extension: { version: '0.1.0', buildId: 'local-build', installedVersion: '0.1.0', installedBuildId: 'local-build', reloadRequired: false, updating: false, checking: false, message: null } };
+    const definition = await harness.load(major, async () => current);
+    const calls: string[] = []; harness.command = async message => { calls.push(message); };
+    try {
+      await harness.ready(definition);
+      assert.match(harness.html, /<h2>关于 CocosMCP<\/h2>/); assert.match(harness.html, /MIT/);
+      harness.tabs.get('logs')!();
+      for (const poll of harness.polls) poll(); await new Promise(resolve => setImmediate(resolve));
+      assert.doesNotMatch(harness.html, /<h2>关于 CocosMCP<\/h2>/);
+      current.navigation = { page: 'updates', revision: 2 };
+      for (const poll of harness.polls) poll(); await new Promise(resolve => setImmediate(resolve));
+      assert.match(harness.html, /<h2>检查更新<\/h2>/);
+      harness.actions.get('extension-check')!.click!(); await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(calls, ['extension-check']);
+      current.extension!.checking = true;
+      for (const poll of harness.polls) poll(); await new Promise(resolve => setImmediate(resolve));
+      assert.equal(harness.actions.get('extension-check')!.disabled, true);
+    } finally { definition.close(); }
   });
 
   test(`Creator ${major}: bundled panel loads and displays state without a scene or browser HTTP`, async () => {

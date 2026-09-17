@@ -4,6 +4,14 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { CapabilityCatalog } from '../packages/capability-catalog/src/index.js';
 import { CocosError, Json, type JsonValue } from '../packages/contracts/src/index.js';
+
+test('serialized editor errors preserve validated codes and partial outcomes across IPC', () => {
+  const restored = CocosError.from({ code: 'OUTCOME_UNKNOWN', message: 'Structure interrupted', details: { completed: ['a'], pending: ['b'] } });
+  assert.equal(restored.code, 'OUTCOME_UNKNOWN'); assert.equal(restored.message, 'Structure interrupted');
+  assert.deepEqual(restored.details, { completed: ['a'], pending: ['b'] });
+  assert.equal(CocosError.from({ code: 'NOT_A_PROTOCOL_CODE', message: 'native failure' }, 'EDITOR_ERROR').code, 'EDITOR_ERROR');
+  assert.equal(CocosError.from(new Error('ordinary')).message, 'ordinary');
+});
 import { ProjectPaths } from '../packages/application/src/paths.js';
 import { CocosApplication, ProjectRegistry } from '../packages/application/src/index.js';
 import { RuntimePolicy } from '../packages/runtime3-bridge/src/access.js';
@@ -75,7 +83,10 @@ test('adapter capability lists do not advertise handlers that are absent', () =>
   const creator3 = new Creator3Adapter({} as ConstructorParameters<typeof Creator3Adapter>[0]);
   assert.equal(creator2.supportedCapabilities().includes('ui.build'), false);
   assert.equal(creator3.supportedCapabilities().includes('ui.build'), false);
-  assert.equal(creator2.supportedCapabilities().includes('preview.start'), true);
+  assert.equal(creator2.supportedCapabilities().includes('preview.start'), false);
+  const ready2 = new Creator2Adapter({ version: '2.4.15', preview: async () => null, previewUrl: async () => 'http://127.0.0.1:7456/' } as unknown as ConstructorParameters<typeof Creator2Adapter>[0]);
+  assert.equal(ready2.supportedCapabilities().includes('ui.build'), true);
+  assert.equal(ready2.supportedCapabilities().includes('preview.start'), true);
   assert.equal(creator3.supportedCapabilities().includes('preview.start'), false);
 });
 

@@ -61,7 +61,7 @@ test('drag and held-key sequences release input and reject invalid gestures befo
   assert.equal(h.events.at(-1)!.x, 60);
   h.events.length = 0;
   await h.preview.execute('input', { action: 'key', x: 0, y: 0, key: 'Space', durationMs: 0 });
-  assert.deepEqual(h.events.map(row => row.type), ['mouseMove', 'keyDown', 'keyUp']);
+  assert.deepEqual(h.events.map(row => row.type), ['mouseMove', 'keyDown', 'char', 'keyUp']);
   h.events.length = 0;
   await assert.rejects(h.preview.execute('input', { action: 'drag', x: 0, y: 0, endX: 900 }), /bounded/);
   assert.equal(h.events.length, 0);
@@ -93,4 +93,13 @@ test('touch cancellation is delivered through the managed debugger without overw
   await h.preview.execute('input', { action: 'touch_cancel', x: 10, y: 20, endX: 30, endY: 40, durationMs: 0, steps: 2 });
   assert.deepEqual(commands.filter(row => row.method === 'Input.dispatchTouchEvent').map(row => row.params!.type), ['touchStart', 'touchMove', 'touchMove', 'touchCancel']);
   h.preview.dispose();
+});
+
+test('printable key delivery includes a character event while navigation keys do not', async () => {
+  const h = new InputHarness(); await h.start();
+  await h.preview.execute('input', { action: 'key', x: 0, y: 0, key: 'A', focusTarget: 'window', durationMs: 0 });
+  assert.deepEqual(h.events.filter(row => row.type === 'char'), [{ type: 'char', keyCode: 'a' }]);
+  h.events.length = 0;
+  await h.preview.execute('input', { action: 'key', x: 0, y: 0, key: 'Left', focusTarget: 'window', durationMs: 0 });
+  assert.equal(h.events.some(row => row.type === 'char'), false);
 });

@@ -19,7 +19,7 @@ export interface PreviewWindow {
     executeJavaScript(source: string): Promise<unknown>;
     capturePage(): Promise<{ isEmpty(): boolean; toDataURL(): string; getSize(): { width: number; height: number } }>;
     on(event: string, listener: (...args: unknown[]) => void): unknown;
-    setWindowOpenHandler(handler: () => { action: 'deny' }): void;
+    setWindowOpenHandler?(handler: () => { action: 'deny' }): void;
     session: { setPermissionRequestHandler(handler: (contents: unknown, permission: string, callback: (allowed: boolean) => void) => void): void };
   };
 }
@@ -34,7 +34,7 @@ export class ManagedPreview {
   private runtimeRegistered = false;
   private readonly diagnostics: JsonObject[] = [];
   private diagnosticLog: PreviewDiagnostics;
-  constructor(private readonly factory: PreviewWindowFactory, private readonly projectPath?: string) { this.diagnosticLog = new PreviewDiagnostics(projectPath); }
+  constructor(private readonly factory: PreviewWindowFactory, private readonly projectPath?: string, private readonly major: 2 | 3 = 3) { this.diagnosticLog = new PreviewDiagnostics(projectPath); }
 
   private async bounded<T>(task: Promise<T>, milliseconds: number): Promise<T> {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -62,7 +62,7 @@ export class ManagedPreview {
     // 只读取已完成注册的模块，等待预览自身加载引擎，不主动启动第二条模块加载链。
     return `let cc;
       for(let attempt=0;attempt<100;attempt++) {
-        try { cc=globalThis.System?.get(await globalThis.System.resolve('cc')); } catch {}
+        try { cc=${this.major === 2 ? 'globalThis.cc' : "globalThis.System?.get(await globalThis.System.resolve('cc'))"}; } catch {}
         if(cc?.director?.getScene()) break;
         await new Promise(resolve=>setTimeout(resolve,100));
       }
@@ -84,7 +84,7 @@ export class ManagedPreview {
           globalThis.__cocosMcpDevelopmentConnection.stop().catch(() => {}), new Promise(resolve=>setTimeout(resolve,1000))
         ]);
         globalThis.__cocosMcpDevelopmentConnection = await CocosMCPRuntime.CocosMCP.connect({
-          ...${JSON.stringify(params.config)}, cc, major: 3, development: true
+          ...${JSON.stringify(params.config)}, cc, major: ${this.major}, development: true
         });
         return {connected:true, runtimeInstanceId:globalThis.__cocosMcpDevelopmentConnection.instanceId, sceneId:cc.director.getScene()?.uuid ?? null};
       })()`), 28000);
@@ -111,7 +111,8 @@ export class ManagedPreview {
       this.diagnosticLog.dispose(); this.diagnosticLog = new PreviewDiagnostics(this.projectPath);
       const diagnosticLog = this.diagnosticLog;
       this.window = window; this.sceneId = sceneId; this.ready = false; this.diagnostics.length = 0;
-      window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+      if (window.webContents.setWindowOpenHandler) window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+      else window.webContents.on('new-window', event => (event as { preventDefault(): void }).preventDefault());
       window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
       const navigation = (...args: unknown[]): void => {
         const event = args[0] as { preventDefault(): void }, target = String(args[1]);
@@ -172,7 +173,7 @@ export class ManagedPreview {
       if (focusTarget === 'game-canvas') {
         // DOM 聚焦不产生游戏点击，避免用点击变通时触发攻击、购买等业务行为。
         focus = await this.bounded(window.webContents.executeJavaScript(`(async () => {
-          const cc = await System.import('cc');
+          const cc = ${this.major === 2 ? 'globalThis.cc' : "await System.import('cc')"};
           const canvas = cc.game.canvas;
           if (!canvas || !canvas.isConnected) throw new Error('Game canvas unavailable');
           if (canvas.tabIndex < 0) canvas.tabIndex = 0;
@@ -201,7 +202,13 @@ export class ManagedPreview {
             for (let i = 1; i <= steps; i++) { await wait(duration / steps); await touch('touchMove', [{ x: x + (endX - x) * i / steps, y: y + (endY - y) * i / steps, id: 0 }]); }
           } finally { await touch(params.action === 'touch_cancel' ? 'touchCancel' : 'touchEnd', []); }
         } else if (params.action === 'key') {
-          try { send({ type: 'keyDown', keyCode: params.key! }); await wait(duration); }
+          try {
+            send({ type: 'keyDown', keyCode: params.key! });
+            // Electron 的 keyDown 不生成文本；字符事件交给当前焦点元素处理，不能直接修改 EditBox.string。
+            const character = params.key === 'Space' ? ' ' : /^[A-Za-z0-9]$/.test(String(params.key)) ? String(params.key).toLowerCase() : null;
+            if (character !== null) send({ type: 'char', keyCode: character });
+            await wait(duration);
+          }
           finally { send({ type: 'keyUp', keyCode: params.key! }); }
         } else if (params.action === 'drag' || params.action === 'long_press') {
           try {

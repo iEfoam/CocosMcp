@@ -1,3 +1,4 @@
+import { Creator2ExpansionCapabilities } from './creator2-expansion.js';
 import { RenderRuntimeCapabilities } from './render-runtime.js';
 import { TwoDCapabilities } from './two-d.js';
 import { EngineFeatureCapabilities } from './engine-features.js';
@@ -11,6 +12,7 @@ import { RuntimeInteractionCapabilities } from './runtime-interaction.js';
 import { RuntimeAnimationCapabilities } from './animation-runtime.js';
 import { AnimationCapabilities } from './animation.js';
 import { RuntimeAssetCapabilities } from './runtime-assets.js';
+import { Creator2Support } from './creator2-support.js';
 
 export class Operations {
   private readonly rows: Capability[] = [];
@@ -35,6 +37,8 @@ export class Operations {
     const str = S.string(); const bool = S.boolean(); const obj = S.record(); const strings = S.array(str);
     const node = { nodeId: str }; const component = { componentId: str }; const asset = { url: str };
     this.add('editor.status', 'F01', '读取编辑器实例、版本和场景状态', 'read');
+    for (const action of ['inspect', 'play']) this.add(`runtime.dragonbones.${action}`, 'F26', 'Creator 2 DragonBones 原生动画控制', action === 'inspect' ? 'read' : 'runtime', { componentId: str, name: str, playTimes: { type: 'integer', minimum: 0, maximum: 1000 } }, action === 'inspect' ? ['componentId'] : ['componentId', 'name'], [2]);
+    this.add('editor.environment', 'F01', '读取 Creator 2 原生接口名称与引擎版本；不读取配置或凭据', 'read', {}, [], [2]);
     this.add('scene.query', 'F04', '读取当前场景信息和修改状态', 'read');
     this.add('scene.snapshot', 'F04', '生成可重放的当前场景序列化快照', 'read');
     this.add('scene.diff', 'F04', '将当前场景与基线快照进行结构化差异比较', 'read', { baseline: S.any() }, ['baseline']);
@@ -95,7 +99,7 @@ export class Operations {
       risks: ['内部编辑器接口随补丁版本变化'], prerequisites: ['精确 editorVersion', '--allow-project-code'], rollback: '重新加载工程或使用编辑器撤销' });
     this.add('scene.script', 'F08', '调用已安装扩展的场景脚本方法', 'external', { extension: str, method: str, args: S.array() }, ['extension', 'method'], [2, 3], {
       risks: ['扩展脚本可能修改工程外部状态'], prerequisites: ['--allow-project-code'], rollback: '由扩展提供补偿操作' });
-    this.add('preview.start', 'F43', '启动项目预览；3.8.8 使用独立 MCP 窗口并要求场景已保存', 'runtime', { width: { type: 'integer', minimum: 256, maximum: 2048 }, height: { type: 'integer', minimum: 256, maximum: 2048 }, visible: bool });
+    this.add('preview.start', 'F43', '启动项目预览；2.4.15/3.8.8 使用独立 MCP 窗口并要求场景已保存', 'runtime', { width: { type: 'integer', minimum: 256, maximum: 2048 }, height: { type: 'integer', minimum: 256, maximum: 2048 }, visible: bool });
     this.add('preview.resize', 'F43', '调整 MCP 预览内容尺寸并等待实际绘制；返回截图，不自动判定布局正确', 'runtime', { width: { type: 'integer', minimum: 256, maximum: 2048 }, height: { type: 'integer', minimum: 256, maximum: 2048 } }, ['width', 'height'], [3]);
     this.add('preview.input', 'F36', '向 MCP 自有预览窗口发送点击、拖拽、长按、键盘或单指触摸并截取下一帧；会聚焦窗口，须另行验证业务结果', 'runtime', { focusTarget: S.enum('game-canvas', 'window'), action: S.enum('click', 'wheel', 'drag', 'long_press', 'key', 'touch_drag', 'touch_cancel'), endX: { type: 'integer', minimum: 0, maximum: 2047 }, endY: { type: 'integer', minimum: 0, maximum: 2047 }, durationMs: { type: 'integer', minimum: 0, maximum: 2000 }, steps: { type: 'integer', minimum: 1, maximum: 60 }, key: { type: 'string', pattern: '^(?:[A-Za-z0-9]|Space|Enter|Escape|Tab|Backspace|Left|Right|Up|Down)$' }, x: { type: 'integer', minimum: 0, maximum: 2047 }, y: { type: 'integer', minimum: 0, maximum: 2047 }, deltaX: { type: 'integer', minimum: -2000, maximum: 2000 }, deltaY: { type: 'integer', minimum: -2000, maximum: 2000 } }, ['action', 'x', 'y'], [3], { rollback: '点击可能已产生业务副作用，失败先查询游戏状态；不自动重复点击' });
     this.add('preview.stop', 'F43', '停止项目预览', 'runtime', {}, [], [2, 3], { supportedMajors: [3] });
@@ -141,8 +145,15 @@ export class Operations {
         platforms: ['development-runtime'], prerequisites: ['开发构建运行时桥接'],
         ...(id === 'invoke' ? { risks: ['仅允许公开引擎 API，禁止私有成员和危险构造'], rollback: '运行时重启后句柄自动失效' } : {}) });
     }
+    this.rows.push(...new Creator2ExpansionCapabilities().list());
     this.rows.push(...new ShaderCapabilities().list());
     this.rows.push(...new SceneProductionCapabilities().list());
+    const creator2 = new Set(['project.settings.get', 'project.settings.set', ...Creator2Support.base, ...Creator2Support.scene, ...Creator2Support.runtime, ...Creator2Support.preview]);
+    for (const row of this.rows) if (creator2.has(row.id)) {
+      if (!row.versions.includes(2)) row.versions.unshift(2);
+      if (row.prerequisites) row.prerequisites = row.prerequisites.map(text => text.replace(/Creator 3\.8\.8/g, 'Creator 2.4.15 或 3.8.8（按版本分别适配）'));
+      if (!row.supportedMajors?.includes(2)) row.supportedMajors?.unshift(2);
+    }
     return this.rows;
   }
 }

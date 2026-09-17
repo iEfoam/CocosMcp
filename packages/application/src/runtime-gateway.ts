@@ -118,7 +118,8 @@ export class RuntimeGateway implements RuntimeExecutor {
         const id = Json.string(body.commandId, 'commandId'); const candidate = this.pending.get(id);
         const pending = candidate?.sessionId === session.id ? candidate : undefined;
         if (pending) {
-          if (body.error) { const error = Json.object(body.error); pending.reject(new CocosError('RUNTIME_ERROR', String(error.message), body.error)); }
+          // 保留原生协议的过期计划等可恢复错误；未知错误仍归为 RUNTIME_ERROR。
+          if (body.error) pending.reject(CocosError.from(body.error, 'RUNTIME_ERROR'));
           else pending.resolve(body.result ?? null);
         }
         reply(200, { accepted: Boolean(pending) }); return;

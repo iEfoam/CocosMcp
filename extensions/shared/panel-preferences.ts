@@ -8,10 +8,9 @@ export interface PanelMenuHost {
   MainMenu?: { remove(path: string): void; add(path: string, options: MenuEntry): void; apply(): void };
 }
 const menuLabels = [
-  { zh: '启动桥接', en: 'Start Bridge', message: 'start' },
-  { zh: '停止桥接', en: 'Stop Bridge', message: 'stop' },
-  { zh: '显示连接状态', en: 'Connection Status', message: 'status' },
+  { zh: '关于 CocosMCP', en: 'About CocosMCP', message: 'about' },
   { zh: '打开控制中心', en: 'Open Control Center', message: 'open' },
+  { zh: '检查更新', en: 'Check for Updates', message: 'check-updates' },
 ];
 
 /** 扩展独立保存语言，不改变 Creator 自身或其他扩展的语言设置。 */
@@ -43,7 +42,7 @@ export class PanelPreferences {
     const menu = this.major === 3 ? this.editor.Menu : this.editor.MainMenu;
     if (!menu) throw new Error('Creator menu API is unavailable');
     // 使用 Creator 管理的菜单模型，兼容旧版 Electron，保留其他菜单的回调和快捷键。
-    for (const row of menuLabels.filter(row => this.major === 3 || row.message !== 'status')) {
+    for (const row of menuLabels) {
       if (this.major === 3) {
         const entry = { label: row[this.menuLocale], message: row.message, target: 'cocos-mcp-creator3' };
         this.editor.Menu!.remove('CocosMCP', entry);

@@ -72,7 +72,7 @@ export class BuildJobs {
     await this.persist(paths.root);
     await mkdir(join(cache, 'user-data'), { recursive: true });
     // 使用参数数组，不经过 shell；配置文件也避免了 --build 内的参数注入。
-    const child = spawn(installation.executable, [...(installation.major === 3 ? ['--home', creatorHome] : []), `--user-data-dir=${join(cache, 'user-data')}`, '--project', paths.root, '--build', `configPath=${configPath}`],
+    const child = spawn(installation.executable, [...(installation.major === 3 ? ['--home', creatorHome] : []), `--user-data-dir=${join(cache, 'user-data')}`, installation.major === 2 ? '--path' : '--project', paths.root, '--build', `configPath=${configPath}`],
       { cwd: paths.root, env: { ...paths.environment(), TMPDIR: temporary, TMP: temporary, TEMP: temporary, ELECTRON_ENABLE_LOGGING: '1' }, stdio: ['ignore', 'pipe', 'pipe'], shell: false });
     this.children.set(jobId, child); child.stdout?.pipe(log, { end: false }); child.stderr?.pipe(log, { end: false });
     child.once('error', error => { job.error = error.message; });

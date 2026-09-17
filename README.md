@@ -34,6 +34,8 @@ Work with scenes, nodes, components, assets, and runtime objects through structu
 
 The repository includes separate Creator 2.x and 3.x extensions, a standalone MCP service, a capability catalog, and a development runtime bridge. Registered operations span **54 functional modules**; registration, implementation, and verification are reported separately, so coverage is not a claim that every feature is complete.
 
+See the [Creator 2.4.15 implementation and acceptance record](docs/creator2-implementation.md) (Chinese) for the independent test project, native coverage, and remaining limitations.
+
 ## Capabilities
 
 | | Area | What you can do |

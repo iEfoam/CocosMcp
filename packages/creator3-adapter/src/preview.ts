@@ -3,11 +3,11 @@ import { CocosError, Json, type JsonObject, type JsonValue } from '../../contrac
 import type { EditorPort } from './port.js';
 
 export class PreviewService {
-  constructor(private readonly port: EditorPort) {}
+  constructor(private readonly port: Pick<EditorPort, 'preview' | 'version' | 'request' | 'scene'>) {}
 
   async execute(id: string, params: JsonObject): Promise<JsonValue> {
     if (!this.port.preview) throw new CocosError('UNSUPPORTED_CAPABILITY', 'Managed preview host is unavailable');
-    if (this.port.version !== '3.8.8') throw new CocosError('UNSUPPORTED_VERSION', 'Managed preview requires the inspected Creator 3.8.8 API');
+    if (!['3.8.8', '2.4.15'].includes(this.port.version)) throw new CocosError('UNSUPPORTED_VERSION', 'Managed preview requires Creator 2.4.15 or 3.8.8');
     if (id === 'preview.validate_viewports') {
       if (!Array.isArray(params.rows) || !params.rows.length || params.rows.length > 8) throw new CocosError('INVALID_ARGUMENT', 'Expected 1..8 viewports');
       const initial = Json.object(await this.port.preview('status', {}));

@@ -107,6 +107,14 @@ export class CocosError extends Error {
 
   static from(error: unknown, fallback: ErrorCode = 'INTERNAL_ERROR'): CocosError {
     if (error instanceof CocosError) return error;
+    // Electron IPC 会剥离 Error 原型；保留协议错误码与上下文，避免计划冲突退化成 [object Object]。
+    if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') {
+      const codes: ErrorCode[] = ['INVALID_ARGUMENT', 'NOT_FOUND', 'AMBIGUOUS_TARGET', 'UNSUPPORTED_CAPABILITY', 'UNSUPPORTED_VERSION', 'CONTEXT_UNAVAILABLE', 'STALE_REVISION', 'STALE_HANDLE', 'UNAUTHORIZED', 'PATH_OUTSIDE_PROJECT', 'OPERATION_CONFLICT', 'OUTCOME_UNKNOWN', 'CANCELLED', 'TIMEOUT', 'EDITOR_ERROR', 'RUNTIME_ERROR', 'VERIFICATION_FAILED', 'RESOURCE_BUSY', 'INTERNAL_ERROR'];
+      const code = 'code' in error && codes.includes(error.code as ErrorCode) ? error.code as ErrorCode : fallback;
+      let details: JsonValue | undefined;
+      if ('details' in error && error.details !== undefined) { try { details = Json.value(error.details); } catch { /* 非 JSON 上下文不应掩盖原始错误消息。 */ } }
+      return new CocosError(code, error.message, details);
+    }
     return new CocosError(fallback, error instanceof Error ? error.message : String(error));
   }
 }

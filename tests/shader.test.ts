@@ -1,3 +1,4 @@
+import { Creator2Support } from '../packages/capability-catalog/src/creator2-support.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, writeFile, symlink } from 'node:fs/promises';
@@ -36,7 +37,7 @@ test('Shader catalog rejects missing hash, unknown fields and unbounded workload
   assert.throws(() => catalog.validate('shader.compile', { url: 'x', arbitrary: true }), /additional/);
   assert.throws(() => catalog.validate('runtime.shader.profile', { frames: 301 }));
   assert.throws(() => catalog.validate('runtime.shader.preview.open', { materialUuid: 'x', width: 99999 }));
-  for (const row of catalog.search('', 'F22').rows) assert.deepEqual(row.supportedMajors, [3]);
+  for (const row of catalog.search('', 'F22').rows) assert.deepEqual(row.supportedMajors, [...Creator2Support.scene, ...Creator2Support.runtime, ...Creator2Support.preview].includes(row.id) ? [2, 3] : [3]);
 });
 
 test('variant plans deduplicate scalar axes and reject combinations before expansion', () => {

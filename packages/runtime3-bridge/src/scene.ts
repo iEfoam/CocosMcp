@@ -58,18 +58,24 @@ export class SceneInspector {
     const result: JsonObject = {};
     for (const key of props) {
       if (['node', '_name', '_objFlags'].includes(key)) continue;
+      // 2.x __props__ 也包含仅编辑器使用的枚举 getter；预览中执行它们会调用不存在的编辑器 API。
+      const descriptor = A.descriptor(component, key);
+      if (this.environment.major === 2 && descriptor?.get) { result[key] = { inspection: 'accessor-not-evaluated' }; continue; }
       const value = component[key];
       if (value && typeof value === 'object' && A.uuid(value)) result[key] = { uuid: A.uuid(value) };
+      else if (Array.isArray(value)) result[key] = value.map(entry => entry && typeof entry === 'object' && A.uuid(entry) ? { uuid: A.uuid(entry) } : A.safeData(entry));
       else result[key] = A.safeData(value);
     }
     return result;
   }
 
   summary(node: RuntimeObject, includeComponents = true, includeInternal = false): JsonObject {
-    const result: JsonObject = { nodeId: A.uuid(node), name: String(node.name ?? ''), active: Boolean(node.active),
+    // Creator 2 Scene 禁止读取 active/activeInHierarchy；以是否为当前场景表示其激活状态。
+    const result: JsonObject = { nodeId: A.uuid(node), name: String(node.name ?? ''), active: Boolean(this.environment.major === 2 && this.type(node) === 'cc.Scene' ? node === this.current() : node.active),
       parentId: node.parent ? A.uuid(node.parent) : null, children: (node.children as RuntimeObject[] ?? []).filter(child => includeInternal || !this.environment.editor || !(Number(child._objFlags ?? 0) & 8)).map(child => A.uuid(child)),
-      position: A.safeData(node.position), rotation: A.safeData(node.eulerAngles ?? node.angle), scale: A.safeData(node.scale),
+      position: A.safeData(node.position), rotation: A.safeData(node.eulerAngles ?? node.angle), scale: this.environment.major === 2 ? { x: Number(node.scaleX), y: Number(node.scaleY), z: Number(node.scaleZ) } : A.safeData(node.scale),
       layer: A.safeData(node.layer ?? node.groupIndex) };
+    if (this.environment.major === 2) Object.assign(result, { size: { width: Number(node.width), height: Number(node.height) }, anchor: { x: Number(node.anchorX), y: Number(node.anchorY) }, prefab: node._prefab ? { assetUuid: A.uuid(A.object(node._prefab).asset), rootId: A.uuid(A.object(node._prefab).root) } : null, opacity: Number(node.opacity), color: A.safeData(node.color), groupIndex: Number(node.groupIndex), scale: { x: Number(node.scaleX), y: Number(node.scaleY), z: Number(node.scaleZ) } });
     if (includeComponents) result.components = this.components(node).map(component => ({ componentId: A.uuid(component), type: this.type(component), enabled: Boolean(component.enabled), properties: this.properties(component) }));
     return result;
   }

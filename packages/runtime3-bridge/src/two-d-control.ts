@@ -83,12 +83,14 @@ export class TwoDControl {
   }
   tilemap(id: string, p: JsonObject): JsonValue {
     const map = id.endsWith('.inspect'), c = this.component(Json.string(p.componentId, 'componentId'), map ? 'TiledMap' : 'TiledLayer');
-    if (map) return { componentId: A.uuid(c), rows: (A.call(c, 'getLayers') as RuntimeObject[]).map(layer => ({ componentId: A.uuid(layer), name: String(A.call(layer, 'getLayerName')), size: A.safeData(A.call(layer, 'getLayerSize')) })),
-      objectGroups: (A.call(c, 'getObjectGroups') as RuntimeObject[]).map(group => ({ componentId: A.uuid(group), name: String(A.call(group, 'getGroupName')) })) };
+    if (map) return { componentId: A.uuid(c), mapSize: A.safeData(A.call(c, 'getMapSize')), tileSize: A.safeData(A.call(c, 'getTileSize')), orientation: A.safeData(A.call(c, 'getMapOrientation')), rows: (A.call(c, 'getLayers') as RuntimeObject[]).map(layer => ({ componentId: A.uuid(layer), name: String(A.call(layer, 'getLayerName')), size: A.safeData(A.call(layer, 'getLayerSize')) })),
+      objectGroups: (A.call(c, 'getObjectGroups') as RuntimeObject[]).map(group => { const objects = A.call(group, 'getObjects') as RuntimeObject[]; return { componentId: A.uuid(group), name: String(A.call(group, 'getGroupName')), properties: A.safeData(A.call(group, 'getProperties')), rows: objects.slice(0, 500).map(row => A.safeData(row)), total: objects.length, truncated: objects.length > 500 }; }) };
     const size = A.object(A.call(c, 'getLayerSize'));
+    // 2.4.15 在转换重载参数前检查 !pos，数字 x=0 会误报；始终使用 Vec2 重载。
+    const coordinates = (x: number, y: number): unknown[] => this.scene.environment.major === 2 ? [A.construct(this.cc.Vec2, [x, y])] : [x, y];
     const cell = (x: number, y: number): JsonObject => {
       if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= Number(size.width) || y >= Number(size.height)) throw new CocosError('INVALID_ARGUMENT', 'Tile coordinates outside layer');
-      return { x, y, gid: Json.value(A.call(c, 'getTileGIDAt', x, y)), flags: Json.value(A.call(c, 'getTileFlagsAt', x, y)), position: A.safeData(A.call(c, 'getPositionAt', x, y)) };
+      return { x, y, gid: Json.value(A.call(c, 'getTileGIDAt', ...coordinates(x, y))), flags: Json.value(A.call(c, 'getTileFlagsAt', ...coordinates(x, y))), position: A.safeData(A.call(c, 'getPositionAt', ...coordinates(x, y))) };
     };
     if (id.endsWith('.query_region')) {
       const width = Number(p.width), height = Number(p.height), rows: JsonObject[] = [];
@@ -111,7 +113,7 @@ export class TwoDControl {
     try {
       for (const row of rows) {
         pending = row;
-        A.call(c, 'setTileGIDAt', row.after.gid, row.after.x, row.after.y, row.after.flags);
+        A.call(c, 'setTileGIDAt', row.after.gid, ...coordinates(row.after.x, row.after.y), row.after.flags);
         const actual = cell(row.after.x, row.after.y);
         if (actual.gid !== row.after.gid || actual.flags !== row.after.flags) throw new CocosError('VERIFICATION_FAILED', 'Tile GID not available in tileset or readback mismatch');
         completed.push({ ...row, actual }); pending = null;

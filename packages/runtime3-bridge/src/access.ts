@@ -90,7 +90,7 @@ export class RuntimeAccess {
     return undefined;
   }
 
-  static uuid(value: unknown): string { const object = RuntimeAccess.object(value); return String(object.uuid ?? object._id ?? ''); }
+  static uuid(value: unknown): string { if (value === null || value === undefined) return ''; const object = RuntimeAccess.object(value); return String(object.uuid ?? object._uuid ?? object._id ?? ''); }
 
   static safeData(value: unknown, depth = 0, seen = new Set<unknown>()): JsonValue {
     if (value === null || value === undefined) return null;

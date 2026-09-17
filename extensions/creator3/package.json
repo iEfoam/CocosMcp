@@ -7,31 +7,31 @@
   "description": "免费开源的 AI 编辑器桥接：连接 MCP 客户端与 Creator 场景、资源和开发运行时。",
   "author": "iefoam@foxmail.com",
   "homepage": "https://github.com/iEfoam/CocosMcp",
-  "repository": { "type": "git", "url": "https://github.com/iEfoam/CocosMcp.git" },
-  "bugs": { "url": "https://github.com/iEfoam/CocosMcp/issues" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/iEfoam/CocosMcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/iEfoam/CocosMcp/issues"
+  },
   "license": "MIT",
   "main": "./dist/main.cjs",
   "contributions": {
     "menu": [
       {
         "path": "CocosMCP",
-        "label": "启动桥接",
-        "message": "start"
-      },
-      {
-        "path": "CocosMCP",
-        "label": "停止桥接",
-        "message": "stop"
-      },
-      {
-        "path": "CocosMCP",
-        "label": "显示连接状态",
-        "message": "status"
+        "label": "关于 CocosMCP",
+        "message": "about"
       },
       {
         "path": "CocosMCP",
         "label": "打开控制中心",
         "message": "open"
+      },
+      {
+        "path": "CocosMCP",
+        "label": "检查更新",
+        "message": "check-updates"
       }
     ],
     "messages": {
@@ -83,6 +83,21 @@
       "copy-log": {
         "methods": [
           "copyLog"
+        ]
+      },
+      "about": {
+        "methods": [
+          "about"
+        ]
+      },
+      "check-updates": {
+        "methods": [
+          "checkUpdates"
+        ]
+      },
+      "extension-check": {
+        "methods": [
+          "checkExtension"
         ]
       }
     },

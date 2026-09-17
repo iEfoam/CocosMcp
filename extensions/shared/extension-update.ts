@@ -25,8 +25,10 @@ export class ExtensionUpdate {
       try { accept(JSON.parse(stdout)); } catch { reject(new Error('更新器返回无效版本信息')); }
     }));
   }
-  check(): void {
-    if (this.checking || this.pending || Date.now() < this.nextCheck) return;
+  check(force = false): void {
+    if (this.checking || this.pending || (!force && Date.now() < this.nextCheck)) return;
+    this.message = null;
+    this.latestVersion = undefined;
     this.nextCheck = Date.now() + 5 * 60 * 1000;
     this.checking = Promise.resolve().then(() => this.invoke('check')).then(result => { this.latestVersion = result.version; }).catch(error => { this.message = `检查更新失败：${error instanceof Error ? error.message : String(error)}`; }).finally(() => { this.checking = undefined; });
   }

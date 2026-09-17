@@ -1,6 +1,6 @@
 import { Ajv } from 'ajv';
 import { AnimationCapabilities } from '../../capability-catalog/src/animation.js';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { readFile, writeFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { CocosError, Json, type JsonObject, type JsonValue } from '../../contracts/src/index.js';
@@ -8,7 +8,7 @@ import { ProjectPaths } from '../../application/src/paths.js';
 import type { EditorPort } from './port.js';
 
 export class AnimationEditService {
-  constructor(private readonly port: EditorPort) {}
+  constructor(private readonly port: Pick<EditorPort, 'version' | 'projectPath' | 'scene' | 'request'>) {}
   private hash(content: string): string { return createHash('sha256').update(content).digest('hex'); }
   private async read(url: string): Promise<JsonObject> {
     if (!url.endsWith('.anim')) throw new CocosError('INVALID_ARGUMENT', 'Expected .anim asset URL');
@@ -19,7 +19,7 @@ export class AnimationEditService {
     return { url, content, sourceHash: this.hash(content), uuid: asset.uuid };
   }
   async execute(id: string, p: JsonObject): Promise<JsonValue> {
-    if (this.port.version !== '3.8.8') throw new CocosError('UNSUPPORTED_VERSION', 'Animation editing requires Creator 3.8.8');
+    if (!['3.8.8', '2.4.15'].includes(this.port.version)) throw new CocosError('UNSUPPORTED_VERSION', 'Animation editing requires Creator 3.8.8');
     const capability = new AnimationCapabilities().list().find(row => row.id === id);
     if (!capability || !new Ajv({ strict: true }).compile(capability.inputSchema)(p)) throw new CocosError('INVALID_ARGUMENT', 'Invalid animation edit parameters');
     const url = Json.string(p.url, 'url'), before = await this.read(url);
@@ -29,7 +29,7 @@ export class AnimationEditService {
     let content: string, backupId: string;
     if (id === 'animation.clip.patch') {
       const serialized = await this.port.scene('animation.clip.patchSource', { content: before.content!, patches: p.patches! });
-      content = JSON.stringify(serialized); backupId = randomUUID();
+      content = JSON.stringify(serialized); backupId = `${randomBytes(4).toString('hex')}-${randomBytes(2).toString('hex')}-${randomBytes(2).toString('hex')}-${randomBytes(2).toString('hex')}-${randomBytes(6).toString('hex')}`;
       const directory = await paths.work('cache', 'animation-backups');
       await writeFile(join(directory, `${backupId}.json`), JSON.stringify(before), { flag: 'wx', mode: 0o600 });
     } else if (id === 'animation.clip.restore') {

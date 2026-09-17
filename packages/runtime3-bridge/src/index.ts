@@ -1,3 +1,11 @@
+import { Creator2PhysicsContact } from '../../runtime2-bridge/src/physics-contact.js';
+import { Creator2SpineEvents } from '../../runtime2-bridge/src/spine-events.js';
+import { Creator2DragonBonesEvents } from '../../runtime2-bridge/src/dragonbones-events.js';
+import { Creator2Tween } from '../../runtime2-bridge/src/tween.js';
+import { Creator2Collision } from '../../runtime2-bridge/src/collision.js';
+import { Creator2Material } from '../../runtime2-bridge/src/material.js';
+import { Creator2Support } from '../../capability-catalog/src/creator2-support.js';
+import { Creator2Features } from '../../runtime2-bridge/src/features.js';
 import { GraphicsInspector } from './graphics.js';
 import { TwoDInspector } from './two-d-inspector.js';
 import { TwoDControl } from './two-d-control.js';
@@ -18,6 +26,7 @@ import { PhysicsQueries } from './physics.js';
 import { MediaController } from './media.js';
 import { AnimationController } from './animation-control.js';
 import { RuntimeAssets } from './assets.js';
+import { RuntimeTaskSessions } from './task-session.js';
 
 interface Handle { value: unknown; owned: boolean; generation: number }
 interface Subscription { owner: RuntimeObject; event: string; callback: (...args: unknown[]) => void }
@@ -32,14 +41,18 @@ export class RuntimeController {
   private nextEvent = 0;
   private scene: unknown;
   private cleanupErrors: JsonObject[] = [];
+  private readonly creator2Materials: Creator2Material;
   private readonly materials: MaterialController;
   private readonly shaderPreview: ShaderPreview;
   private readonly assets: RuntimeAssets;
   private readonly frames: FrameSession;
   private readonly debug: DebugOverlayController;
+  private readonly tasks: RuntimeTaskSessions;
 
   constructor(private readonly environment: SceneEnvironment, private readonly eventCapacity = 1000, private readonly policy = new RuntimePolicy()) {
     this.inspector = new SceneInspector(environment);
+    this.tasks = new RuntimeTaskSessions(environment.cc);
+    this.creator2Materials = new Creator2Material(this.inspector);
     this.materials = new MaterialController(environment);
     this.shaderPreview = new ShaderPreview(environment, this.materials);
     this.assets = new RuntimeAssets(environment.cc);
@@ -112,6 +125,30 @@ export class RuntimeController {
   }
 
   async execute(id: string, p: JsonObject): Promise<JsonValue> {
+    if (this.environment.major === 2 && !Creator2Support.runtime.includes(id)) throw new CocosError('UNSUPPORTED_CAPABILITY', `Creator 2 runtime does not implement ${id}`);
+    if (this.environment.major === 2 && ['runtime.physics2d.contact_trace_start', 'runtime.spine.trace_start', 'runtime.dragonbones.trace_start', 'runtime.tween.plan', 'runtime.tween.start', 'runtime.collision2d.trace_start', 'runtime.task.poll', 'runtime.task.stop'].includes(id)) {
+      if (A.engineVersion(this.environment.cc) !== '2.4.15') throw new CocosError('UNSUPPORTED_VERSION', 'Runtime task adapter requires Creator 2.4.15');
+      this.synchronize();
+      if (id === 'runtime.physics2d.contact_trace_start') return this.tasks.start((frames, progress) => new Creator2PhysicsContact(this.inspector).trace(p, frames, progress));
+      if (id === 'runtime.spine.trace_start') return this.tasks.start((frames, progress) => new Creator2SpineEvents(this.inspector).trace(p, frames, progress));
+      if (id === 'runtime.dragonbones.trace_start') return this.tasks.start((frames, progress) => new Creator2DragonBonesEvents(this.inspector).trace(p, frames, progress));
+      if (id === 'runtime.tween.plan') return new Creator2Tween(this.inspector).plan(p);
+      if (id === 'runtime.tween.start') return this.tasks.start((frames, progress) => new Creator2Tween(this.inspector).run(p, frames, progress));
+      if (id === 'runtime.task.poll') return this.tasks.poll(p);
+      if (id === 'runtime.task.stop') return this.tasks.stop(p);
+      return this.tasks.start((frames, progress) => new Creator2Collision(this.inspector).trace(p, frames, progress));
+    }
+    if (this.environment.major === 2 && id === 'runtime.collision2d.trace') {
+      if (A.engineVersion(this.environment.cc) !== '2.4.15') throw new CocosError('UNSUPPORTED_VERSION', 'Collision trace requires Creator 2.4.15');
+      this.synchronize(); return new Creator2Collision(this.inspector).trace(p, this.frames);
+    }
+    if (this.environment.major === 2 && id.startsWith('runtime.tilemap.')) {
+      if (A.engineVersion(this.environment.cc) !== '2.4.15') throw new CocosError('UNSUPPORTED_VERSION', 'Tilemap adapter requires Creator 2.4.15');
+      this.synchronize(); return new TwoDControl(this.inspector, this.frames).tilemap(id, p);
+    }
+    if (this.environment.major === 2 && id === 'runtime.shader.profile') { this.synchronize(); return new Creator2Features(this.inspector).profile(p, this.frames); }
+    if (this.environment.major === 2 && id.startsWith('runtime.material.')) { this.synchronize(); return this.creator2Materials.execute(id, p); }
+    if (this.environment.major === 2 && Creator2Features.ids.includes(id)) { this.synchronize(); return new Creator2Features(this.inspector).execute(id, p); }
     if (FeatureSupport.owns(id) && A.engineVersion(this.environment.cc) !== '3.8.8') return FeatureSupport.unsupported(id, '当前适配仅支持 Creator 3.8.8', { actualVersion: A.engineVersion(this.environment.cc) });
     this.synchronize();
     if (/^runtime\.(ui|render2d|label|atlas|spine|tilemap)\./.test(id) || id === 'runtime.physics2d.trace_contacts') return FeatureSupport.run(id, A.engineVersion(this.environment.cc), async () => {
@@ -154,14 +191,14 @@ export class RuntimeController {
       return new AnimationController(this.inspector).execute(id, p);
     }
     if (id.startsWith('runtime.asset.') || id === 'runtime.bundle.inspect') {
-      if (this.environment.major !== 3 || A.engineVersion(this.environment.cc) !== '3.8.8') throw new CocosError('UNSUPPORTED_VERSION', 'Runtime asset tools require Creator 3.8.8');
+      if (!((this.environment.major === 3 && A.engineVersion(this.environment.cc) === '3.8.8') || (this.environment.major === 2 && A.engineVersion(this.environment.cc) === '2.4.15'))) throw new CocosError('UNSUPPORTED_VERSION', 'Runtime asset tools require Creator 2.4.15 or 3.8.8');
       return this.assets.execute(id, p);
     }
     if (id.startsWith('runtime.material.') || id === 'runtime.shader.variants.compile') return this.materials.execute(id, p);
     if (id.startsWith('runtime.shader.')) return this.shaderPreview.execute(id, p);
     const str = (key: string): string => Json.string(p[key], key);
     switch (id) {
-      case 'runtime.query': return { scene: this.inspector.sceneInfo(), engineVersion: A.engineVersion(this.environment.cc), generation: this.generation, cleanupErrors: this.cleanupErrors };
+      case 'runtime.query': return { scene: this.inspector.sceneInfo(), engineVersion: A.engineVersion(this.environment.cc), generation: this.generation, cleanupErrors: this.cleanupErrors, componentIdentity: this.environment.major === 2 ? 'runtime-local-read-hierarchy-after-connect' : 'scene-component-id' };
       case 'runtime.hierarchy': return this.inspector.hierarchy(p);
       case 'runtime.types': return { rows: A.propertyNames(this.environment.cc).map(name => {
         const descriptor = A.descriptor(this.environment.cc, name);
@@ -247,7 +284,7 @@ export class RuntimeController {
         return { nodeCount: rows.length, componentCount: rows.reduce((sum, node) => sum + this.inspector.components(node).length, 0),
           deltaTime: typeof director.getDeltaTime === 'function' ? Number(A.call(director, 'getDeltaTime')) : null,
           totalFrames: typeof director.getTotalFrames === 'function' ? Number(A.call(director, 'getTotalFrames')) : null,
-          unavailableMetrics: ['gpu-memory', 'draw-calls', 'triangles'] };
+          drawCalls: this.environment.major === 2 && this.environment.cc.renderer ? A.safeData(A.object(this.environment.cc.renderer).drawCalls) : null, unavailableMetrics: this.environment.major === 2 ? ['gpu-memory', 'triangles'] : ['gpu-memory', 'draw-calls', 'triangles'] };
       }
       default: throw new CocosError('UNSUPPORTED_CAPABILITY', `Unknown runtime capability: ${id}`);
     }
@@ -265,7 +302,8 @@ export class RuntimeController {
   private clearSession(): void {
     // 每项独立收敛；一项原生释放异常不能阻止取消订阅和使旧句柄失效。
     this.generation++;
-    const cleanup: Array<[string, () => void]> = [['frames', () => this.frames.dispose()], ['debug', () => this.debug.dispose()], ['assets', () => this.assets.dispose()], ['shader-preview', () => this.shaderPreview.dispose()], ['materials', () => this.materials.dispose()], ['subscriptions', () => this.clearSubscriptions()]];
+    this.tasks.dispose();
+    const cleanup: Array<[string, () => void]> = [['creator2-materials', () => this.creator2Materials.dispose()], ['frames', () => this.frames.dispose()], ['debug', () => this.debug.dispose()], ['assets', () => this.assets.dispose()], ['shader-preview', () => this.shaderPreview.dispose()], ['materials', () => this.materials.dispose()], ['subscriptions', () => this.clearSubscriptions()]];
     const failures: JsonObject[] = [];
     for (const [scope, action] of cleanup) {
       try { action(); } catch (error) { failures.push({ scope, message: CocosError.from(error).message }); }
