@@ -2,6 +2,14 @@
 
 本次修复针对 Creator 3.8.8 火焰示例暴露的实际问题。原方案的体积采样成本属于特效实现问题，不能归因为 MCP 协议吞吐。性能采样仍是整帧墙钟时间，不是独立 Shader 的 GPU 时间。
 
+## 2026-09-18 Creator 2.4.15 补充
+
+后文保留 3.8.8 火焰样例的历史性能数据。2.4.15 独立验证了控件真实输入，以及碰撞/Tween/骨骼/Box 接触任务的取消和部分断连/切场景路径；各功能边界见 [版本矩阵](version-support.md) 和 [台账](creator2-expansion-tracker.md)，不能泛化为全部工具。
+
+FrameSession 等待单帧超过 2000 ms 返回 CONTEXT_UNAVAILABLE，附 timeoutMs、gamePaused、directorPaused；无法读取时为 null，不自动 resume。2.4.15 原生暂停测试确认超时后仍暂停。一次现场 gamePaused=true 不足以推断窗口事件来源或解释所有历史超时。
+
+异步任务通过 runtime.task.poll/stop 查询取消，30 秒截止、最多 4 个运行任务与 8 个保留记录；检查 dropped。清理失败保持 OUTCOME_UNKNOWN，不因取消而改为成功。2.x 专属任务不自动在 3.x 开放。
+
 ## 纹理与运行实例
 
 - 材质纹理引用按公开的 `Texture2D`、`TextureCube`、`RenderTexture` 类型校验，兼容可用的 `TextureBase`，不再要求 `cc.TextureBase` 必须导出。`ImageAsset` 仍不能直接作为 sampler 纹理。

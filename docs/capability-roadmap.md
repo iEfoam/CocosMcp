@@ -4,14 +4,14 @@
 
 目标是让 Agent 在明确的 Creator 版本、工程、场景和运行时上下文内，完成可预览、可执行、可校验、可恢复的开发任务。不能把全部原生 API 机械包装后称为“完整支持”。
 
-本方案中的能力 ID 起初均为建议设计；当前已落地入口与未完成项以 [阶段实现说明](roadmap-implementation.md) 为准，未列入已实现清单的建议接口仍不可调用。实现前须检查当前安装的 Creator 消息、类型声明和引擎源码。第一条完整适配线为 Creator 3.8.8；Creator 2.4.x 和其他 3.x 版本分别建立兼容矩阵，不自动继承验证状态。
+建议 ID 不等于已注册工具。2026-09-18 当前范围以 [版本矩阵](version-support.md)、[阶段记录](roadmap-implementation.md) 和 [2.4.15 台账](creator2-expansion-tracker.md) 为准。两条精确适配线是 2.4.15 / 3.8.8，均未宣布全部规划完成；其他版本不自动继承验证。实现前须核对安装版消息、声明和源码。
 
 现有基础继续复用：
 
 - `packages/capability-catalog`：能力 Schema、支持范围、独立服务工具、覆盖统计和验收证据。
 - `packages/application` / `packages/editor-bridge`：目标路由、工程队列、operationId、revision、结果记录与失败语义。
-- `packages/creator3-adapter` / `extensions/creator3`：Editor/AssetDB 适配、原生消息与 scene 脚本。
-- `packages/runtime3-bridge`：受控运行时对象、资源生命周期及实际帧验证。
+- `packages/creator2-adapter` / `extensions/creator2` 与 `packages/creator3-adapter` / `extensions/creator3`：分别适配 Editor/AssetDB、原生消息与 scene 脚本。
+- `packages/runtime3-bridge`：共享受控对象/帧会话基础与 3.x 功能；`packages/runtime2-bridge`：2.4.15 独立功能、单位和生命周期适配。
 - `packages/native-adapters`：编辑器发现、构建与后续设备工具；平台命令必须限定目标、参数和产物目录。
 
 工程约束：新资源先 `asset.location`，复用已有类型目录；已有资源移动只走 AssetDB。运行记录、截图、缓存和构建产物只写 `.codex-work/`。不自动保存脏场景，不执行任意 eval，不跨工程操作，不把资源 UUID 不变当作字符串加载路径必然正确。

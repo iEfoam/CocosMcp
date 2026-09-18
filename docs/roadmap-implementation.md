@@ -1,6 +1,6 @@
 # 路线图阶段实现与使用说明
 
-这是路线图的持续实现记录，**不是整份路线图完成声明**。P0 保持现有实现；P1、P2、P3 部分入口已有代码，P4 已开始图形设备只读查询，P5 已有构建产物检查，设备与交付流程仍未实施。所有新入口限定 Creator 3.8.8，Creator 2.x 不继承支持。默认工具列表包含 `cocos_ui_build`；其余通过能力搜索和 `cocos_capability_execute` 调用，或在 all-tools 模式访问。
+这是路线图的持续实现记录，**不是整份路线图完成声明**。P0 保持现有实现；P1、P2、P3 部分入口已有代码，P4 已开始图形设备只读查询，P5 已有构建产物检查，设备与交付流程仍未实施。下文原始实现细节以 Creator 3.8.8 为准；后续 2.4.15 已独立适配 UI、资源、动画、预览、媒体和物理等子集，当前范围见 [版本矩阵](version-support.md)，不能继续将整批入口视为 2.x 一律不支持。默认工具列表包含 `cocos_ui_build`；其余通过能力搜索和 `cocos_capability_execute` 调用，或在 all-tools 模式访问。
 
 ## 已实现入口
 
@@ -17,7 +17,11 @@
 | 媒体 | `runtime.audio.state/play/pause/stop/seek`、`runtime.video.state/play/pause/stop/seek`、`runtime.webview.inspect` | 原生组件控制；WebView 只读；不宣称平台播放验收 |
 | 运行时资源 | `runtime.asset.load/preload/inspect/release`、`runtime.bundle.inspect` | 本地完整 UUID；工具引用生命周期；Bundle 只读查询 |
 
-上一轮新增 29 个入口，本轮再新增 10 个入口；能力操作从 169 项增加到 179 项（独立服务工具另行统计）。模块仍为 partial；源码测试证据不替代 Creator、GPU、真机和保存重开结果。
+历史批次先增加 29 个入口、再增加 10 个，从 169 增至 179，这是当时数据；2026-09-18 全局目录为 285 个入口，独立服务工具另计，统计口径见版本矩阵。模块仍为 partial；源码测试证据不替代 Creator、GPU、真机和保存重开结果。
+
+## Creator 2.4.15 后续实现
+
+2.4.15 使用 Node 映射 UITransform/UIOpacity、curveData、独立 AssetDB 和材质/Box2D API。已有结构计划、引用守卫、控件真实输入、资源趋势、Tween/骨骼生命周期、Camera 像素及接触清理；完整状态见 [台账](creator2-expansion-tracker.md)。下文 VectorTrack、UI_2D、3D raycast、font.inspect 等细节仍限对应 3.x 实现。
 
 ## 声明式 UI
 

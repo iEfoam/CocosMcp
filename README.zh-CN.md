@@ -15,6 +15,7 @@
 
 <p align="center">
   <a href="#快速开始">快速开始</a> ·
+  <a href="#按-creator-版本支持的功能">版本支持</a> ·
   <a href="#核心能力">核心能力</a> ·
   <a href="#文档导航">文档导航</a> ·
   <a href="#验证与安全边界">验证与安全边界</a>
@@ -35,6 +36,31 @@
 仓库包含 Creator 2.x / 3.x 独立扩展、独立 MCP 服务、能力目录和开发运行时桥接。已注册操作覆盖 **54 个功能模块**，注册、实现与验证分别统计，不把注册覆盖率当作全部功能已完成。
 
 Creator 2.4.15 的新增适配、独立测试工程、原生覆盖结果和未完成项见 [适配与验收记录](docs/creator2-implementation.md)。
+
+## 按 Creator 版本支持的功能
+
+当前精确适配基线为 **Creator 2.4.15** 和 **Creator 3.8.8**。下表列出已实现的能力范围；“有原生记录”仅代表对应场景和参数得到验证，不表示整类功能、所有平台或整个引擎已完成验收。其他 2.x / 3.x 版本不自动继承支持。
+
+| 功能 | Creator 2.4.15 | Creator 3.8.8 |
+| --- | --- | --- |
+| 编辑器与资源 | 场景、节点、组件、Prefab、Undo/Redo、AssetDB、目录整理、依赖/使用者 | 同类基础编辑；另有原生控制台读取、版本匹配的编辑器消息 |
+| UI 与引用 | 声明式创建/更新、结构计划/应用、场景及保存文件引用审计、删除守卫 | 声明式创建/更新、布局/事件检查；2.x 专属结构与引用入口不自动通用 |
+| 控件与预览 | 五类控件语义操作；真实拖动/点击/输入事件；窗口、截图、日志、尺寸 | 窗口、截图、日志、鼠标/键盘/触摸、多尺寸检查；已有菜单交互记录 |
+| 动画与动作 | curveData 编辑恢复；有界 Tween 顺序/并行/重复、取消与生命周期 | 原生轨道及动画控制、动画图观测；不包含 2.x 专属 Tween 任务入口 |
+| 骨骼 | Spine / DragonBones 结构、缓存边界、事件任务、实时混合与清理，有原生记录 | Spine 播放/队列/皮肤/附件、轨道采样；不继承 2.x 的缓存/事件/混合专项结论 |
+| 2D 地图与物理 | 正交/等距 Tilemap；普通碰撞、刚体施力、关节检查、Box 接触与清理 | Tilemap、物理查询/接触工具；按实际后端验证，3D CCT 有独立路线记录 |
+| 相机与渲染 | 2D/3D 坐标、掩码、2D Graphics/Mask 离屏像素及自有 GPU 对象删除 | 几何体/阵列/渲染设置、Shader RenderTexture 预览、调试绘制/排序/探针/IK |
+| Shader 与材质 | Effect 源码/备份、材质属性/宏、运行时覆盖恢复；不含 3.x 编译器 | 原生 Effect 编译、依赖指纹、材质实例、宏变体和预览比较 |
+| 资源生命周期 | 加载/释放、Bundle 查询、快照/差异/连续切场景趋势 | 加载/释放、Bundle 查询；不宣称同名 2.x 快照/趋势入口可用 |
+| 游戏组件模板 | 2.x 模板尚未交付 | 13 种可编辑模板：控制器、镜头、虚拟列表、对白、对象池等；完整玩法未逐项验收 |
+| 媒体与诊断 | 音视频、粒子基础控制，UI/Label/图集/Graphics 诊断 | 音视频、粒子及性能/渲染诊断；平台体验和 GPU 性能需独立验证 |
+| 工作流与构建 | 本地工作流、CLI 任务；游戏构建存在已记录环境失败 | 本地工作流、CLI 任务与产物检查；签名、真机、SDK 和发布单独验收 |
+
+截至 2026-09-18，2.4.15 显式登记最多 **112 个编辑器入口 + 99 个运行时入口**；3.x 在目录中有 **246 个版本适用条目**。这些是接线/目录计数，不是当前可用数或原生通过数，也不是默认 MCP 工具列表长度。最近代码回归 **249 项通过**；本轮原生扩展在独立 2.4.15 工程验收，尚未同步 Texas。
+
+**仍未完成**：2.4.15 的其他关节、Prefab 差异/修复、图片字体图集质量、加载轨迹、TMX 持久化、2.x 模板、材质管线、视图 focus/grid、单步/Scheduler 等。2.4.15 游戏构建仍有 `exportSimpleProject` 与 FBX 转换器错误；插件构建通过不代表游戏可成功发布。3.8.8 后处理/蒙皮也有明确限制。
+
+详细功能、证据与缺口见[版本支持矩阵](docs/version-support.md)、[2.4.15 适配记录](docs/creator2-implementation.md)和[完整验收台账](docs/creator2-expansion-tracker.md)。
 
 ## 核心能力
 
@@ -65,7 +91,7 @@ pnpm install
 pnpm check
 ```
 
-`pnpm check` 执行类型检查、构建和测试。项目配置将构建与测试产物统一放在 `.codex-work/` 下。
+`pnpm check` 按类型检查 → 构建 → 测试 → 构建执行，末次构建嵌入匹配源码的测试证据。项目配置将构建与测试产物统一放在 `.codex-work/` 下。
 
 ### 2. 安装编辑器扩展
 
@@ -82,7 +108,7 @@ pnpm start install \
 | Creator 2.x | `packages/cocos-mcp-creator2/` |
 | Creator 3.x | `extensions/cocos-mcp-creator3/` |
 
-安装器会备份已有同名扩展。在 Creator 中打开工程、加载扩展，从编辑器菜单打开 **CocosMCP** 控制中心。MCP 服务自动发现受保护的实例描述文件，并按工程、编辑器版本和实例 ID 路由请求。
+安装器会备份已有同名扩展。在 Creator 中打开工程、加载扩展，通过 **CocosMCP → 打开控制中心** 进入。菜单顺序为 **关于 CocosMCP → 打开控制中心 → 检查更新**，关于和更新有对应页面，桥接启停保留在控制中心内。MCP 服务自动发现受保护的实例描述文件，并按工程、编辑器版本和实例 ID 路由请求。
 
 ### 3. 检查连接并启动 MCP
 
@@ -103,7 +129,7 @@ HTTP 仅绑定 `127.0.0.1`，要求 Bearer token，并拒绝非本地 Host/Origi
 
 ## 规划工作流
 
-向 `cocos_workflow_plan` 传入如下步骤，并将场景 URL 替换为工程中已有的场景：
+向 `cocos_workflow_plan` 传入如下步骤，并将场景 URL 替换为工程中已有的场景（Creator 3 使用 `.scene`，Creator 2 使用 `.fire`）：
 
 ```json
 {
@@ -118,7 +144,7 @@ HTTP 仅绑定 `127.0.0.1`，要求 Bearer token，并拒绝非本地 Host/Origi
 
 计划阶段校验参数、版本、风险和副作用。计划有效且所需授权已具备后，使用 `cocos_workflow_execute` 执行。默认失败即停，并返回已完成步骤和补偿提示。工作流不提供通用回滚，应根据各项能力的 `rollback` 提示设计补偿步骤。服务重启后可通过 `cocos_workflow_status` 查询已持久化的进度。
 
-步骤支持 `paramRefs` 引用之前的结果、`runtimeRef` 绑定预览运行实例，以及只读 `waitFor` 就绪等待。同一工作流 ID 不可重复执行。详见[预览可靠性与性能工作流](docs/mcp-reliability-and-performance.md)。
+步骤支持 `paramRefs` 引用之前的结果、`runtimeRef` 绑定预览运行实例，以及只读 `waitFor` 就绪等待。同一工作流 ID 不可重复执行。帧超时附带游戏/Director 暂停状态，不自动恢复游戏。详见[预览可靠性与性能工作流](docs/mcp-reliability-and-performance.md)。
 
 ## 验证与安全边界
 
@@ -165,13 +191,14 @@ pnpm start catalog --project /path/to/project --engine /path/to/cocos-engine
 
 ## 文档导航
 
-以下详细指南目前使用中文编写。中英文 README 提供一致的项目介绍与安装流程。
+以下详细指南目前使用中文编写。中英文 README 提供一致的版本支持与安装流程。`.codex-work/` 原生报告受 Git 忽略，不随仓库分发；文档提供复现脚本和验证边界。
 
 | 指南 | 内容 |
 | --- | --- |
+| [版本支持矩阵](docs/version-support.md) · [Creator 2 验收台账](docs/creator2-expansion-tracker.md) | 精确版本功能、原生证据和未完成范围 |
 | [使用文档](docs/user-guide.md) | 安装、启动、客户端配置与调用示例 |
 | [功能介绍](docs/feature-reference.md) | 按领域划分的能力与版本限制 |
-| [2D 开发指南](docs/2d-development.md) · [交付与验证记录](docs/2d-implementation.md) | SpriteFrame、动画、UI、物理、Spine、Tilemap 与 13 种可编辑玩法模板 |
+| [2D 开发指南](docs/2d-development.md) · [交付与验证记录](docs/2d-implementation.md) | Creator 3.8.8 SpriteFrame、动画、UI、物理、Spine、Tilemap 与 13 种可编辑玩法模板 |
 | [实施与验收指南](docs/implementation-guide.md) | 架构、版本差异、安全与真实环境验收 |
 | [场景生产与预览](docs/scene-production.md) | Creator 3.8.8 几何体、阵列、渲染、预览窗口与截图 |
 | [Shader 开发指南](docs/shader-development.md) | 原生 Effect 编译、材质与验证边界 |

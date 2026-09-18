@@ -4,6 +4,8 @@ CocosMCP 是面向 Cocos Creator 2.x 和 3.x 的 MCP 服务。它让 AI 客户�
 
 本文面向第一次使用 CocosMCP 的用户。实现边界、版本适配和真实验收方法请参阅 [实施与验收指南](./implementation-guide.md)；完整设计范围请参阅 [实施提案](./cocos-mcp-proposal.md)。
 
+版本范围（2026-09-18）：精确基线为 2.4.15 / 3.8.8，见 [版本支持矩阵](version-support.md)。其他小版本、原生平台和全部模块不自动继承验收。
+
 ## 1. 使用前准备
 
 需要准备：
@@ -50,14 +52,14 @@ pnpm start install \
 
 | 编辑器 | 安装目录 | 启动方式 |
 |---|---|---|
-| Creator 2.x | `<project>/packages/cocos-mcp-creator2` | 加载扩展后自动启动，也可使用 `CocosMCP/启动桥接` |
-| Creator 3.x | `<project>/extensions/cocos-mcp-creator3` | 加载扩展后自动启动，也可使用 `CocosMCP/启动桥接` |
+| Creator 2.x | `<project>/packages/cocos-mcp-creator2` | 加载扩展后自动启动，也可在 `CocosMCP/打开控制中心` 内启停 |
+| Creator 3.x | `<project>/extensions/cocos-mcp-creator3` | 加载扩展后自动启动，也可在 `CocosMCP/打开控制中心` 内启停 |
 
 如果目标目录已经有同名 CocosMCP 扩展，旧目录会备份到工程的 `.codex-work/build/extension-backups/`。不要手动复制 2.x 扩展到 3.x 目录，两个扩展使用不同的 Creator API。
 
 ## 3. 打开控制中心
 
-安装扩展并打开工程后，从 Creator 顶部菜单选择 `CocosMCP/打开控制中心`。面板会作为可停靠窗口打开，包含四个页面：
+安装后顶部菜单依次为 **关于 CocosMCP → 打开控制中心 → 检查更新**。“关于”展示插件版本、构建和项目资料；“检查更新”进入更新页面，查询成功与安装完成是不同状态。桥接启停在控制中心内操作。控制中心的日常工作页包括：
 
 - **总览**：Creator 版本、工程路径、当前窗口的桥接实例、运行时配置和桥接启停。
 - **能力**：搜索能力目录，查看模块、操作类型和版本支持状态；“需运行时”表示需连接游戏实例。
@@ -84,12 +86,12 @@ doctor 会显示 Node 版本、操作系统架构、工程 ID、已发现的编�
 
 1. Creator 打开的工程路径与 `--project` 完全相同。
 2. 对应扩展已经安装并加载。
-3. 3.x 从 `CocosMCP/显示连接状态` 或 `CocosMCP/启动桥接` 启动过桥接；2.x 从菜单启动过桥接或重新加载过扩展。
+3. 从 `CocosMCP/打开控制中心` 查看桥接状态并在面板内启动；另行确认 MCP 服务运行，运行时操作还需游戏预览已连接。
 4. 工程内存在 `.codex-work/cache/cocos-mcp/instances/`，其中的实例进程仍然存活。
 
 ## 5. 启动 MCP 服务
 
-### 4.1 stdio 模式
+### 5.1 stdio 模式
 
 stdio 适合桌面 MCP 客户端。客户端配置的启动命令应等价于：
 
@@ -117,7 +119,7 @@ pnpm start serve --project /path/to/my-cocos-project
 }
 ```
 
-### 4.2 HTTP 模式
+### 5.2 HTTP 模式
 
 HTTP 模式只监听 `127.0.0.1`：
 
@@ -143,9 +145,9 @@ Authorization: Bearer <token>
 
 服务会拒绝非本机 Host/Origin、非 JSON 请求、非 POST 请求和超过 8 MiB 的请求体。不要把 token 放入 Git、聊天记录或测试报告。
 
-### 4.3 注册全部独立工具
+### 5.3 注册全部独立工具
 
-默认只注册常用能力的独立工具，长尾能力通过 `cocos_capability_execute` 统一调用。需要让客户端看到目录中全部独立工具时：
+默认只注册常用能力的独立工具，长尾能力通过 `cocos_capability_execute` 统一调用。当前 2.4.15 显式接线最多 112 个编辑器和 99 个运行时入口，不能用早期“50/246”或客户端工具列表长度推断支持范围；计数与条件见版本矩阵。需要让客户端看到目录中全部独立工具时：
 
 ```bash
 pnpm start serve \
@@ -165,7 +167,7 @@ pnpm start serve \
 6. 修改操作传入稳定的 `operationId` 和读取到的 `expectedRevision`。
 7. 读回节点/组件，调用 `scene.save`，再用 `scene.snapshot` 或 `scene.diff` 验证。
 
-### 5.1 查询场景
+### 6.1 查询场景
 
 ```json
 {
@@ -175,7 +177,7 @@ pnpm start serve \
 }
 ```
 
-### 5.2 创建节点并保存
+### 6.2 创建节点并保存
 
 ```json
 {
@@ -192,7 +194,7 @@ pnpm start serve \
 
 创建成功后，使用返回的 `nodeId` 调用 `node.query`，确认实际节点存在；再调用 `scene.save`。超时或网络断开时，复用同一个 `operationId` 查询结果，不要立即创建第二个节点。
 
-### 5.3 使用工作流
+### 6.3 使用工作流
 
 工作流适合把“打开场景、创建节点、加组件、保存”作为一个可追踪任务：
 
@@ -244,7 +246,13 @@ pnpm start serve \
 
 运行时会拒绝私有成员、原型污染路径、宿主进程控制、脚本执行、节点销毁和换父等危险入口。场景切换后旧句柄会失效，收到 `STALE_HANDLE` 时应重新查询对象。
 
+### Creator 2.4.15 长任务与生命周期
+
+普通碰撞、Box2D 接触、骨骼事件与 Tween 可通过异步任务运行，使用返回的 taskId 查询 `runtime.task.poll` 或取消 `runtime.task.stop`。任务最多运行 30 秒，事件数量/帧数有上限，检查 dropped 和失败详情。切场景和断连后的旧 ID 返回 STALE_HANDLE，不能继续复用。具体入口、缓存模式和单位见 [2.4.15 支持范围](creator2-implementation.md)。这些专属任务接口不自动在 Creator 3 开放。
+
 ## 8. 构建项目
+
+2.4.15 独立工程的 Web Desktop 实测仍有 exportSimpleProject 未定义及 FBX 转换器环境错误，尚无成功游戏产物验收；插件 pnpm build 成功不能替代游戏构建。详情见 [构建失败记录](creator2-implementation.md)。
 
 构建能力通过 MCP 工具执行：
 
@@ -282,7 +290,7 @@ node scripts/project-env.mjs node scripts/open-creator.mjs --project /path/to/pr
 
 | 错误 | 处理方式 |
 |---|---|
-| `CONTEXT_UNAVAILABLE` | 打开工程、启动扩展或连接开发运行时 |
+| `CONTEXT_UNAVAILABLE` | 检查工程、扩展与运行时；帧超时读取 gamePaused/directorPaused/timeoutMs，仅在明确需要时显式恢复游戏 |
 | `AMBIGUOUS_TARGET` | 传 `instanceId` 或 `runtimeInstanceId` |
 | `STALE_REVISION` | 重新读取 snapshot/revision 后重试 |
 | `STALE_HANDLE` | 重新查询节点或运行时对象 |
@@ -290,7 +298,7 @@ node scripts/project-env.mjs node scripts/open-creator.mjs --project /path/to/pr
 | `UNSUPPORTED_CAPABILITY` | 能力可能是规划中，或当前适配器未暴露 |
 | `UNAUTHORIZED` | 检查 `--allow-project-code`；同时确认没有调用危险路径 |
 | `PATH_OUTSIDE_PROJECT` | 使用工程内资源 URL 和文件路径 |
-| `OPERATION_CONFLICT` | 同一 operationId 必须保持能力和参数不变 |
+| `OPERATION_CONFLICT` | 核对 operationId 参数、旧值及回调/缓存模式等冲突上下文，重新读取后再制定操作 |
 | `OUTCOME_UNKNOWN` | 先查询操作、场景或构建状态 |
 | `VERIFICATION_FAILED` | 保留现场，重新读取并人工检查 |
 

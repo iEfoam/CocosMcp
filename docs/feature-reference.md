@@ -4,6 +4,8 @@ CocosMCP 把 Cocos Creator 的编辑器操作、资源生产、运行时调试�
 
 Creator 3.8.8 的 2D 加强与功能扩展包含 33 项新增能力和 13 种可编辑组件模板。调用示例见 [2D 开发指南](2d-development.md)，落地范围、原生验收与待验证事项见 [交付记录](2d-implementation.md)。
 
+2026-09-18 已补齐 Creator 2.4.15 第二轮的结构/引用、控件、资源趋势、Tween、骨骼、接触与 Camera 适配。完整对照见 [版本支持矩阵](version-support.md) 和 [2.4.15 验收台账](creator2-expansion-tracker.md)；本文领域概览不能代替每个版本的暴露清单。
+
 ## 1. 能力状态怎么看
 
 每项能力都包含以下字段：
@@ -25,7 +27,7 @@ Creator 3.8.8 的 2D 加强与功能扩展包含 33 项新增能力和 13 种可
 
 ### Creator 控制中心
 
-两套 Creator 扩展都提供 `CocosMCP/打开控制中心` 菜单和可停靠面板。面板包含总览、能力、日志和运行时四个页面：
+两套 Creator 扩展的菜单统一为 **关于 CocosMCP → 打开控制中心 → 检查更新**，关于/更新进入对应功能页；桥接启停放在控制中心。日常工作页包括总览、能力、日志和运行时：
 
 - 总览显示 Creator 版本、工程路径、当前窗口的桥接实例、运行时配置和桥接状态。
 - 能力页搜索目录，区分可用、需启动桥接、需运行时、版本不支持、未暴露和规划中能力。
@@ -83,7 +85,7 @@ Creator 3.x 属性写入会读取属性描述、生成版本对应的序列化�
 - `asset.dependencies`：查询直接依赖。
 - `asset.users`：查询反向引用。
 
-这两个能力当前仅由 Creator 3.x 适配器暴露。2.x 工程应根据能力详情返回的版本信息处理，不要强行调用。
+`asset.dependencies/users` 已由 Creator 2.4.15 和 3.8.8 适配器暴露。2.4.15 另有 `scene.references` 和 `asset.references.audit`，检查当前序列化引用、事件依赖与保存文件 UUID；动态字符串加载和二进制内容不保证完整覆盖。
 
 ### 预制体
 
@@ -178,9 +180,9 @@ Creator 3.x 提供：
 
 以下范围在提案中有完整规划，但当前代码不会伪装成已完成：
 
-- `ui.plan` / `ui.build` 已实现 Creator 3.8.8 声明式 UI 创建，要求 planHash；布局和交互检查不替代运行点击验收。
+- `ui.plan/build/diff/apply` 已适配 2.4.15 / 3.8.8；2.4.15 另有结构计划和引用删除守卫。计划必须匹配；布局静态检查不替代真实输入验收。
 - 新增纹理导入守卫、字体查询、动画剪辑及运行时资源引用工具，详见 [阶段实现说明](roadmap-implementation.md)。
-- Creator 2.x 的编辑器消息、项目设置、视图控制、资源依赖/反向引用未由当前适配器开放。
+- Creator 2.4.15 已开放依赖/使用者、宿主设置和部分视图字段。任意编辑器消息、view.focus/grid、单步/Scheduler、2.x 玩法模板及管线状态写入仍未完成，不能用通用 invoke 宣称等价支持。
 - GPU 指标、DrawCall、三角形和部分原生性能数据取决于平台调试接口。
 - 真机安装、签名、崩溃收集、热更新、XR、平台专属原生 API 需要独立的平台适配器和设备验收。
 - 引擎源码目录中的候选 API 仅代表 `source-only` 发现结果，不代表已经注册或可以安全调用。
@@ -191,7 +193,7 @@ Creator 3.x 提供：
 
 ### Web 预览异常与网络日志
 
-Creator 3.8.8 的 MCP 自有预览新增 `preview.logs`。启动预览后，`preview.status.diagnosticSessionId` 返回会话 ID。查询示例：
+Creator 2.4.15 / 3.8.8 的 MCP 自有预览均接入 `preview.logs`；下列受控错误捕获的专项原生报告来自 3.8.8，2.4.15 在接触生命周期测试中读取过错误日志，不据此声称同等完整专项覆盖。启动预览后，`preview.status.diagnosticSessionId` 返回会话 ID。查询示例：
 
 ```json
 {"capabilityId":"preview.logs","params":{"sessionId":"32位会话ID","cursor":0,"limit":100,"level":"error"}}

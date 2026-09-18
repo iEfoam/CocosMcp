@@ -2,6 +2,8 @@
 
 本文是当前仓库的实施手册，面向开发者、扩展维护者和执行验收的团队。它以仓库源码为准，补充 [CocosMCP 实施提案](./cocos-mcp-proposal.md) 中的工程落地细节。文档中的“已实现”表示代码存在对应适配器；只有标记为 `editor-verified` 或 `runtime-verified` 的能力，才表示已经在真实编辑器或开发运行时完成验证。
 
+更新日期：2026-09-18。版本功能以 [支持矩阵](version-support.md) 为总览；2.4.15 的逐项证据和完整缺口见 [验收台账](creator2-expansion-tracker.md)。
+
 ## 1. 当前交付边界
 
 CocosMCP 由独立 MCP 服务、Creator 2.x 扩展、Creator 3.x 扩展、编辑器桥接、运行时桥接和能力目录组成。服务端不直接依赖 Creator 的 Electron 全局对象，扩展只负责把版本相关 API 转成稳定的 HTTP RPC；所有写入操作都经过能力 Schema、工程路径和实例校验。
@@ -18,7 +20,7 @@ CocosMCP 由独立 MCP 服务、Creator 2.x 扩展、Creator 3.x 扩展、编辑
 - 工作流规划、顺序执行、失败停止、状态持久化及操作幂等记录。
 - Creator/引擎源码候选能力目录生成器。
 
-当前不能据代码直接宣称“完成整个 Cocos 引擎”：能力目录中的 54 个模块是工作分解维度，模块下的对象、属性和平台后端仍需逐项适配与验收。`ui.build` 已接入 Creator 3.8.8 的受守卫创建流程，需先调用 `ui.plan`，原生编辑器验收尚未完成；2.x 的 `asset.dependencies`、`asset.users`、编辑器消息和场景视图相关能力也会按能力目录返回版本不支持。
+当前不能据代码直接宣称“完成整个 Cocos 引擎”：能力目录中的 54 个模块是工作分解维度，模块下的对象、属性和平台后端仍需逐项适配与验收。`ui.build` 已接入 2.4.15 / 3.8.8 的受守卫创建流程，需先调用 `ui.plan`；2.4.15 已有结构编辑、Undo/Redo、保存重开及真实控件输入验收。资源依赖/使用者也已适配 2.4.15。任意编辑器消息、focus/grid 等限制仍按入口保留，不能把有处理器或个别验收通过当成模块完成。
 
 ## 2. 目录与职责
 
@@ -95,7 +97,7 @@ pnpm start install \
 | 2.x | `<project>/packages/cocos-mcp-creator2` | `main`、`scene-script`、`main-menu` |
 | 3.x | `<project>/extensions/cocos-mcp-creator3` | `main`、`contributions.scene`、`contributions.messages` |
 
-2.x 扩展加载后自动启动桥接，也可从 `CocosMCP/启动桥接` 菜单触发。3.x 扩展在加载时启动，可从 `CocosMCP` 菜单执行“启动桥接”“停止桥接”“显示连接状态”。
+两套扩展加载时自动启动桥接；菜单统一为“关于 CocosMCP → 打开控制中心 → 检查更新”。桥接启动/停止移到控制中心，总览显示桥接、MCP 服务与运行时的独立状态。
 
 ## 5. 启动服务与连接检查
 
@@ -174,24 +176,25 @@ HTTP/MCP 客户端应优先调用 `cocos_capability_describe` 获取精确 Schem
 
 能力目录按 `module`、`context`、`effect`、`versions`、`supportedMajors`、`implementation` 和 `verification` 描述每项操作。当前已接入的核心操作包括：
 
-| 领域 | 操作示例 | 2.x | 3.x |
+| 领域 | 操作示例 | Creator 2.4.15 | Creator 3.8.8 |
 |---|---|---:|---:|
 | 编辑器状态 | `editor.status`、`selection.query/set` | ✓ | ✓ |
 | 场景 | `scene.query/snapshot/diff/hierarchy/open/save/create/close` | ✓ | ✓ |
 | 节点 | `node.find/query/create/delete/duplicate/reparent/set/reset` | ✓ | ✓ |
 | 组件 | `component.types/add/query/delete/set/reset` | ✓ | ✓ |
 | 资源 | `asset.query/info/meta/create/save/import/copy/move/delete/refresh/reimport/set_meta/resolve` | ✓ | ✓ |
-| 资源依赖 | `asset.dependencies/users` | — | ✓ |
+| 资源依赖 | `asset.dependencies/users` | ✓；含独立引用审计 | ✓ |
 | 预制体 | `prefab.instantiate/create/apply/revert/unlink` | ✓ | ✓ |
 | 选择集 | `selection.query/set` | ✓ | ✓ |
 | 编辑器消息 | `editor.messages/message` | — | ✓ |
-| 项目设置 | `project.settings.get/set` | — | ✓ |
-| 视图 | `view.query/set/focus` | — | ✓ |
-| 预览 | `preview.start` | ✓ | 由 Creator 菜单/运行时流程提供 |
+| 项目设置 | `project.settings.get/set` | ✓，要求宿主 setting | ✓ |
+| 视图 | `view.query/set/focus` | query、部分 set；focus/grid 不支持 | 按原生端点及参数判断 |
+| 预览 | `preview.start/stop/status/capture/input/logs` | MCP 自有窗口 | MCP 自有窗口 |
 | 桥接日志与校验 | `logs.query`、`scene.validate` | ✓ | ✓ |
 | Creator 控制台 | `console.query`（含 Scene 消息与堆栈） | 未接入 | 仅 3.8.8，要求 `Editor.Logger.query` |
-| 声明式 UI | `ui.plan`、`ui.build`、布局/交互检查 | 不支持 | 3.8.8 已实现，待原生验收 |
+| 声明式 UI | `ui.plan/build/diff/apply`、布局/交互检查 | 已实现；另有结构计划和删除守卫原生记录 | 已实现；已有 UI 创建及真实菜单输入记录，非完整 UI 验收 |
 | 运行时 | `runtime.query/hierarchy/types/inspect/get/set/invoke/create/release/subscribe/unsubscribe/events/pause/resume/capture/statistics` | 运行时桥接 | 运行时桥接 |
+| 2.x 专属扩展 | 控件、资源趋势、Tween、骨骼事件/混合、Camera、接触任务 | 见 2.4.15 验收台账 | 不自动提供同名接口 |
 
 `cocos_coverage` 会分别报告 registered、implemented、planned、verified 等数量。这个结果是当前仓库实现状态，不等同于 Cocos 引擎 API 覆盖率；引擎源码扫描得到的候选能力必须经过适配、Schema 定义和实际验证后才能进入可执行集合。
 
@@ -281,7 +284,7 @@ cocos_build_start
 
 | 错误码 | 典型原因 | 客户端动作 |
 |---|---|---|
-| `CONTEXT_UNAVAILABLE` | 工程未打开、扩展未启动、运行时未连接 | 启动 Creator/扩展或预览 |
+| `CONTEXT_UNAVAILABLE` | 工程/运行时未就绪，或等待帧超时 | 检查连接与 gamePaused/directorPaused/timeoutMs；不得自动 resume 用户游戏 |
 | `AMBIGUOUS_TARGET` | 同工程有多个实例 | 指定 `instanceId` |
 | `STALE_REVISION` | 场景已被其他操作修改 | 重新 snapshot 后重试 |
 | `STALE_HANDLE` | 场景切换或对象已销毁 | 重新 query 获取句柄 |
@@ -333,7 +336,7 @@ pnpm start catalog --project /path/to/cocos-project \
 
 ## 15. 常见问题
 
-**看不到实例。**确认 Creator 已打开目标工程，扩展目录位于对应位置，并从扩展菜单启动桥接；再检查 `.codex-work/cache/cocos-mcp/instances/` 中的 JSON 是否仍对应存活 PID。
+**看不到实例。**确认 Creator 已打开目标工程，扩展目录位于对应位置，并从控制中心检查/启动桥接；再检查 `.codex-work/cache/cocos-mcp/instances/` 中的 JSON 是否仍对应存活 PID。
 
 **场景修改返回 `STALE_REVISION`。**不要复用旧 snapshot。重新读取 `scene.snapshot`，确认用户没有并行编辑后再提交新的 operationId。
 
@@ -349,4 +352,4 @@ pnpm start catalog --project /path/to/cocos-project \
 
 ### Creator 3 运行时桥接发布包
 
-Creator 3 更新包必须包含 `dist/runtime.js`，安装校验会拒绝缺少该文件的包。仅支持旧七文件清单的已安装版本不能直接使用面板升级到此版本；首次迁移请从本仓库构建后使用 CLI `install` 更新扩展并重载，之后可使用新版面板更新。Creator 2 的发布文件清单保持不变。
+Creator 3 更新包必须包含 `dist/runtime.js`，安装校验会拒绝缺少该文件的包。仅支持旧七文件清单的已安装版本不能直接使用面板升级到此版本；首次迁移请从本仓库构建后使用 CLI `install` 更新扩展并重载，之后可使用新版面板更新。两套扩展的当前文件清单统一以 `packages/native-adapters/src/extension-files.json` 为准，Creator 2/3 各自打包相应 runtime.js 和双语资料；旧版精确清单兼容包与 full 包的区别见 [扩展打包](extension-packaging.md)。

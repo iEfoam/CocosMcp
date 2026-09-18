@@ -15,6 +15,7 @@
 
 <p align="center">
   <a href="#quick-start">Quick start</a> ·
+  <a href="#supported-features-by-creator-version">Version support</a> ·
   <a href="#capabilities">Capabilities</a> ·
   <a href="#documentation">Documentation</a> ·
   <a href="#verification-and-safety">Verification &amp; safety</a>
@@ -35,6 +36,31 @@ Work with scenes, nodes, components, assets, and runtime objects through structu
 The repository includes separate Creator 2.x and 3.x extensions, a standalone MCP service, a capability catalog, and a development runtime bridge. Registered operations span **54 functional modules**; registration, implementation, and verification are reported separately, so coverage is not a claim that every feature is complete.
 
 See the [Creator 2.4.15 implementation and acceptance record](docs/creator2-implementation.md) (Chinese) for the independent test project, native coverage, and remaining limitations.
+
+## Supported features by Creator version
+
+The exact adaptation baselines are **Creator 2.4.15** and **Creator 3.8.8**. This table describes implemented scope. Native evidence covers specific fixtures and parameters; it does not certify every feature, platform, or the entire engine. Other 2.x / 3.x versions do not inherit this support automatically.
+
+| Feature | Creator 2.4.15 | Creator 3.8.8 |
+| --- | --- | --- |
+| Editor & assets | Scenes, nodes, components, Prefabs, undo/redo, AssetDB, organization, dependencies/users | Comparable core editing, plus native console queries and version-matched editor messages |
+| UI & references | Declarative creation/updates, structural plans, scene/saved-file reference audits and deletion guards | Declarative creation/updates and layout/event checks; 2.x-specific structural/audit endpoints are not shared automatically |
+| Controls & preview | Five semantic control adapters with real drag/click/text event tests; windows, captures, logs and sizing | Windows, captures, logs, mouse/keyboard/touch and viewport checks; native menu interaction records |
+| Animation & actions | curveData editing/recovery; bounded sequential/parallel/repeated Tweens with cancellation and lifecycle checks | Native tracks, animation controls and animation-graph inspection; excludes 2.x-specific Tween task endpoints |
+| Skeletons | Spine/DragonBones structure, cache boundaries, event tasks, real-time mixing and cleanup with native records | Spine playback/queues/skins/attachments and track sampling; does not inherit the 2.x cache/event/mixing evidence |
+| Maps & physics | Orthogonal/isometric Tilemaps, ordinary collisions, body forces, joint inspection and Box contact tracing/cleanup | Tilemap and physics query/contact tools, subject to backend checks; separate native 3D CCT route records |
+| Camera & rendering | 2D/3D coordinates, masks, 2D Graphics/Mask offscreen pixels and owned GPU-object deletion | Geometry/arrays/render settings, Shader RenderTexture previews, debug drawing, sorting, probes and IK |
+| Shaders & materials | Effect source/backups, material properties/macros and runtime override recovery; no 3.x compiler | Native Effect compilation, dependency fingerprints, material instances, macro variants and preview comparisons |
+| Resource lifecycle | Load/release, Bundle inspection, snapshots/diffs and multi-scene trends | Load/release and Bundle inspection; the 2.x snapshot/trend endpoints are not declared for 3.x |
+| Gameplay templates | 2.x templates are not delivered yet | 13 editable templates, including controllers, cameras, virtual lists, dialogue and pools; not all gameplay paths accepted |
+| Media & diagnostics | Basic audio/video/particle controls and UI/Label/atlas/Graphics diagnostics | Media, particles and performance/render diagnostics; platform experience and GPU performance need separate evidence |
+| Workflows & builds | Local workflows and CLI jobs; recorded game-build environment failures remain | Local workflows, CLI jobs and artifact checks; signing, devices, SDKs and publication require separate acceptance |
+
+As of 2026-09-18, 2.4.15 explicitly wires up to **112 editor + 99 runtime endpoints**; the catalog contains **246 entries applicable to major version 3**. These are wiring/catalog counts, not current availability, native pass counts, or the default MCP tool-list length. The latest code regression passed **249 tests**. This expansion was accepted in an independent 2.4.15 project and has not been synced to Texas.
+
+**Still incomplete:** additional 2.4.15 joints, Prefab differences/repair, image/font/atlas quality workflows, loading traces, TMX persistence, 2.x templates, material pipeline controls, focus/grid, single stepping/Scheduler, and other tracked work. The 2.4.15 game build still has recorded `exportSimpleProject` and FBX converter failures; building the plugin does not prove game export succeeds. The 3.8.8 post-processing and skinning paths also retain explicit limitations.
+
+See the [version support matrix](docs/version-support.md), [2.4.15 adaptation record](docs/creator2-implementation.md), and [full acceptance tracker](docs/creator2-expansion-tracker.md) for details and evidence (Chinese).
 
 ## Capabilities
 
@@ -65,7 +91,7 @@ pnpm install
 pnpm check
 ```
 
-`pnpm check` runs type checking, builds, and tests. Project configuration keeps build and test output under `.codex-work/`.
+`pnpm check` runs type checking → build → tests → build; the final build embeds matching test evidence. Project configuration keeps build and test output under `.codex-work/`.
 
 ### 2. Install the editor extension
 
@@ -82,7 +108,7 @@ pnpm start install \
 | Creator 2.x | `packages/cocos-mcp-creator2/` |
 | Creator 3.x | `extensions/cocos-mcp-creator3/` |
 
-The installer backs up an existing extension of the same name. Open the project in Creator, load the extension, and open the **CocosMCP** control center from the editor menu. The MCP service discovers protected instance descriptors and routes requests by project, editor version, and instance ID.
+The installer backs up an existing extension of the same name. Open the project in Creator, load the extension, and use **CocosMCP → Open Control Center** (打开控制中心). The menu order is **About CocosMCP → Open Control Center → Check for Updates**. About and updates have dedicated views; bridge start/stop controls live inside the control center. The MCP service discovers protected instance descriptors and routes requests by project, editor version, and instance ID.
 
 ### 3. Check the connection and start MCP
 
@@ -103,7 +129,7 @@ For client configuration and troubleshooting, see the [user guide](docs/user-gui
 
 ## Plan a workflow
 
-Pass a sequence like this to `cocos_workflow_plan`, replacing the scene URL with an existing scene in your project:
+Pass a sequence like this to `cocos_workflow_plan`, replacing the scene URL with an existing scene in your project (`.scene` for Creator 3, `.fire` for Creator 2):
 
 ```json
 {
@@ -118,7 +144,7 @@ Pass a sequence like this to `cocos_workflow_plan`, replacing the scene URL with
 
 Planning checks parameters, versions, risks, and side effects. Use `cocos_workflow_execute` after the plan is valid and any required authorization is in place. Execution stops on failure by default and returns completed steps and compensation hints. There is no universal rollback: use each capability's `rollback` guidance. Query persisted progress with `cocos_workflow_status` after a service restart.
 
-Steps support `paramRefs` for earlier results, `runtimeRef` for explicit preview session binding, and read-only `waitFor` conditions. Workflow IDs cannot be replayed. Keyboard input now focuses the game canvas by default; frame profiling reports warmup, P99, render dimensions and optional P95 budgets. See the [reliability and performance guide](docs/mcp-reliability-and-performance.md) (Chinese).
+Steps support `paramRefs` for earlier results, `runtimeRef` for explicit preview session binding, and read-only `waitFor` conditions. Workflow IDs cannot be replayed. Keyboard input defaults to canvas focus; frame profiling reports warmup, P99, render dimensions and optional P95 budgets. Frame timeouts include game/Director pause states and never automatically resume the game. See the [reliability and performance guide](docs/mcp-reliability-and-performance.md) (Chinese).
 
 ## Verification and safety
 
@@ -165,10 +191,11 @@ Build output:
 
 ## Documentation
 
-The detailed guides below are currently written in Chinese. Both README editions cover the same introduction and setup flow.
+The detailed guides below are currently written in Chinese. Both README editions cover the same version support and setup flow. Local reports under `.codex-work/` are ignored by Git; linked guides provide reproduction scripts and evidence boundaries.
 
 | Guide | Contents |
 | --- | --- |
+| [Version support](docs/version-support.md) · [Creator 2 acceptance](docs/creator2-expansion-tracker.md) | Exact-version feature matrix, native evidence and remaining scope |
 | [User guide](docs/user-guide.md) | Installation, startup, client configuration, and examples |
 | [Feature reference](docs/feature-reference.md) | Capabilities by domain and version limits |
 | [2D development](docs/2d-development.md) · [Delivery & verification](docs/2d-implementation.md) | SpriteFrame, animation, UI, physics, Spine, Tilemap, and 13 editable gameplay templates for Creator 3.8.8 |

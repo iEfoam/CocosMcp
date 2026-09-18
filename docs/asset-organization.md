@@ -1,10 +1,10 @@
 # 项目资源整理
 
-Creator 3 新增 `asset.location`、`asset.organize.plan`、`asset.organize.apply`。也提供直接 MCP 工具 `cocos_assets_organize_plan`（预览）和 `cocos_assets_organize_apply`（执行），供 agent 直接发现和调用。亦可通过 `cocos_capability_execute` 调用，也可用 CLI `call --capability ... --params ...`。Creator 2 暂不声明这些能力。
+Creator 2.4.15 / 3.8.8 已接入 `asset.location`、`asset.organize.plan`、`asset.organize.apply`，共享目录策略并分别使用对应版本 AssetDB。也提供直接 MCP 工具 `cocos_assets_organize_plan`（预览）和 `cocos_assets_organize_apply`（执行），供 agent 直接发现和调用。亦可通过 `cocos_capability_execute` 调用，也可用 CLI `call --capability ... --params ...`。版本与验收边界见 [支持矩阵](version-support.md)；2.4.15 已有 UUID 保留、目录复用和原生资源读回记录。
 
 创建资源前调用 `asset.location`，例如 `{"url":"db://assets/Water.effect"}`。工具只规划，不创建目录。已有 Effects、Shaders 等对应目录优先复用（忽略大小写，浅目录优先，同深度按路径排序）；没有则建议 Shaders。创建时缺失目录通过 AssetDB 自动创建，返回 `assetLocation.url`，后续编译、引用必须使用实际路径。
 
-覆盖 asset.create/import/copy、shader.create、material.create/clone、scene.create/save_copy、prefab.create 和 geometry.create。asset.import 按单文件归类，目录批量导入需由 agent 枚举后逐文件操作。明确业务子目录保持不变；更新和明确移动已有资源不自动重定向。
+覆盖 asset.create/import/copy、shader.create、material.create/clone、scene.create/save_copy、prefab.create ；geometry.create 的持久化几何体流程限 Creator 3.8.8，不计入 2.4.15。asset.import 按单文件归类，目录批量导入需由 agent 枚举后逐文件操作。明确业务子目录保持不变；更新和明确移动已有资源不自动重定向。
 
 整理现有资源：
 

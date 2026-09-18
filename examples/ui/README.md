@@ -6,4 +6,6 @@
 
 建议使用 1280 × 720 桌面预览。点击 RUN DIAGNOSTIC 检查计数变化；在输入框中键入文本并检查回显；滚动 ACTIVITY STREAM 到第 12 行。此示例已在 Creator 3.8.8 原生 Web 预览中完成上述交互与截图检查；未验证移动端、输入法或跨版本兼容性。
 
-`menu.json`演示声明式 UI 文档；运行时测试面板与 `ui.build` 的编辑器节点构建是不同路径，前者不构成后者的完整验收。
+`menu.json` 演示声明式 UI 文档；运行时测试面板与 `ui.build` 的编辑器节点构建是不同路径，前者不构成后者的完整验收。
+
+版本范围（2026-09-18）：本目录 TypeScript 运行时组件使用 Creator 3.8.8 API，不可直接作为 2.4.15 脚本导入。2.4.15 已有独立 UI 映射、结构计划和真实控件输入夹具，见 [版本矩阵](../../docs/version-support.md) 和 [验收台账](../../docs/creator2-expansion-tracker.md)。

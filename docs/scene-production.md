@@ -17,6 +17,8 @@
 
 先用 `cocos_capability_describe` 获取当前安装版本的 Schema。重试时先查询操作结果，避免生成重复节点。
 
+版本更新（2026-09-18）：几何体、阵列和渲染配置仍以 **3.8.8** 为准。受控预览、输入、日志与尺寸已独立接入 **2.4.15**；该版本另有 Camera 坐标和 2D Graphics/Mask 像素验收，不等同本文 3.x 几何体或 Shader 预览。见 [版本矩阵](version-support.md)。
+
 ## 资源类型筛选
 
 `asset.query` 在类型过滤后计算 `total`、`nextOffset` 与分页结果，类型为精确匹配，不会把目录或其他资源混入指定类型。

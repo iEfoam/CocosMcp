@@ -2,7 +2,7 @@
 
 ## 实现范围与前置条件
 
-F22 提供 Effect/Chunk 读写、原生编译、依赖指纹、材质资源编辑、组件绑定、材质实例调试、宏变体和 RenderTexture 预览。原生编辑器适配锁定 **Creator 3.8.8**；其他版本只开放环境查询。Creator 2.x 尚未实现本模块。
+F22 提供 Effect/Chunk 读写、原生编译、依赖指纹、材质资源编辑、组件绑定、材质实例调试、宏变体和 RenderTexture 预览。本文的原生编译器、变体编译及 Shader 独立预览闭环锁定 **Creator 3.8.8**。Creator **2.4.15** 已有独立的 Effect 源码/备份、材质创建/复制/属性/宏/绑定及运行时覆盖恢复；不提供同等 3.x 编译器或管线状态写入。
 
 构建并安装本仓库的 Creator 扩展，再在编辑器中启用桥接。运行时能力还需要加载本次构建的 `cocos-mcp.js` 或 `cocos-mcp.mjs` 并连接开发运行时网关，接入方式见 implementation-guide.md 的运行时章节。仅更新扩展不会自动替换已打开页面内的运行时脚本。对 MCP 自有预览窗口，可先 `preview.start`，再调用 `shader.preview.connect` 注入本次构建的桥接；多个网关时用 `gatewayPort` 明确选择。连接会等到目标场景启动并核对场景 UUID。
 
@@ -12,7 +12,13 @@ F22 提供 Effect/Chunk 读写、原生编译、依赖指纹、材质资源编�
 
 MCP 自有材质、临时场景和 Shader 预览的清理使用 `cc.isValid(object, true)` 检查帧末待销毁状态，避免重复排队；该守卫不修改 Creator 原生 `Node.destroy`。3.8.8 的原生 `MiniPreview.clearByComponent` 报警仍需以原生堆栈和触发操作复现，不能用工具自有资源的回归测试当作其已修复证据。
 
-## 能力表
+## Creator 2.4.15 的区别
+
+2.x 使用独立材质/Effect 模型；支持 shader.environment/read/create/update/restore/inspect、material.query/create/clone/update/properties/defines/states/bindings/assign/migrate/apply_runtime 与 runtime.material.inspect/update/reset。具体参数仍按 Schema 和原生允许字段判断，states 查询不代表开放状态写入。shader.compile/validate/dependencies/diagnostics、runtime.material.compile、宏变体编译和 runtime.shader.preview.* 不在 2.4.15 显式支持列表。
+
+2.4.15 可使用受控预览截图、整帧 profile，以及独立 runtime.camera.sample_pixels 的 2D 像素采样；不能将 Camera 采样当作 Shader 编译/变体工作流。原生记录证明材质连续更新/恢复和有限 Graphics/Mask 像素及自有 GPU 对象删除，不证明完整 GPU/设备验收。详见 [版本矩阵](version-support.md)。
+
+## Creator 3.8.8 能力表
 
 | 操作 | 参数要点 | 结果或边界 |
 |---|---|---|
@@ -105,7 +111,7 @@ examples/shaders/unlit-gradient.effect 是静态 3D 渐变材质；sprite-dissol
 - 基线保存在当前运行时内，最多 8 张；关闭预览、切换场景或断开后失效。比较是图像差异检查，不能自动认定美术效果符合需求。
 - profile 的时间是整帧墙钟时间，包含场景与调度开销；gpuMs=null。不能当作单个 Shader 的 GPU 性能。
 - 内置模板可用于 Surface、多 Pass、骨骼和粒子等源码开发；自定义后处理的管线注册与平台专用渲染接入尚未自动化。
-- Creator 2.x、其他 3.x 补丁版本、原生 GPU 日志和跨设备验收均未声明完成。
+- 2.4.15 仅支持上文独立适配子集；其他补丁版本、原生 GPU 日志和跨设备验收均未声明完成。
 
 ## 文件与缓存
 

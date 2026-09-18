@@ -1,5 +1,7 @@
 # 功能清单与验收状态
 
+更新日期：2026-09-18。当前功能和版本入口数见 [版本支持矩阵](version-support.md)，原生测试详情见 [2.4.15 台账](creator2-expansion-tracker.md)。
+
 ## 如何理解状态
 
 - `implementation` 是单个入口是否有实现；planned 能力可被搜索、描述，但不会注册为独立可执行工具，通用执行入口也会拒绝。
@@ -20,6 +22,12 @@
 
 已回填 Creator 3.8.8 的 Shader 原生编译/恢复、运行时调参/截图及资源整理报告。旧报告没有源码指纹，因此诚实地保留为历史实测，不批量把当前能力涂成 editor-verified。
 
+## 本地验收记录与自动状态的区别
+
+249 项代码回归和 2.4.15 接触/骨骼/Camera 等原生报告已经取得，但这些报告不会因为文档声明就全部进入 verificationEvidence。现有 verification-suites.json 映射只有明确覆盖的入口，原生报告必须补足版本、源码指纹和报告指纹才能作为当前源码证据。控制中心的接线状态、目录验证字段和完整领域验收分别判断；不能把 285 个有处理器入口当成 54 个完整模块验收。
+
+改动扩展双语 README 会改变构建身份和测试指纹；重新测试/构建后才能嵌入新证据。只修改仓库指南也不能把旧原生报告改标为本次完整复验。
+
 ## 自动回填流程
 
 1. 测试前计算 apps/packages/extensions/scripts/tests/examples、包配置与锁文件的源码指纹，并撤销旧的当前测试缓存。
@@ -33,7 +41,7 @@ contract-tested/adapter-tested 不代表真实 Creator、渲染后端或设备�
 
 ## 验证与回滚
 
-检查 `cocos_coverage`、`cocos_capability_describe` 和实际 `tools/list`：planned 测试入口在默认及 all-tools 中均不应出现；已有实现的 cocos_ui_build 应正常注册，并限定 Creator 3.8.8 与 planHash；F47/F52 应为 partial 并列出独立工具；旧实测可见而不冒充当前验收。
+检查 `cocos_coverage`、`cocos_capability_describe` 和实际 `tools/list`：planned 测试入口在默认及 all-tools 中均不应出现；已有实现的 cocos_ui_build 应正常注册，并遵守 Creator 2.4.15 / 3.8.8 对应适配及 planHash；F47/F52 应为 partial 并列出独立工具；旧实测可见而不冒充当前验收。
 
 这些修复不改变构建、工作流或场景操作的协议路径，没有数据库迁移。回滚时恢复先前源码和构建制品；验收缓存不匹配时保持历史状态，不恢复虚假的当前验证标记。安装后的运行中服务需重新加载才会使用新制品，文件更新不等于活动实例已更新。
 
