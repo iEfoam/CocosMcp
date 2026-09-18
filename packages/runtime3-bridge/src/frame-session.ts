@@ -26,10 +26,20 @@ export class FrameSession {
         catch (error) { finish(CocosError.from(error)); }
       };
       const cancel = (error: Error): void => finish(error);
-      const timer = setTimeout(() => finish(new CocosError('CONTEXT_UNAVAILABLE', '等待渲染帧超时')), 2000);
+      const timer = setTimeout(() => finish(new CocosError('CONTEXT_UNAVAILABLE', '等待渲染帧超时', {
+        timeoutMs: 2000, gamePaused: this.paused(this.cc.game), directorPaused: this.paused(director),
+      })), 2000);
       this.pending.add(cancel);
       try { A.call(director, 'on', event, callback); } catch (error) { finish(CocosError.from(error)); }
     });
+  }
+  private paused(target: unknown): boolean | null {
+    // 仅补充超时时的只读状态；不替用户 resume，也不让缺失/异常查询掩盖原始超时和监听清理。
+    try {
+      if (typeof A.object(target).isPaused !== 'function') return null;
+      const value = A.call(target, 'isPaused');
+      return typeof value === 'boolean' ? value : null;
+    } catch { return null; }
   }
   dispose(): void { this.generation++; for (const cancel of this.pending) cancel(new CocosError('STALE_HANDLE', '运行时断开')); this.pending.clear(); }
 }

@@ -11,7 +11,7 @@
 | 05 | 图片字体图集质量 | 待实施 | 尺寸重复、内存估算、合图、溢出/缺字渲染证据 |
 | 06 | TiledMap | 运行时核心及双地图原生验证通过 | 图层对象、区域 GID/翻转、计划应用、正交等距夹具已覆盖；TMX 源文件持久化未实现 |
 | 07 | 普通碰撞 | Circle/Box/Polygon、矩阵允许/禁止及业务回调共存原生通过 | 分组矩阵、包围盒、事件且不覆盖业务监听 |
-| 08 | 刚体与关节 | 刚体及 DistanceJoint 约束原生通过；其余关节/接触待补 | 类型、施力冲量、接触、锚点与连接、单位 |
+| 08 | 刚体与关节 | 刚体、DistanceJoint、Box 接触及追踪生命周期原生通过；其余关节/形状待补 | 类型、施力冲量、接触、锚点与连接、单位 |
 | 09 | Tween/Action | 编排、采样、取消、业务 Action 共存及核心生命周期原生通过 | 声明编排、帧采样、所有权与清理 |
 | 10 | 骨骼深入诊断 | Spine/DragonBones 结构、缓存边界、混合状态、原生事件及断连/切场景核心验收通过；复杂视觉边界待补 | Spine/DragonBones 骨骼插槽轨道、缓存模式、事件边界 |
 | 11 | Camera/RenderTexture | 2D 状态、坐标、掩码、Graphics/Mask 离屏像素与临时对象删除原生通过；多视口等待补 | 坐标、可见性、离屏像素与临时资源释放 |
@@ -22,6 +22,16 @@
 | 16 | 构建及发布诊断 | 待定位 | exportSimpleProject 与 FBX 环境错误分别定位；真实构建产物 |
 
 当前任务保留上述全部范围。单个探针失败不阻断其他独立项；环境问题只在有复现证据后记录为阻碍。
+
+## 2026-09-18 接触追踪验收更新
+
+- `runtime.physics2d.contact_trace_start` 已在独立 2.4.15 工程完成 Box 刚体接触验收：begin/end/preSolve/postSolve、sensor 仅产生开始/结束、世界像素接触点、法向冲量与业务原生回调的 PTM_RATIO 换算一致。切向换算目前由源码及自动测试证明，尚未原生验证非零摩擦冲量。
+- 原生 `CCPhysicsContact.getImpulse` 对法向乘 PTM_RATIO、切向不乘；工具统一返回 Box2D 原生冲量单位，且取消时的 progress 同样携带单位、接收者数量及跳过原因。
+- 随包 Box2D 的 `WorldManifold.Initialize` 在零接触点时直接返回，共享法线可能来自旧接触。适配将空接触的 normal 置为 null，并拒绝非有限向量/冲量、超过两个点和数组长度不匹配；错误不会从观察回调抛入业务物理分发，任务随后失败并清理。
+- `scripts/creator2-physics-contact-native.ts` 验证取消后记录不再增长、业务再次触地仍收到回调、监听开关不变、观察组件数量恢复；有限帧正常完成、记录限额及 dropped 同时通过。报告 `.codex-work/logs/creator2-expansion/physics-contact.json` 为 passed=true。
+- `scripts/creator2-physics-contact-lifecycle-native.ts` 使用回环代理验证纯桥接断连：运行实例/场景不变、代际增加、旧任务 STALE_HANDLE；持久测试节点切场景同样清理观察组件，业务 postSolve 继续，新追踪可启动及取消。报告 `.codex-work/logs/creator2-expansion/physics-contact-lifecycle.json` 为 passed=true；预览、代理和网关最终关闭。
+- 生命周期探针曾发生帧超时，失败现场读到 gamePaused=true、directorPaused=false，原始报告保留为 `physics-contact-lifecycle-paused-failure.json`。FrameSession 现在在超时错误附带两者状态和 timeoutMs，不自动 resume；原生显式暂停测试确认超时后仍暂停。测试夹具仅在自己的预览采样前检查并显式恢复。此证据不解释此前所有超时，也不证明暂停由哪次窗口事件触发。
+- 本轮 249 项自动测试、TypeScript 检查通过；共享 FrameSession 的 Creator 3 行为只有自动测试证据，原生证明限 2.4.15。未同步 Texas。其他七类关节、Circle/Polygon 物理接触、非零切向冲量、接触规则被业务修改及目标销毁等专项仍未全量原生覆盖；原方案其他领域继续保留。
 
 ## 当前证据
 

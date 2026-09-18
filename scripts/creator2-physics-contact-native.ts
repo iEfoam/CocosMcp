@@ -51,11 +51,15 @@ try {
   await call('runtime.set', { target: 'component:' + bodyId, path: 'linearVelocity', value: { x: 0, y: 0 } });
   await call('runtime.shader.profile', { frames: 4, warmupFrames: 1 });
   const stopped = await call('runtime.task.stop', { taskId }); assert.equal(stopped.status, 'cancelled');
+  assert.equal(Json.object(stopped.progress).impulseUnits, 'Box2D-native-impulse');
+  assert.equal(Json.object(stopped.progress).coordinateSpace, 'world-pixels');
   const events = Json.object(stopped.progress).rows as JsonObject[];
   const solid = events.filter(row => row.selfColliderId === colliderId && !row.sensor);
   for (const phase of ['begin','end','preSolve','postSolve']) assert.ok(solid.some(row => row.event === phase), phase);
   assert.ok(events.some(row => row.sensor && row.event === 'begin')); assert.ok(events.some(row => row.sensor && row.event === 'end'));
   assert.ok(events.filter(row => row.sensor).every(row => row.event === 'begin' || row.event === 'end'));
+  assert.ok(events.filter(row => row.sensor).every(row => Json.object(row.manifold).normal === null));
+  assert.ok(events.filter(row => (Json.object(row.manifold).points as unknown[]).length === 0).every(row => Json.object(row.manifold).normal === null));
   assert.ok(events.filter(row => row.event !== 'postSolve').every(row => row.impulse === null));
   const post = solid.filter(row => row.event === 'postSolve'); assert.ok(post.length > 0);
   const maxImpulse = Math.max(...post.map(row => (Json.object(row.impulse).normal as number[]).reduce((sum,n) => sum+n,0))); assert.ok(maxImpulse > 0);
@@ -69,7 +73,17 @@ try {
   const counts = (value: JsonObject) => (value.rows as JsonObject[]).filter(row => fixtures.some(fixture => fixture.nodeId === row.nodeId)).map(row => (row.components as unknown[]).length);
   assert.deepEqual(counts(restored), counts(baseline));
   assert.equal((await call('runtime.get', { target: 'component:' + bodyId, path: 'enabledContactListener' })).value, true);
+  const beginsBefore = Number((await call('runtime.get', { target: 'component:' + business, path: 'begins' })).value);
+  // 再次触地必须由业务组件自身继续接收；取消任务的记录保持不变。
+  await call('runtime.shader.profile', { frames: 100, warmupFrames: 1 });
+  assert.ok(Number((await call('runtime.get', { target: 'component:' + business, path: 'begins' })).value) > beginsBefore);
+  assert.equal((Json.object((await call('runtime.task.poll', { taskId })).progress).rows as unknown[]).length, events.length);
+  const boundedId = (await call('runtime.physics2d.contact_trace_start', { rootId: root, frames: 10, limit: 1 })).taskId!;
+  await call('runtime.shader.profile', { frames: 15, warmupFrames: 1 });
+  const bounded = await call('runtime.task.poll', { taskId: boundedId }); assert.equal(bounded.status, 'completed');
+  assert.equal((Json.object(bounded.result).rows as unknown[]).length, 1); assert.ok(Number(Json.object(bounded.result).dropped) > 0);
+  assert.deepEqual(counts(await call('runtime.hierarchy', { limit: 2000 })), counts(baseline));
   await call('runtime.set', { target: 'node:' + root, path: 'active', value: false });
-  rows.push({ passed: true, fourContactPhasesVerified: true, sensorBoundaryVerified: true, impulseUnitsVerified: true, worldPointsVerified: true, businessCallbacksPreserved: true, observerCleanupVerified: true });
+  rows.push({ passed: true, fourContactPhasesVerified: true, sensorBoundaryVerified: true, emptyManifoldNormalVerified: true, impulseUnitsVerified: true, worldPointsVerified: true, businessCallbacksPreserved: true, businessContinuesAfterCancellation: true, observerCleanupVerified: true, boundedCompletionVerified: true });
 } catch (error) { rows.push({ passed: false, error: CocosError.from(error).toJSON() as unknown as JsonObject }); process.exitCode = 1; console.error(error); }
 finally { try { if (preview) await call('preview.stop'); } finally { await gateway.close(); await mkdir(resolve('.codex-work/logs/creator2-expansion'), { recursive: true }); await writeFile(resolve('.codex-work/logs/creator2-expansion/physics-contact.json'), JSON.stringify({ project, rows }, null, 2)); } }

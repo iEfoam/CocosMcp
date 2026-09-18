@@ -17,19 +17,21 @@ export class Creator2PhysicsContact {
     if (eligible.length > 128) throw new CocosError('RESOURCE_BUSY', 'Contact trace is limited to 128 receiver bodies');
     const skipped = bodies.filter(body => !eligible.includes(body)).map(body => ({ componentId: A.uuid(body), reason: !body.enabledContactListener ? 'contact-listener-disabled' : 'inactive-or-uninitialized' }));
     const rows: JsonObject[] = [], observers: RuntimeObject[] = [], token = frames.token();
+    const metadata: JsonObject = { skipped, receiverBodies: eligible.length, coordinateSpace: 'world-pixels', impulseUnits: 'Box2D-native-impulse', ptmRatio: ratio,
+      limitations: ['只观察已启用接触监听的刚体，不改变业务监听开关或接触规则', '冲量仅在 postSolve 有效；sensor 通常不产生求解回调', '按接收者记录，双向回调不会去重；法线沿原生接收者方向', '没有接触点时法线为 null，不返回原生复用缓存的旧法线'] };
     let active = true, frame = 0, dropped = 0, captureFailure: string | null = null;
     const record = (event: string, contact: unknown, self: unknown, other: unknown): void => {
       if (!active) return;
       if (rows.length >= limit) { dropped++; return; }
       try {
         // Contact、manifold、impulse 都由引擎复用；必须在接收者对应的回调内复制，不能留给异步查询。
-        const manifold = A.object(A.call(contact, 'getWorldManifold'));
+        const manifold = this.manifold(contact);
         const rawImpulse = event === 'postSolve' ? A.call(contact, 'getImpulse') : null;
         const impulse = rawImpulse ? A.object(rawImpulse) : null;
         const nativeNormal = impulse?.normalImpulses, nativeTangent = impulse?.tangentImpulses;
-        if (impulse && (!Array.isArray(nativeNormal) || !Array.isArray(nativeTangent))) throw new Error('Invalid contact impulse arrays');
+        if (impulse && (!this.finiteArray(nativeNormal) || !this.finiteArray(nativeTangent) || nativeNormal.length !== nativeTangent.length)) throw new Error('Invalid contact impulse arrays');
         rows.push({ event, frame, selfColliderId: A.uuid(self), otherColliderId: A.uuid(other), receiverNodeId: A.uuid(A.object(A.object(self).body).node),
-          sensor: Boolean(A.object(self).sensor || A.object(other).sensor), manifold: A.safeData(manifold),
+          sensor: Boolean(A.object(self).sensor || A.object(other).sensor), manifold,
           // 2.4.15 getImpulse 只给法向乘 PTM_RATIO，切向没有换算；统一回 Box2D 单位，避免混用量纲。
           impulse: impulse ? { normal: (nativeNormal as number[]).map(value => value / ratio), tangent: [...nativeTangent as number[]] } : null,
           disabled: Boolean(A.object(contact).disabled), disabledOnce: Boolean(A.object(contact).disabledOnce) });
@@ -43,18 +45,32 @@ export class Creator2PhysicsContact {
     });
     try {
       for (const body of eligible) observers.push(A.object(A.call(body.node, 'addComponent', Observer)));
+      progress({ ...metadata, rows, dropped, completedFrames: 0, totalFrames: count });
       for (frame = 0; frame < count; frame++) {
         await frames.wait(token);
         if (captureFailure) throw new CocosError('VERIFICATION_FAILED', 'Native contact data capture failed', { cause: captureFailure });
-        progress({ rows, dropped, completedFrames: frame + 1, totalFrames: count });
+        progress({ ...metadata, rows, dropped, completedFrames: frame + 1, totalFrames: count });
       }
-      return { rows, dropped, frames: count, skipped, receiverBodies: eligible.length, coordinateSpace: 'world-pixels', impulseUnits: 'Box2D-native-impulse', ptmRatio: ratio,
-        limitations: ['只观察已启用接触监听的刚体，不改变业务监听开关或接触规则', '冲量仅在 postSolve 有效；sensor 通常不产生求解回调', '按接收者记录，双向回调不会去重；法线沿原生接收者方向'] };
+      return { ...metadata, rows, dropped, frames: count };
     } finally {
       active = false; const failures: string[] = [];
       for (const observer of observers) if (observer.isValid !== false) { try { A.call(observer, 'destroy'); } catch (error) { failures.push(CocosError.from(error).message); } }
       try { A.call(cc.js, 'unregisterClass', Observer); } catch (error) { failures.push(CocosError.from(error).message); }
       if (failures.length) throw new CocosError('OUTCOME_UNKNOWN', 'Contact trace stopped recording but observer cleanup failed', { failures });
     }
+  }
+  private finiteArray(value: unknown): value is number[] {
+    return Array.isArray(value) && value.length <= 2 && value.every(number => typeof number === 'number' && Number.isFinite(number));
+  }
+  private vector(value: unknown): JsonObject {
+    const vector = A.object(value);
+    if (typeof vector.x !== 'number' || typeof vector.y !== 'number' || !Number.isFinite(vector.x) || !Number.isFinite(vector.y)) throw new Error('Invalid contact vector');
+    return { x: vector.x, y: vector.y };
+  }
+  private manifold(contact: unknown): JsonObject {
+    const native = A.object(A.call(contact, 'getWorldManifold')), points = native.points, separations = native.separations;
+    if (!Array.isArray(points) || points.length > 2 || !this.finiteArray(separations) || points.length !== separations.length) throw new Error('Invalid contact manifold');
+    // Box2D WorldManifold.Initialize 在 pointCount=0 时直接返回，不更新共享 normal；此时必须显式置空。
+    return { points: points.map(point => this.vector(point)), separations: [...separations], normal: points.length ? this.vector(native.normal) : null };
   }
 }
