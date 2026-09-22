@@ -1,0 +1,7 @@
+{
+  "name": "MCPMove", "duration": 2,
+  "tracks": [{ "path": "", "property": "position", "keys": [
+    { "time": 0, "value": { "x": 0, "y": 0, "z": 0 }, "interpolation": "linear" },
+    { "time": 2, "value": { "x": 200, "y": 0, "z": 0 }, "interpolation": "linear" }
+  ] }]
+}

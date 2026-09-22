@@ -1,0 +1,37 @@
+{
+  "name": "cocos-mcp-creator2",
+  "version": "0.1.0",
+  "description": "免费开源 CocosMCP 编辑器桥接（Creator 2.x）",
+  "author": "iefoam@foxmail.com",
+  "homepage": "https://github.com/iEfoam/CocosMcp",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/iEfoam/CocosMcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/iEfoam/CocosMcp/issues"
+  },
+  "license": "MIT",
+  "main": "./dist/main.js",
+  "scene-script": "./dist/scene.js",
+  "main-menu": {
+    "CocosMCP/关于 CocosMCP": {
+      "message": "cocos-mcp-creator2:about"
+    },
+    "CocosMCP/打开控制中心": {
+      "message": "cocos-mcp-creator2:open"
+    },
+    "CocosMCP/检查更新": {
+      "message": "cocos-mcp-creator2:check-updates"
+    }
+  },
+  "panel": {
+    "main": "dist/panel.js",
+    "type": "dockable",
+    "title": "CocosMCP 控制中心",
+    "width": 720,
+    "height": 620,
+    "min-width": 520,
+    "min-height": 440
+  }
+}

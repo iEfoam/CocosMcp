@@ -1,0 +1,195 @@
+import { createHash, randomUUID } from 'node:crypto';
+import { FeatureSupport } from '../../runtime3-bridge/src/feature-support.js';
+import { appendFile, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { CocosError, Json, type ExecutionRequest, type ExecutionResult, type JsonValue } from '../../contracts/src/index.js';
+import { CapabilityCatalog } from '../../capability-catalog/src/index.js';
+import { BridgeClient } from './bridge-client.js';
+import { ProjectRegistry } from './registry.js';
+import { ProjectQueue } from './queue.js';
+import { WorkflowValues, type WorkflowOptions } from './workflow-values.js';
+import { OperationStore } from './operation-store.js';
+import { AtomicJson } from './atomic-json.js';
+
+export interface RuntimeExecutor { execute(projectId: string, runtimeInstanceId: string | undefined, capabilityId: string, params: import('../../contracts/src/index.js').JsonObject, signal?: AbortSignal): Promise<JsonValue> }
+export interface WorkflowStep extends WorkflowOptions { capabilityId: string; params: import('../../contracts/src/index.js').JsonObject; instanceId?: string; runtimeInstanceId?: string; operationId?: string; expectedRevision?: string }
+
+export class CocosApplication {
+  private readonly queue = new ProjectQueue();
+  private readonly operations = new OperationStore();
+  private readonly workflowFiles = new AtomicJson();
+  private async persistWorkflow(projectId: string, workflowId: string, state: JsonValue, exclusive = false): Promise<void> {
+    if (!/^[a-zA-Z0-9_-]{1,128}$/.test(workflowId)) throw new CocosError('INVALID_ARGUMENT', 'Invalid workflowId');
+    const path = await this.projects.paths(projectId).work('cache', 'cocos-mcp/workflows');
+    await this.workflowFiles.write(join(path, `${workflowId}.json`), state, exclusive);
+  }
+  constructor(readonly projects: ProjectRegistry, readonly catalog = new CapabilityCatalog(), private readonly bridge = new BridgeClient(),
+    private readonly allowExternal = false, private readonly runtime?: RuntimeExecutor) {}
+
+  async execute(request: ExecutionRequest, signal?: AbortSignal): Promise<ExecutionResult> {
+    const capability = this.catalog.validate(request.capabilityId, request.params);
+    if (capability.effect === 'external' && !this.allowExternal) throw new CocosError('UNAUTHORIZED', 'This operation executes project code or an unrestricted editor message. Start with --allow-project-code to enable it.');
+    const paths = this.projects.paths(request.projectId);
+    const operationId = request.operationId ?? randomUUID();
+    const execution = () => this.queue.run(request.projectId, async () => {
+      if (capability.context === 'runtime') {
+        if (!this.runtime) throw new CocosError(FeatureSupport.owns(capability.id) ? 'UNSUPPORTED_CAPABILITY' : 'CONTEXT_UNAVAILABLE', 'Runtime gateway is not enabled');
+        const result = await this.runtime.execute(request.projectId, request.runtimeInstanceId, capability.id, request.params, signal);
+        const execution: ExecutionResult = { operationId, capabilityId: capability.id, projectId: request.projectId, result, verification: capability.verification, completedAt: new Date().toISOString() };
+        return execution;
+      }
+      const descriptor = await this.projects.instance(request.projectId, request.instanceId);
+      this.operations.target(`${request.projectId}:${operationId}`, descriptor.instanceId);
+      if (!capability.versions.includes(descriptor.creatorMajor) || !capability.supportedMajors?.includes(descriptor.creatorMajor)) throw new CocosError('UNSUPPORTED_VERSION', 'Capability is not implemented by this Creator major version');
+      const response = await this.bridge.call(descriptor, { protocolVersion: 1, projectId: request.projectId, instanceId: descriptor.instanceId,
+        operationId, capabilityId: request.capabilityId, params: request.params,
+        ...(request.expectedRevision !== undefined ? { expectedRevision: request.expectedRevision } : {}) }, signal);
+      const result: ExecutionResult = { operationId, capabilityId: request.capabilityId, projectId: request.projectId, instanceId: descriptor.instanceId,
+        revision: response.revision, result: response.result, verification: capability.verification, completedAt: new Date().toISOString() };
+      try {
+        const logs = await paths.work('logs', 'cocos-mcp');
+        // 审计记录保留操作元信息，不把源码、资源内容和认证凭据写进通用日志。
+        await appendFile(join(logs, 'operations.jsonl'), JSON.stringify({ operationId, capabilityId: request.capabilityId, projectId: request.projectId,
+          instanceId: descriptor.instanceId, revision: response.revision, completedAt: result.completedAt }) + '\n', { mode: 0o600 });
+      } catch {
+        // 编辑器已经确认成功，日志失败必须单独报告，不能诱使客户端重放已完成的写操作。
+        result.warnings = [{ code: 'AUDIT_WRITE_FAILED', message: 'Operation completed, but its local audit record could not be written' }];
+      }
+      return result;
+    }, signal).catch((error: unknown) => {
+      if (!FeatureSupport.owns(capability.id) || !(error instanceof CocosError) || !['UNSUPPORTED_CAPABILITY', 'UNSUPPORTED_VERSION'].includes(error.code)) throw error;
+      const execution: ExecutionResult = { operationId, capabilityId: capability.id, projectId: request.projectId, result: FeatureSupport.unsupported(capability.id, error.message), verification: capability.verification, completedAt: new Date().toISOString() };
+      return execution;
+    });
+    if (!request.operationId) return execution();
+    const key = `${request.projectId}:${request.operationId}`;
+    const fingerprint = Json.canonical({ capabilityId: capability.id, params: request.params, instanceId: request.instanceId ?? null, runtimeInstanceId: request.runtimeInstanceId ?? null, expectedRevision: request.expectedRevision ?? null });
+    return this.operations.run(key, fingerprint, execution);
+  }
+
+  async instances(projectId: string): Promise<JsonValue> {
+    return { rows: (await this.projects.instances(projectId)).map(({ token: _token, ...descriptor }) => Json.value(descriptor)) };
+  }
+
+  /** 先验证整个工作流并返回副作用、风险和版本要求，供客户端在执行前展示确认信息。 */
+  plan(projectId: string, steps: WorkflowStep[]): JsonValue {
+    this.projects.paths(projectId);
+    const rows = steps.map((step, index) => {
+      try {
+        new WorkflowValues().validate(step, index);
+        if (step.runtimeRef && step.runtimeInstanceId) throw new CocosError('INVALID_ARGUMENT', 'Specify runtimeRef or runtimeInstanceId, not both');
+        const capability = this.catalog.validateDeferred(step.capabilityId, step.params, Object.keys(step.paramRefs ?? {}));
+        if (step.waitFor && capability.effect !== 'read') throw new CocosError('INVALID_ARGUMENT', 'Only read capabilities may be polled');
+        if (capability.implementation !== 'implemented' || !(capability.supportedMajors?.length ?? 0)) {
+          return { index, capabilityId: capability.id, valid: false, error: { code: 'UNSUPPORTED_CAPABILITY', message: 'Capability is registered but has no executable adapter' } };
+        }
+        if (capability.effect === 'external' && !this.allowExternal) {
+          return { index, capabilityId: capability.id, valid: false, error: { code: 'UNAUTHORIZED', message: 'External project code requires --allow-project-code' } };
+        }
+        return { index, capabilityId: capability.id, title: capability.title, valid: true, deferredValidation: Object.keys(step.paramRefs ?? {}).length > 0,
+          implementation: capability.implementation, verification: capability.verification, versions: capability.versions, supportedMajors: capability.supportedMajors ?? capability.versions,
+          effect: capability.effect, context: capability.context, prerequisites: capability.prerequisites ?? [],
+          sideEffects: capability.sideEffects ?? [], risks: capability.risks ?? [], rollback: capability.rollback ?? null };
+      } catch (error) {
+        return { index, capabilityId: step.capabilityId, valid: false, error: CocosError.from(error).toJSON() };
+      }
+    });
+    const valid = rows.every(row => row.valid);
+    return Json.value({ projectId, valid, executable: valid && rows.length > 0, rows,
+      summary: { total: rows.length, valid: rows.filter(row => row.valid).length, invalid: rows.filter(row => !row.valid).length,
+        destructive: rows.filter(row => row.valid && row.effect !== 'read').length } });
+  }
+
+  /** 顺序执行工作流，失败时默认停止并保留已完成步骤，便于调用方按能力的 rollback 提示做补偿。 */
+  async executeWorkflow(projectId: string, steps: WorkflowStep[], signal?: AbortSignal, continueOnError = false, workflowId: string = randomUUID()): Promise<JsonValue> {
+    const plan = Json.object(this.plan(projectId, steps));
+    if (plan.valid !== true) throw new CocosError('INVALID_ARGUMENT', 'Workflow contains invalid steps', plan);
+    const rows: JsonValue[] = [];
+    await this.persistWorkflow(projectId, workflowId, { workflowId, projectId, status: 'running', startedAt: new Date().toISOString(), total: steps.length, rows }, true);
+    for (let index = 0; index < steps.length; index++) {
+      const step = steps[index]!;
+      const operationId = step.operationId ?? randomUUID();
+      try {
+        await this.persistWorkflow(projectId, workflowId, { workflowId, projectId, status: 'running', total: steps.length, currentIndex: index, operationId, rows });
+        const values = new WorkflowValues(), params = values.params(step.params, step, rows);
+        const runtimeInstanceId = step.runtimeRef ? Json.string(values.resolve(step.runtimeRef, rows), 'runtimeInstanceId') : step.runtimeInstanceId;
+        const started = Date.now(); let result: ExecutionResult;
+        while (true) {
+          if (signal?.aborted) throw new CocosError('CANCELLED', 'Workflow cancelled');
+          const remaining = step.waitFor ? (step.waitFor.timeoutMs ?? 10000) - (Date.now() - started) : null;
+          if (remaining !== null && remaining <= 0) throw new CocosError('TIMEOUT', 'Workflow readiness deadline exceeded');
+          const pollSignal = remaining === null ? signal : AbortSignal.any([AbortSignal.timeout(remaining), ...(signal ? [signal] : [])]);
+          result = await this.execute({ projectId, capabilityId: step.capabilityId, params,
+            ...(step.instanceId ? { instanceId: step.instanceId } : {}), ...(runtimeInstanceId ? { runtimeInstanceId } : {}),
+            // 只读轮询每次都需要新结果，不能复用 operationId 的缓存响应。
+            ...(!step.waitFor ? { operationId } : {}), ...(step.expectedRevision ? { expectedRevision: step.expectedRevision } : {}) }, pollSignal);
+          if (!step.waitFor || Json.canonical(values.path(result.result, step.waitFor.path)) === Json.canonical(step.waitFor.equals)) break;
+          if (Date.now() - started >= (step.waitFor.timeoutMs ?? 10000)) throw new CocosError('TIMEOUT', 'Workflow readiness condition was not met', { lastResult: result.result });
+          const delay = Math.min(step.waitFor.intervalMs ?? 200, (step.waitFor.timeoutMs ?? 10000) - (Date.now() - started));
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+        rows.push({ index, capabilityId: step.capabilityId, status: 'succeeded', result: Json.value(result) });
+        await this.persistWorkflow(projectId, workflowId, { workflowId, projectId, status: 'running', total: steps.length, currentIndex: index, rows });
+      } catch (error) {
+        if (rows.some(row => Json.object(row).index === index && Json.object(row).status === 'succeeded')) {
+          // 已成功的步骤不能因为检查点写失败被追加为失败，更不能继续后续步骤。
+          throw new CocosError('OUTCOME_UNKNOWN', 'Step completed but workflow checkpoint could not be saved; query its operation before recovery', { workflowId, operationId, currentIndex: index, rows });
+        }
+        rows.push({ index, capabilityId: step.capabilityId, operationId, status: 'failed', error: Json.value(CocosError.from(error).toJSON()), recovery: 'Inspect operation and current resource state; never blindly replay writes' });
+        await this.persistWorkflow(projectId, workflowId, { workflowId, projectId, status: 'failed', total: steps.length, currentIndex: index, rows, completedAt: new Date().toISOString() });
+        if (!continueOnError || CocosError.from(error).code === 'OUTCOME_UNKNOWN') break;
+      }
+    }
+    const failed = rows.some(row => Json.object(row).status === 'failed');
+    const status = failed ? 'failed' : rows.length === steps.length ? 'succeeded' : 'stopped';
+    const result = { workflowId, projectId, status, rows,
+      completed: rows.filter(row => Json.object(row).status === 'succeeded').length, total: steps.length };
+    try { await this.persistWorkflow(projectId, workflowId, { ...result, completedAt: new Date().toISOString() }); }
+    catch { throw new CocosError('OUTCOME_UNKNOWN', 'Workflow finished but its final checkpoint could not be saved', result); }
+    return Json.value(result);
+  }
+
+  async operation(projectId: string, operationId: string, instanceId?: string): Promise<JsonValue> {
+    this.projects.paths(projectId);
+    const cached = this.operations.result(`${projectId}:${operationId}`);
+    if (cached) return Json.value(cached);
+    const localState = this.operations.state(`${projectId}:${operationId}`);
+    if (localState !== undefined && Json.object(localState).status !== 'unknown') return localState;
+    try {
+      const key = `${projectId}:${operationId}`;
+      const binding = this.operations.binding(key);
+      const input = binding ? Json.object(JSON.parse(binding)) : undefined;
+      // 未知结果必须向最初指定的实例对账，不能用另一实例的同名操作解除保护。
+      const originalInstance = this.operations.target(key) ?? (typeof input?.instanceId === 'string' ? input.instanceId : instanceId);
+      if (input && !this.operations.target(key)) return localState!;
+      const descriptor = await this.projects.instance(projectId, originalInstance);
+      const response = await this.bridge.call(descriptor, { protocolVersion: 1, projectId, instanceId: descriptor.instanceId, operationId: randomUUID(), capabilityId: 'bridge.operation', params: { operationId } });
+      const outcome = Json.object(response.result);
+      if (input) {
+        // 旧账本可能已有同名 ID；只有参数指纹也一致才能认领其结果。
+        const expected = createHash('sha256').update(Json.canonical({ capabilityId: input.capabilityId!, params: input.params!, expectedRevision: input.expectedRevision ?? null })).digest('hex');
+        if (outcome.fingerprint !== expected) return localState!;
+      }
+      if (input && outcome.status === 'completed' && typeof outcome.revision === 'string') {
+        const capabilityId = Json.string(input.capabilityId, 'capabilityId');
+        this.operations.settle(key, { operationId, projectId, capabilityId, instanceId: descriptor.instanceId, revision: outcome.revision,
+          result: outcome.result ?? null, verification: this.catalog.describe(capabilityId).verification, completedAt: new Date().toISOString() });
+      } else if (input && outcome.status === 'failed') this.operations.settle(key, CocosError.from(outcome.error, 'EDITOR_ERROR'));
+      return response.result;
+    } catch (error) {
+      if (localState !== undefined) return localState;
+      throw error;
+    }
+  }
+
+  async workflow(projectId: string, workflowId: string): Promise<JsonValue> {
+    if (!/^[a-zA-Z0-9_-]{1,128}$/.test(workflowId)) throw new CocosError('INVALID_ARGUMENT', 'Invalid workflowId');
+    const directory = await this.projects.paths(projectId).work('cache', 'cocos-mcp/workflows');
+    try { return Json.value(JSON.parse(await readFile(join(directory, `${workflowId}.json`), 'utf8'))); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new CocosError('NOT_FOUND', 'Workflow not found'); throw error; }
+  }
+}
+
+export { ProjectPaths } from './paths.js';
+export { ProjectRegistry } from './registry.js';
+export { ProjectQueue } from './queue.js';

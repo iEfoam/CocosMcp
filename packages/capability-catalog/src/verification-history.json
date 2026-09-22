@@ -1,0 +1,74 @@
+[
+  {
+    "id": "creator388-shader-native",
+    "level": "editor-verified",
+    "entryIds": [
+      "shader.environment",
+      "asset.location",
+      "shader.create",
+      "shader.compile",
+      "material.create",
+      "material.update",
+      "material.properties",
+      "shader.update",
+      "shader.restore"
+    ],
+    "source": "smoke-980d351cb652.json",
+    "reportSha256": "21ada20263466846b12adfdbe9e4ac97afc8d5a8a2c815916898a4c8600f9c2a",
+    "creatorVersion": "3.8.8",
+    "limitations": "历史实测报告未记录源码指纹，仅证明当时的测试工程与操作场景；不提升当前源码或跨平台验收状态。"
+  },
+  {
+    "id": "creator388-shader-runtime",
+    "level": "runtime-verified",
+    "entryIds": [
+      "runtime.material.inspect",
+      "runtime.material.update",
+      "runtime.material.reset",
+      "runtime.shader.preview.open",
+      "runtime.shader.preview.capture",
+      "runtime.shader.preview.update",
+      "runtime.shader.preview.compare",
+      "runtime.shader.profile",
+      "runtime.shader.preview.close"
+    ],
+    "source": "MCP_Shader_Runtime_fa2e2e3c/report.json",
+    "reportSha256": "498efd46a704861a1e688bfb99b4c744761045f8a694400f6808082004c6090f",
+    "creatorVersion": "3.8.8",
+    "limitations": "历史实测报告未记录源码指纹，仅证明当时的测试工程与操作场景；不提升当前源码或跨平台验收状态。"
+  },
+  {
+    "id": "creator388-asset-organization",
+    "level": "editor-verified",
+    "entryIds": [
+      "asset.organize.apply",
+      "asset.organize.plan"
+    ],
+    "source": "asset-live-apply.json",
+    "reportSha256": "c4678ecc7f975c2c8fde9fc7fd7fe59e2fbb12e63def397f4bffb036aec4c678",
+    "creatorVersion": "3.8.8",
+    "limitations": "历史实测报告未记录源码指纹，仅证明当时的测试工程与操作场景；不提升当前源码或跨平台验收状态。"
+  },
+  {
+    "id": "creator388-shader-runtime-editor-setup",
+    "level": "editor-verified",
+    "entryIds": [
+      "scene.query",
+      "asset.resolve",
+      "asset.location",
+      "scene.create",
+      "geometry.create",
+      "material.assign",
+      "node.create",
+      "node.set",
+      "component.add",
+      "scene.save",
+      "preview.start",
+      "shader.preview.connect"
+    ],
+    "source": "MCP_Shader_Runtime_fa2e2e3c/report.json",
+    "reportSha256": "498efd46a704861a1e688bfb99b4c744761045f8a694400f6808082004c6090f",
+    "creatorVersion": "3.8.8",
+    "limitations": "历史实测报告未记录源码指纹，仅证明当时的测试工程与操作场景；不提升当前源码或跨平台验收状态。"
+  }
+]

@@ -1,0 +1,54 @@
+import assert from 'node:assert/strict';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { CocosApplication, ProjectRegistry } from '../packages/application/src/index.js';
+import { RuntimeGateway } from '../packages/application/src/runtime-gateway.js';
+import { CocosError, Json, type JsonObject } from '../packages/contracts/src/index.js';
+
+const project = resolve('.codex-work/build/creator2-test-project'), registry = new ProjectRegistry(), { projectId } = await registry.add(project);
+const gateway = new RuntimeGateway(registry), gatewayPort = await gateway.start(), app = new CocosApplication(registry, undefined, undefined, true, gateway);
+const rows: JsonObject[] = []; let preview = false;
+const call = async (id: string, params: JsonObject = {}): Promise<JsonObject> => { const result = Json.object((await app.execute({ projectId, capabilityId: id, params })).result); rows.push({ id, result }); console.log(`PASS ${id}`); return result; };
+try {
+  const scene = Json.object((await call('scene.query')).scene).sceneId!;
+  const nodeId = (await call('node.create', { parentId: scene, name: `RigidBodyCoverage-${Date.now()}` })).nodeId!;
+  await call('node.set', { nodeId, properties: { active: false } });
+  const body = (await call('component.add', { nodeId, type: 'cc.RigidBody' })).componentId!;
+  await call('component.set', { componentId: body, properties: { type: 2, gravityScale: 0, linearDamping: 0, angularDamping: 0 } });
+  const collider = (await call('component.add', { nodeId, type: 'cc.PhysicsBoxCollider' })).componentId!;
+  await call('component.set', { componentId: collider, properties: { size: { width: 100, height: 100 } } });
+  const anchorNode = (await call('node.create', { parentId: scene, name: `JointAnchor-${Date.now()}` })).nodeId!;
+  await call('node.set', { nodeId: anchorNode, properties: { active: false, position: { x: 100, y: 0, z: 0 } } });
+  const anchorBody = (await call('component.add', { nodeId: anchorNode, type: 'cc.RigidBody' })).componentId!;
+  await call('component.set', { componentId: anchorBody, properties: { type: 0 } });
+  const joint = (await call('component.add', { nodeId, type: 'cc.DistanceJoint' })).componentId!;
+  await call('component.set', { componentId: joint, properties: { connectedBody: { uuid: anchorBody }, distance: 100, frequency: 0 } });
+  await call('scene.save'); await call('preview.start', { width: 800, height: 600, visible: true }); preview = true;
+  await call('shader.preview.connect', { gatewayPort });
+  const physics = Json.object((await call('runtime.invoke', { target: 'cc.director', method: 'getPhysicsManager' })).value).handle!;
+  await call('runtime.set', { target: physics, path: 'enabled', value: true });
+  await call('runtime.set', { target: `node:${anchorNode}`, path: 'active', value: true });
+  await call('runtime.set', { target: `node:${nodeId}`, path: 'active', value: true });
+  await call('runtime.shader.profile', { frames: 3, warmupFrames: 1 });
+  const hierarchy = (await call('runtime.hierarchy', { limit: 2000 })).rows as JsonObject[];
+  const componentId = ((hierarchy.find(row => row.nodeId === nodeId)!.components as JsonObject[]).find(row => row.type === 'cc.RigidBody'))!.componentId!;
+  const jointId = ((hierarchy.find(row => row.nodeId === nodeId)!.components as JsonObject[]).find(row => row.type === 'cc.DistanceJoint'))!.componentId!;
+  const connectedId = ((hierarchy.find(row => row.nodeId === anchorNode)!.components as JsonObject[]).find(row => row.type === 'cc.RigidBody'))!.componentId!;
+  const initial = await call('runtime.joint2d.inspect', { componentId: jointId });
+  assert.equal(initial.nativeReady, true); assert.equal(initial.bodyId, componentId); assert.equal(initial.connectedBodyId, connectedId);
+  assert.deepEqual(initial.issues, []);
+  const state = await call('runtime.rigidbody2d.inspect', { componentId }), center = Json.object(state.worldCenter);
+  await call('runtime.rigidbody2d.impulse', { componentId, vector: { x: 0, y: 320 }, point: { x: center.x!, y: center.y! }, wake: true });
+  await call('runtime.shader.profile', { frames: 20, warmupFrames: 1 });
+  const after = await call('runtime.joint2d.inspect', { componentId: jointId });
+  const a = Json.object(after.worldAnchor), b = Json.object(after.worldConnectedAnchor);
+  assert.ok(Math.abs(Math.hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y)) - 100) < 1);
+  assert.ok(Math.abs(Number(a.y)) > 1);
+  await call('runtime.set', { target: `component:${jointId}`, path: 'enabled', value: false });
+  const disabled = await call('runtime.joint2d.inspect', { componentId: jointId });
+  assert.equal(disabled.nativeReady, false); assert.equal(disabled.worldAnchor, null);
+  await call('runtime.set', { target: `node:${nodeId}`, path: 'active', value: false });
+  await call('runtime.set', { target: `node:${anchorNode}`, path: 'active', value: false });
+  rows.push({ passed: true, assertions: 'native DistanceJoint body identities, anchors, impulse motion with 100px distance constraint, disabled joint null anchors' });
+} catch (error) { rows.push({ passed: false, error: CocosError.from(error).toJSON() as unknown as JsonObject }); process.exitCode = 1; console.error(error); }
+finally { try { if (preview) await call('preview.stop'); } finally { await gateway.close(); await mkdir(resolve('.codex-work/logs/creator2-expansion'), { recursive: true }); await writeFile(resolve('.codex-work/logs/creator2-expansion/joint.json'), JSON.stringify({ project, rows }, null, 2)); } }

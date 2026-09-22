@@ -1,0 +1,15 @@
+packages:
+  - apps/*
+  - packages/*
+  - extensions/*
+
+storeDir: .codex-work/cache/pnpm-store
+cacheDir: .codex-work/cache/pnpm
+virtualStoreDir: .codex-work/cache/pnpm-virtual-store
+managePackageManagerVersions: false
+
+allowBuilds:
+  esbuild: true
+
+minimumReleaseAgeExclude:
+  - zod@4.6.5

@@ -1,0 +1,91 @@
+import assert from 'node:assert/strict';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { CocosApplication, ProjectRegistry } from '../packages/application/src/index.js';
+import { RuntimeGateway } from '../packages/application/src/runtime-gateway.js';
+import { CocosError, Json, type JsonObject } from '../packages/contracts/src/index.js';
+
+const project = resolve('.codex-work/build/creator2-test-project'), registry = new ProjectRegistry(), { projectId } = await registry.add(project);
+const gateway = new RuntimeGateway(registry), gatewayPort = await gateway.start(), app = new CocosApplication(registry, undefined, undefined, true, gateway);
+const rows: JsonObject[] = []; let preview = false;
+const call = async (id: string, params: JsonObject = {}): Promise<JsonObject> => { const result = Json.object((await app.execute({ projectId, capabilityId: id, params })).result); rows.push({ id, result }); console.log(`PASS ${id}`); return result; };
+try {
+  const scriptLocation = await call('asset.location', { url: 'db://assets/Scripts/CocosMcpCollisionBusinessProbe.js' });
+  if (!scriptLocation.targetExists) await call('asset.create', { url: scriptLocation.url!, content: `cc.Class({ name: 'CocosMcpCollisionBusinessProbe', extends: cc.Component, properties: { enters: 0, stays: 0, exits: 0 }, onCollisionEnter: function(other) { if(other.tag === 102) this.enters++; }, onCollisionStay: function(other) { if(other.tag === 102) this.stays++; }, onCollisionExit: function(other) { if(other.tag === 102) this.exits++; } });` });
+  let ready = false;
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const types = (await call('component.types')).rows as JsonObject[];
+    if (types.some(row => row.name === 'CocosMcpCollisionBusinessProbe')) { ready = true; break; }
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+  assert.ok(ready, 'Business fixture script must compile and register');
+  const old = (await call('scene.hierarchy', { limit: 2000 })).rows as JsonObject[];
+  for (const row of old) if (String(row.name).startsWith('CollisionCoverage-')) await call('node.set', { nodeId: row.nodeId!, properties: { active: false } });
+  const scene = Json.object((await call('scene.query')).scene).sceneId!;
+  const root = (await call('node.create', { parentId: scene, name: `CollisionCoverage-${Date.now()}` })).nodeId!;
+  const nodeA = (await call('node.create', { parentId: root, name: 'Circle' })).nodeId!;
+  const nodeB = (await call('node.create', { parentId: root, name: 'Box' })).nodeId!;
+  const circle = (await call('component.add', { nodeId: nodeA, type: 'cc.CircleCollider' })).componentId!;
+  await call('component.set', { componentId: circle, properties: { radius: 25 } });
+  await call('component.add', { nodeId: nodeA, type: 'CocosMcpCollisionBusinessProbe' });
+  const box = (await call('component.add', { nodeId: nodeB, type: 'cc.PolygonCollider' })).componentId!;
+  await call('component.set', { componentId: box, properties: { points: [{ x: -25, y: -25 }, { x: 25, y: -25 }, { x: 25, y: 25 }, { x: -25, y: 25 }], tag: 102 } });
+  await call('node.set', { nodeId: nodeB, properties: { position: { x: 200, y: 0, z: 0 } } });
+  const location = await call('asset.location', { url: `db://assets/Animations/CollisionMotion-${Date.now()}.anim` });
+  const clip = await call('animation.clip.create', { url: location.url!, rootId: nodeB, document: { name: 'CollisionMotion', duration: 1.2, tracks: [{ path: '', property: 'position', keys: [[0,200],[0.3,200],[0.5,0],[0.7,0],[0.9,200],[1.2,200]].map(([time,x]) => ({ time: time!, value: { x: x!, y: 0, z: 0 } })) }] } });
+  const animation = (await call('component.add', { nodeId: nodeB, type: 'cc.Animation' })).componentId!;
+  await call('component.set', { componentId: animation, properties: { _clips: [{ uuid: clip.uuid! }], defaultClip: { uuid: clip.uuid! } } });
+  await call('scene.save'); await call('preview.start', { width: 800, height: 600, visible: true }); preview = true;
+  await call('shader.preview.connect', { gatewayPort });
+  const manager = Json.object((await call('runtime.invoke', { target: 'cc.director', method: 'getCollisionManager' })).value).handle!;
+  const originalGroups = (await call('runtime.get', { target: 'cc.game', path: 'groupList' })).value!;
+  const originalMatrix = (await call('runtime.get', { target: 'cc.game', path: 'collisionMatrix' })).value!;
+  await call('runtime.set', { target: 'cc.game', path: 'groupList', value: ['default', 'McpCollisionFixture'] });
+  await call('runtime.set', { target: 'cc.game', path: 'collisionMatrix', value: [[false, true], [true, false]] });
+  await call('runtime.set', { target: `node:${nodeB}`, path: 'groupIndex', value: 1 });
+  await call('runtime.set', { target: manager, path: 'enabled', value: true });
+  await call('runtime.shader.profile', { frames: 2, warmupFrames: 1 });
+  const before = await call('runtime.collision2d.inspect', { rootId: root });
+  assert.equal((before.rows as JsonObject[]).length, 2);
+  const polygon = (before.rows as JsonObject[]).find(row => row.type === 'cc.PolygonCollider')!;
+  const circleState = (before.rows as JsonObject[]).find(row => row.type === 'cc.CircleCollider')!;
+  assert.equal(Json.object(circleState.world).radius, 25);
+  assert.deepEqual(Json.object(Json.object(circleState.world).aabb), { x: -25, y: -25, width: 50, height: 50 });
+  assert.deepEqual(Json.object(Json.object(polygon.world).aabb), { x: 175, y: -25, width: 50, height: 50 });
+  assert.equal(polygon.groupIndex, 1); assert.equal((Json.object(polygon.world).points as unknown[]).length, 4);
+  assert.equal((before.matrix as boolean[][])[0]![1], true);
+  const baseline = await call('runtime.hierarchy', { limit: 2000 });
+  const animationId = (((baseline.rows as JsonObject[]).find(row => row.nodeId === nodeB)!.components as JsonObject[]).find(row => row.type === 'cc.Animation'))!.componentId!;
+  const states = await call('runtime.animation.state', { componentId: animationId });
+  const clipName = (states.rows as JsonObject[])[0]!.name!;
+  await call('runtime.animation.play', { componentId: animationId, name: clipName });
+  const trace = await call('runtime.collision2d.trace', { rootId: root, frames: 300, limit: 1000 });
+  const deliveries = (trace.rows as JsonObject[]).filter(row => [nodeA, nodeB].includes(row.receiverNodeId!) && [nodeA, nodeB].includes(row.otherNodeId!));
+  for (const event of ['enter', 'stay', 'exit']) assert.ok(deliveries.some(row => row.event === event), event);
+  await call('runtime.shader.profile', { frames: 2, warmupFrames: 1 });
+  const after = await call('runtime.hierarchy', { limit: 2000 });
+  const count = (hierarchy: JsonObject) => (hierarchy.rows as JsonObject[]).filter(row => [nodeA, nodeB].includes(row.nodeId!)).map(row => (row.components as unknown[]).length);
+  assert.deepEqual(count(after), count(baseline));
+  const business = (((baseline.rows as JsonObject[]).find(row => row.nodeId === nodeA)!.components as JsonObject[]).find(row => row.type === 'CocosMcpCollisionBusinessProbe'))!.componentId!;
+  const counter = async (path: string) => Number((await call('runtime.get', { target: `component:${business}`, path })).value);
+  const enters = await counter('enters');
+  assert.ok(enters > 0); assert.ok(await counter('stays') > 0); assert.ok(await counter('exits') > 0);
+  // 追踪已结束，再次播放；业务组件仍必须收到新的进入回调。
+  await call('runtime.animation.play', { componentId: animationId, name: clipName });
+  await call('runtime.shader.profile', { frames: 300, warmupFrames: 1 });
+  assert.ok(await counter('enters') > enters);
+  await call('runtime.set', { target: `node:${root}`, path: 'active', value: false });
+  const beforeBlocked = await counter('enters');
+  await call('runtime.set', { target: 'cc.game', path: 'collisionMatrix', value: [[false, false], [false, false]] });
+  await call('runtime.set', { target: `node:${root}`, path: 'active', value: true });
+  await call('runtime.animation.play', { componentId: animationId, name: clipName });
+  const blockedTrace = await call('runtime.collision2d.trace', { rootId: root, frames: 300, limit: 1000 });
+  assert.equal((blockedTrace.rows as JsonObject[]).length, 0);
+  assert.equal(await counter('enters'), beforeBlocked);
+  await call('runtime.set', { target: `node:${root}`, path: 'active', value: false });
+  await call('runtime.set', { target: 'cc.game', path: 'groupList', value: originalGroups });
+  await call('runtime.set', { target: 'cc.game', path: 'collisionMatrix', value: originalMatrix });
+  rows.push({ businessCallbacksVerified: true, nonDefaultGroupVerified: true, polygonVerified: true, deniedMatrixVerified: true });
+  rows.push({ passed: true, assertions: 'native Circle/Polygon, non-default group allow/deny matrix, business callbacks during and after trace, observer cleanup' });
+} catch (error) { if (preview) { try { await call('preview.logs'); } catch {} } rows.push({ passed: false, error: CocosError.from(error).toJSON() as unknown as JsonObject }); process.exitCode = 1; console.error(error); }
+finally { try { if (preview) await call('preview.stop'); } finally { await gateway.close(); await mkdir(resolve('.codex-work/logs/creator2-expansion'), { recursive: true }); await writeFile(resolve('.codex-work/logs/creator2-expansion/collision-expanded.json'), JSON.stringify({ project, rows }, null, 2)); } }

@@ -1,0 +1,53 @@
+name: Build and publish extensions
+on:
+  push:
+    branches: [main]
+    tags: ['v[0-9]*']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      TMPDIR: ${{ github.workspace }}/.codex-work/tmp
+      TMP: ${{ github.workspace }}/.codex-work/tmp
+      TEMP: ${{ github.workspace }}/.codex-work/tmp
+      XDG_CACHE_HOME: ${{ github.workspace }}/.codex-work/cache
+      npm_config_cache: ${{ github.workspace }}/.codex-work/cache/npm
+      NODE_COMPILE_CACHE: ${{ github.workspace }}/.codex-work/cache/node
+    steps:
+      - uses: actions/checkout@v4
+      - run: mkdir -p .codex-work/tmp .codex-work/cache .codex-work/build
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install pinned pnpm in project cache
+        run: |
+          npm install --prefix .codex-work/cache/pnpm-cli --no-package-lock --ignore-scripts pnpm@11.22.0
+          echo "$GITHUB_WORKSPACE/.codex-work/cache/pnpm-cli/node_modules/.bin" >> "$GITHUB_PATH"
+      - run: pnpm install --frozen-lockfile
+      - name: Set release version
+        run: |
+          BASE=$(node -p "require('./package.json').version")
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Stable releases require vMAJOR.MINOR.PATCH"; exit 1; }
+            [[ "$GITHUB_REF_NAME" == "v$BASE" ]] || { echo "Tag must match package.json version"; exit 1; }
+            echo "COCOS_RELEASE_TAG=$GITHUB_REF_NAME" >> "$GITHUB_ENV"
+            echo "COCOS_RELEASE_CHANNEL=stable" >> "$GITHUB_ENV"
+          else
+            echo "COCOS_RELEASE_TAG=v${BASE}-dev.${GITHUB_RUN_NUMBER}.${GITHUB_SHA:0:7}" >> "$GITHUB_ENV"
+            echo "COCOS_RELEASE_CHANNEL=development" >> "$GITHUB_ENV"
+          fi
+      - run: pnpm check
+      - run: node scripts/project-env.mjs node scripts/release-bundle.mjs
+      - name: Publish tested version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          FLAGS=(--prerelease --latest=false)
+          if [[ "$COCOS_RELEASE_CHANNEL" == stable ]]; then FLAGS=(--verify-tag --latest); fi
+          gh release create "$COCOS_RELEASE_TAG" .codex-work/build/releases/*.json .codex-work/build/releases/*.zip .codex-work/build/releases/SHA256SUMS --target "$GITHUB_SHA" --title "CocosMCP $COCOS_RELEASE_TAG" --notes "Tested $COCOS_RELEASE_CHANNEL build from commit $GITHUB_SHA. ZIP and update bundles share the same source fingerprint. Reload the extension after installation." "${FLAGS[@]}"

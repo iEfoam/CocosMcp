@@ -1,0 +1,227 @@
+import { Creator2Support } from '../packages/capability-catalog/src/creator2-support.js';
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, mkdir, readFile, writeFile, symlink } from 'node:fs/promises';
+import { join } from 'node:path';
+import { ShaderVariants, ShaderDiagnostics, MaterialValues } from '../packages/shader-core/src/index.js';
+import { ShaderService } from '../packages/creator3-adapter/src/shader.js';
+import { MaterialController } from '../packages/runtime3-bridge/src/material.js';
+import { CapabilityCatalog } from '../packages/capability-catalog/src/index.js';
+import { Json, type JsonObject, type JsonValue } from '../packages/contracts/src/index.js';
+import type { EditorPort } from '../packages/creator3-adapter/src/port.js';
+import { RuntimeAccess, type RuntimeObject } from '../packages/runtime3-bridge/src/access.js';
+
+class AssetHarness {
+  root = '';
+  service!: ShaderService;
+  async create(): Promise<void> {
+    this.root = await mkdtemp(join(process.cwd(), '.codex-work/tmp/shader-test-'));
+    await mkdir(join(this.root, 'assets'));
+    const port = { version: '3.8.8', projectPath: this.root,
+      request: async (_channel: string, method: string, url: string, content: string): Promise<unknown> => {
+        const path = join(this.root, 'assets', url.slice('db://assets/'.length));
+        if (method === 'query-asset-info') return readFile(path).then(() => ({ uuid: 'asset' }), () => null);
+        if (method === 'create-asset' || method === 'save-asset') { await writeFile(path, content); return { uuid: 'asset' }; }
+        throw new Error(`Unexpected asset method ${method}`);
+      },
+      shader: async (): Promise<JsonValue> => ({ status: 'passed', compiled: { techniques: [], shaders: [] }, rows: [], dependencies: [] }),
+    } as unknown as EditorPort;
+    this.service = new ShaderService(port);
+  }
+  async call(id: string, params: JsonObject): Promise<JsonObject> { return Json.object(await this.service.execute(id, params)); }
+}
+
+test('Shader catalog rejects missing hash, unknown fields and unbounded workloads', () => {
+  const catalog = new CapabilityCatalog();
+  assert.throws(() => catalog.validate('shader.update', { url: 'db://assets/x.effect', content: 'x' }), /expectedHash/);
+  assert.throws(() => catalog.validate('shader.compile', { url: 'x', arbitrary: true }), /additional/);
+  assert.throws(() => catalog.validate('runtime.shader.profile', { frames: 301 }));
+  assert.throws(() => catalog.validate('runtime.shader.preview.open', { materialUuid: 'x', width: 99999 }));
+  for (const row of catalog.search('', 'F22').rows) assert.deepEqual(row.supportedMajors, [...Creator2Support.scene, ...Creator2Support.runtime, ...Creator2Support.preview].includes(row.id) ? [2, 3] : [3]);
+});
+
+test('variant plans deduplicate scalar axes and reject combinations before expansion', () => {
+  const planner = new ShaderVariants();
+  assert.equal(planner.plan({ USE_MAP: [true, false, true], MODE: [1, 2] }).total, 4);
+  assert.throws(() => planner.plan({ A: [1, 2, 3], B: [1, 2, 3] }, 8), /budget/);
+  assert.throws(() => planner.plan({ A: [{}] }), /scalar/);
+  assert.throws(() => planner.plan({ 'bad;name': [1] }), /macro name/);
+});
+
+test('native diagnostic locations never claim an exact source mapping', () => {
+  const row = new ShaderDiagnostics().from('EFX2201 line 17: bad uniform', 'db://assets/x.effect');
+  assert.equal(row.code, 'EFX2201'); assert.equal(row.line, 17); assert.equal(row.locationAccuracy, 'generated');
+});
+
+test('material value validation rejects unknown names, malformed vectors and non-finite values', () => {
+  const validator = new MaterialValues();
+  assert.throws(() => validator.validate({ missing: 1 }, { tint: {} }), /Unknown/);
+  assert.throws(() => validator.validate({ tint: { type: 'vec4', value: [1, 2] } }, { tint: {} }), /vector/);
+  assert.throws(() => validator.validate({ tint: Number.NaN }, { tint: {} }), /finite/);
+  assert.throws(() => validator.validate({ tint: 'asset-path' }, { tint: {} }), /explicit/);
+});
+
+test('material values normalize Creator component objects and reject declarations with a property-specific hint', () => {
+  const values = new MaterialValues();
+  assert.deepEqual(values.properties({ tint: { __type__: 'cc.Color', r: 255, g: 128, b: 0, a: 255 }, offset: { x: 1, y: 2, z: 3 }, weights: [1, 2] }), {
+    tint: { type: 'color', value: [255, 128, 0, 255] }, offset: { type: 'vec3', value: [1, 2, 3] }, weights: [1, 2],
+  });
+  assert.throws(() => values.properties({ tint: { type: 16, value: [1, 1, 1, 1] } }), /Material property "tint".*property declarations/);
+  assert.throws(() => values.properties({ tint: { r: 1, g: 2, b: 3 } }), /Material property "tint"/);
+  assert.throws(() => values.properties({ offset: { x: 1, y: Number.NaN } }), /vector/);
+});
+
+test('invalid material input is rejected before reading assets or entering the Scene process', async () => {
+  const service = new ShaderService({ version: '3.8.8', scene: async () => { throw new Error('Must not reach Scene'); } } as unknown as EditorPort);
+  await assert.rejects(service.execute('material.create', { url: 'db://assets/Materials/test.mtl', effectUrl: 'db://assets/Effects/test.effect', properties: { tint: { type: 16 } } }), /Material property "tint"/);
+});
+
+test('owned cleanup respects deferred native destruction and never destroys an object twice', () => {
+  let calls = 0;
+  const pending = new Set<unknown>();
+  const cc = { isValid: (object: unknown, strict: boolean) => { assert.equal(strict, true); return !pending.has(object); } };
+  const object = { isValid: true, destroy: () => { calls++; pending.add(object); } };
+  RuntimeAccess.destroyOwned(cc, object);
+  RuntimeAccess.destroyOwned(cc, object);
+  assert.equal(calls, 1);
+  const externallyDestroyed = { isValid: true, destroy: () => { throw new Error('already queued by native owner'); } };
+  pending.add(externallyDestroyed);
+  RuntimeAccess.destroyOwned(cc, externallyDestroyed);
+});
+
+test('resource updates preserve conflicting edits and restore only expected content', async () => {
+  const harness = new AssetHarness(); await harness.create(); const url = 'db://assets/test.effect';
+  const created = await harness.call('shader.create', { url, content: 'first' });
+  await assert.rejects(harness.call('shader.create', { url, content: 'overwrite' }), /already exists/);
+  const updated = await harness.call('shader.update', { url, content: 'second', expectedHash: created.sourceHash! });
+  await assert.rejects(harness.call('shader.update', { url, content: 'third', expectedHash: created.sourceHash! }), /changed/);
+  await assert.rejects(harness.call('shader.restore', { backupId: updated.backupId!, expectedHash: created.sourceHash! }), /changed/);
+  const restored = await harness.call('shader.restore', { backupId: updated.backupId!, expectedHash: updated.sourceHash! });
+  assert.equal(restored.content, 'first'); assert.ok(restored.backupId);
+});
+
+test('compile tasks detect stale sources and remain readable across controller restarts', async () => {
+  const harness = new AssetHarness(); await harness.create(); const url = 'db://assets/test.effect';
+  const created = await harness.call('shader.create', { url, content: 'first' });
+  const task = await harness.call('shader.compile', { url }); assert.equal(task.gpuValidation, 'not-run'); assert.equal(task.compiled, undefined);
+  await harness.call('shader.update', { url, content: 'second', expectedHash: created.sourceHash! });
+  const status = await harness.call('shader.diagnostics', { taskId: task.taskId! }); assert.equal(status.stale, true);
+  const restarted = new ShaderService({ projectPath: harness.root, version: '3.8.8' } as EditorPort);
+  assert.equal(Json.object(await restarted.execute('shader.diagnostics', { taskId: task.taskId! })).stale, true);
+});
+
+test('shader source readers reject traversal, symlinks and backup ID traversal', async () => {
+  const harness = new AssetHarness(); await harness.create();
+  await assert.rejects(harness.call('shader.read', { url: 'db://assets/../../outside.effect' }), /traversal/);
+  await symlink(process.cwd(), join(harness.root, 'assets', 'outside'));
+  await assert.rejects(harness.call('shader.read', { url: 'db://assets/outside/private.effect' }), /link/);
+  await assert.rejects(harness.call('shader.restore', { backupId: '../outside', expectedHash: 'x' }), /Invalid backup/);
+});
+
+class MockMaterial {
+  uuid = 'shared'; isValid = true; parent?: MockMaterial;
+  effectAsset = { uuid: 'effect', shaders: [{ defines: [{ name: 'USE_MAP', type: 'boolean' }] }] };
+  technique = 0;
+  values: Record<string, unknown> = { threshold: 0.5 };
+  passes = [{ properties: { threshold: {} }, defines: {}, shaderInfo: {}, getHandle: () => 1, tryCompile: () => true }];
+  copy(source: MockMaterial): void { this.values = { ...source.values }; }
+  setProperty(name: string, value: unknown): void { this.values[name] = value; }
+  getProperty(name: string): unknown { return this.values[name]; }
+  destroy(): void { this.isValid = false; }
+  recompileShaders(): void {}
+  overridePipelineStates(): void {}
+}
+class MockState {
+  enabled = false;
+  get native(): MockState { return this; }
+}
+
+class SwitchedEffect {
+  uuid = 'switched-effect';
+  shaders = [{defines: [{name: 'USE_MAP', type: 'boolean'}]}];
+  techniques = [{passes: [{switch: 'OUTLINE'}, {}, {}]}];
+}
+class SwitchedMaterial {
+  effectAsset = new SwitchedEffect(); technique = 0; isValid = true;
+  defines: JsonObject[] = [{}, {}, {}]; states: JsonObject[] = [{}, {}, {}];
+  values: JsonObject[] = [{}, {}, {}];
+  get passes() {
+    return this.defines.flatMap((defines, passIndex) => passIndex === 0 && !defines.OUTLINE ? [] : [{passIndex, propertyIndex: passIndex, defines,
+      properties: {threshold: {}}, shaderInfo: {}, getHandle: () => 1}]);
+  }
+  initialize(info: {effectAsset: SwitchedEffect}): void { this.effectAsset = info.effectAsset; }
+  copy(source: SwitchedMaterial, info?: {defines: JsonObject | JsonObject[]; states: JsonObject | JsonObject[]}): void {
+    this.effectAsset = source.effectAsset;
+    for (const key of ['defines', 'states'] as const) this[key] = source[key].map((entry, index) => ({...entry, ...(Array.isArray(info?.[key]) ? info[key][index] : info?.[key])}));
+    this.values = source.values.map(value => ({...value}));
+  }
+  setProperty(name: string, value: JsonValue, index: number): void { this.values[this.passes[index]!.propertyIndex]![name] = value; }
+  getProperty(name: string, index: number): JsonValue | undefined { return this.values[this.passes[index]!.propertyIndex]![name]; }
+  destroy(): void { this.isValid = false; }
+}
+
+test('serialized patches map enabled pass indices to raw effect indices and accept pass switches', async () => {
+  const effect = new SwitchedEffect();
+  const controller = new MaterialController({major: 3, cc: {Material: SwitchedMaterial, EffectAsset: SwitchedEffect,
+    assetManager: {loadAny: (_uuid: string, done: (error: null, asset: SwitchedEffect) => void) => done(null, effect)}},
+    serialize: (value: unknown) => { const material = value as unknown as SwitchedMaterial; return {defines: material.defines, values: material.values}; },
+  } as unknown as ConstructorParameters<typeof MaterialController>[0]);
+  const result = await controller.serialized({effectUuid: effect.uuid, passIndex: 0, defines: {USE_MAP: true}, properties: {threshold: 0.7}});
+  assert.deepEqual(Json.object(result.serialized).defines, [{}, {USE_MAP: true}, {}]);
+  assert.deepEqual(Json.object(result.serialized).values, [{}, {threshold: 0.7}, {}]);
+  const switched = await controller.serialized({effectUuid: effect.uuid, defines: {OUTLINE: true}});
+  assert.equal((Json.object(switched.material).rows as JsonObject[]).length, 3);
+  await assert.rejects(controller.serialized({effectUuid: effect.uuid, defines: {OUTLINE: 1}}), /Invalid macro type/);
+});
+
+test('embedded material inspection uses native assets and does not read importer cache files', async () => {
+  const service = new ShaderService({version: '3.8.8',
+    request: async () => ({uuid: 'fbx@material', type: 'cc.Material'}),
+    scene: async (method: string, params: unknown) => {
+      assert.equal(method, 'shader.materialAsset'); assert.deepEqual(params, {uuid: 'fbx@material', action: 'serialize'});
+      return {serialized: {__type__: 'cc.Material'}, material: {rows: [{pass: 0}]}};
+    },
+  } as unknown as EditorPort);
+  const result = Json.object(await service.execute('material.query', {url: 'db://assets/Models/test.fbx/Skin.material'}));
+  assert.equal(result.readonly, true); assert.equal(result.uuid, 'fbx@material');
+  assert.deepEqual(await service.execute('material.properties', {url: 'db://assets/Models/test.fbx/Skin.material'}), {rows: [{pass: 0}]});
+});
+class MockInstance extends MockMaterial {
+  constructor(info: { parent: MockMaterial }) { super(); this.parent = info.parent; this.uuid = 'instance'; this.copy(info.parent); }
+}
+class MaterialHarness {
+  shared = new MockMaterial(); current: MockMaterial = this.shared; forced = false;
+  component = { uuid: 'renderer', getRenderMaterial: () => this.current,
+    setMaterialInstance: (material: MockMaterial) => { this.current = material; },
+    setSharedMaterial: (material: MockMaterial, _slot: number, force: boolean) => { this.forced = force; this.current.destroy(); this.current = material; } };
+  root = { uuid: 'root', children: [], getComponents: () => [this.component] };
+  controller = new MaterialController({ cc: { director: { getScene: () => this.root }, renderer: { MaterialInstance: MockInstance } } as unknown as RuntimeObject, major: 3 });
+}
+
+test('repeated instance updates keep a stable parent and force restoration of a shared material', async () => {
+  const harness = new MaterialHarness();
+  await harness.controller.execute('runtime.material.update', { componentId: 'renderer', properties: { threshold: 0.2 } });
+  const first = harness.current;
+  await harness.controller.execute('runtime.material.update', { componentId: 'renderer', properties: { threshold: 0.8 } });
+  assert.equal(first.isValid, false); assert.equal(harness.current.parent, harness.shared); assert.equal(harness.shared.values.threshold, 0.5);
+  await harness.controller.execute('runtime.material.reset', { componentId: 'renderer' });
+  assert.equal(harness.current, harness.shared); assert.equal(harness.forced, true); assert.equal(harness.shared.isValid, true);
+});
+
+test('bad material parameters and external binding changes preserve the active material', async () => {
+  const harness = new MaterialHarness();
+  await assert.rejects(harness.controller.execute('runtime.material.update', { componentId: 'renderer', properties: { typo: 1 } }), /Unknown/);
+  assert.equal(harness.current, harness.shared);
+  await harness.controller.execute('runtime.material.update', { componentId: 'renderer', properties: { threshold: 0.2 } });
+  const external = new MockMaterial(); harness.current = external;
+  await assert.rejects(harness.controller.execute('runtime.material.reset', { componentId: 'renderer' }), /outside/);
+  assert.equal(harness.current, external);
+});
+
+test('native gfx state self references are excluded from serialized state inspection', () => {
+  const harness = new MaterialHarness();
+  Object.assign(harness.shared.passes[0]!, { blendState: new MockState(), depthStencilState: new MockState(), rasterizerState: new MockState() });
+  const material = harness.controller.describe(harness.shared as unknown as RuntimeObject);
+  const state = Json.object((material.rows as JsonObject[])[0]!.states);
+  assert.deepEqual(state.blendState, { enabled: false });
+});
