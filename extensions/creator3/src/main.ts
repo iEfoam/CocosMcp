@@ -43,7 +43,7 @@ class CreatorHost implements EditorPort {
     }, create: options => {
       const electron = require('electron') as { BrowserWindow: new (options: unknown) => PreviewWindow };
       return new electron.BrowserWindow(options);
-    } }, Editor.Project.path);
+    } }, Editor.Project.path, 3, { projectPath: Editor.Project.path, importResource: url => this.request('asset-db', 'refresh-asset', url) });
     if (method === 'connect-runtime') {
       const root = join(Editor.Project.path, '.codex-work/cache/cocos-mcp');
       const projectId = createHash('sha256').update(realpathSync(Editor.Project.path)).digest('hex').slice(0, 24);

@@ -26,7 +26,7 @@ export class Creator3Adapter implements EditorAdapter {
   supportedCapabilities(): string[] {
     const excluded = new Set<string>();
     if (!this.port.consoleAvailable || !this.port.consoleQuery || this.port.version !== '3.8.8') excluded.add('console.query');
-    if (!this.port.preview || this.port.version !== '3.8.8') for (const id of ['preview.start', 'preview.stop', 'preview.status', 'preview.capture', 'preview.resize', 'preview.input', 'preview.logs']) excluded.add(id);
+    if (!this.port.preview || this.port.version !== '3.8.8') for (const row of new Operations().list()) if (row.id.startsWith('preview.')) excluded.add(row.id);
     return new Operations().list().filter(row => row.context === 'editor' && row.supportedMajors?.includes(3) && !excluded.has(row.id)
       && (row.module !== 'F22' || row.id === 'shader.environment' || this.port.version === '3.8.8')
       && (!row.id.startsWith('rendering.') || this.port.version === '3.8.8')

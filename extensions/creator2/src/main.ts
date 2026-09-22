@@ -1,3 +1,4 @@
+import { Creator2PreviewCompiler, type Creator2ProjectCompiler } from './preview-compiler.js';
 import { PanelPreferences, type PanelMenuHost } from '../../shared/panel-preferences.js';
 import { ExtensionUpdate } from '../../shared/extension-update.js';
 import { McpService } from '../../shared/mcp-service.js';
@@ -13,6 +14,7 @@ import type { PanelState } from '../../../packages/editor-bridge/src/panel-state
 interface ReplyEvent { reply?(error: { message: string } | null, result?: unknown): void }
 
 interface CreatorEditor extends PanelMenuHost {
+  ProjectCompiler?: Creator2ProjectCompiler;
   PreviewServer?: { _previewPort?: number; _validateStashedScene?(callback: () => void): void };
   stashedScene?: unknown;
   currentSceneUuid?: string;
@@ -63,7 +65,7 @@ class CreatorHost implements Creator2Port {
     }, create: options => {
       const electron = require('electron') as { BrowserWindow: new (options: unknown) => PreviewWindow };
       return new electron.BrowserWindow(options);
-    } }, Editor.Project.path, 2);
+    } }, Editor.Project.path, 2, { projectPath: Editor.Project.path, importResource: url => this.asset('refresh', url), compile: (batch, cancelled) => new Creator2PreviewCompiler(Editor.Project.path, this.version, () => Editor.ProjectCompiler, url => Reflect.apply(Editor.assetdb.urlToUuid as Function, Editor.assetdb, [url]) as string, uuid => Reflect.apply(Editor.assetdb.uuidToUrl as Function, Editor.assetdb, [uuid]) as string).compile(batch, cancelled) });
     if (method === 'connect-runtime') {
       const root = join(Editor.Project.path, '.codex-work/cache/cocos-mcp');
       const projectId = createHash('sha256').update(realpathSync(Editor.Project.path)).digest('hex').slice(0, 24);

@@ -50,4 +50,7 @@ jobs:
         run: |
           FLAGS=(--prerelease --latest=false)
           if [[ "$COCOS_RELEASE_CHANNEL" == stable ]]; then FLAGS=(--verify-tag --latest); fi
-          gh release create "$COCOS_RELEASE_TAG" .codex-work/build/releases/*.json .codex-work/build/releases/*.zip .codex-work/build/releases/SHA256SUMS --target "$GITHUB_SHA" --title "CocosMCP $COCOS_RELEASE_TAG" --notes "Tested $COCOS_RELEASE_CHANNEL build from commit $GITHUB_SHA. ZIP and update bundles share the same source fingerprint. Reload the extension after installation." "${FLAGS[@]}"
+          NOTES=.codex-work/build/release-notes.md
+          printf 'Tested %s build from commit `%s`.\n\n' "$COCOS_RELEASE_CHANNEL" "$GITHUB_SHA" > "$NOTES"
+          cat .github/release-notes.md >> "$NOTES"
+          gh release create "$COCOS_RELEASE_TAG" .codex-work/build/releases/*.json .codex-work/build/releases/*.zip .codex-work/build/releases/SHA256SUMS --target "$GITHUB_SHA" --title "CocosMCP $COCOS_RELEASE_TAG" --notes-file "$NOTES" "${FLAGS[@]}"

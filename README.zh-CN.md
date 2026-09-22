@@ -14,6 +14,7 @@
 </p>
 
 <p align="center">
+  <a href="#让-ai-自动下载安装推荐">AI 自动安装</a> ·
   <a href="#快速开始">快速开始</a> ·
   <a href="#按-creator-版本支持的功能">版本支持</a> ·
   <a href="#mcp-功能速览">功能速览</a> ·
@@ -91,6 +92,91 @@ Creator 2.4.15 的新增适配、独立测试工程、原生覆盖结果和未�
 - **源码能力发现**：从 Creator 源码或 ASAR 生成编辑器消息与类型候选目录，或从引擎源码生成 `engine-capabilities.json`。候选能力在单独验证前保持 `source-only`。
 
 版本支持以具体操作为准。调用前检查 `creator2Operations`、`creator3Operations` 与能力验证证据；不支持的版本会在执行前被拒绝。详见[功能介绍](docs/feature-reference.md)与 [Shader 开发指南](docs/shader-development.md)。
+
+## 下载与离线安装
+
+### 让 AI 自动下载安装（推荐）
+
+把下面提示词直接发给**具备联网、本机文件、终端和桌面操作能力的 AI 助手**即可，无需提前下载文件、查找路径或手动填写配置。AI 会从当前工作区和本机环境识别安装目标，完成下载、安装、启动与连接验证。这种方式需要联网；已有 ZIP 的手动离线安装步骤在后面。
+
+<details>
+<summary>展开并复制：让 AI 全程下载安装 CocosMCP</summary>
+
+```text
+请直接帮我从 GitHub 下载并安装 CocosMCP，让当前 AI 客户端连接我的 Cocos Creator 工程。
+仓库：https://github.com/iEfoam/CocosMcp
+发布页：https://github.com/iEfoam/CocosMcp/releases
+
+以方便为先，请自己完成环境识别、下载、安装、配置、启动和验证，
+不要让我下载文件、填写路径、复制 token、执行命令或按教程逐步点击。
+请使用已有工具实际操作，不要只给我安装步骤。
+
+1. 从当前工作区、已打开的 Creator 工程和客户端上下文识别目标工程、
+   Creator 精确版本/路径、操作系统/架构、当前 AI 客户端及其 MCP 配置位置。
+   优先当前工程，不批量修改其他工程。仅在目标确实存在无法判断的歧义时简短询问。
+2. 查询仓库 GitHub Releases（需要时使用 API 并翻页），不要猜测下载地址。
+   优先具有完整安装产物的稳定版；没有可用稳定版时选择最新完整开发预发布版并报告。
+   从同一个 Release 下载对应 Creator 主版本的 ZIP、SHA256SUMS 和 release-manifest.json，
+   保存到工程 .codex-work/downloads/，核验哈希、版本和包内身份；失败时不要安装。
+3. 自动查找并验证独立的 Node.js 24+。如缺失，按本机操作系统和架构从 Node.js 官方
+   下载当前 24.x LTS 的可用发行包并校验，优先解压到工程 .codex-work/ 下供插件使用，
+   避免改动系统 Node 或要求我手动安装；需要系统授权时才请求必要授权。
+4. 保留已有 .gitignore 规则并忽略 .codex-work/；暂存和解压仅使用工程内目录，拒绝越界路径。
+   自动停止此扩展拥有的 MCP 服务、卸载/重载目标扩展；不强制关闭有未保存内容的编辑器。
+   将旧扩展备份到 .codex-work/build/extension-backups/，然后安装 ZIP：
+   Creator 2 → packages/cocos-mcp-creator2/，包名必须为 cocos-mcp-creator2；
+   Creator 3 → extensions/cocos-mcp-creator3/，包名必须为 cocos-mcp-creator3。
+   package.json 应直接位于扩展根目录；不改游戏资源、场景、脚本或其他扩展。
+5. 自动写入扩展根目录 service-config.json，将 nodeExecutable 设为验证过的 Node 绝对路径。
+   使用发布包内的服务程序，不克隆源码或安装 npm/pnpm 依赖。
+6. 使用可用的桌面/编辑器工具打开目标工程、加载扩展，并从 CocosMCP 控制中心启动 MCP 服务。
+   自动读取真实 HTTP 地址和本机 Bearer token，备份并合并当前 AI 客户端的 Streamable HTTP MCP 配置；
+   保留其他连接，不把 token 输出到对话或提交到 Git，不猜测端口或客户端配置格式。
+   根据客户端实际支持的方式自动重载连接，优先使用工程级配置。
+7. 实际调用 cocos_projects 和 cocos_instances，确认目标工程和编辑器实例已连接。
+   最后只汇报安装版本、工程、验证结果和备份位置。
+   若工具权限、客户端能力或未保存内容使某一步无法自动完成，先完成独立步骤，
+   只报告具体阻碍及最小必要授权，不把整套安装工作交回给我，也不要声称未验证的连接已成功。
+```
+
+</details>
+
+### 手动下载与离线安装
+
+已有构建产物时，无需克隆源码、安装 pnpm 或重新编译。从 [GitHub Releases](https://github.com/iEfoam/CocosMcp/releases) 选择一个版本，在 **Assets** 中下载对应 ZIP 和同版本的 `SHA256SUMS`；也可以把这些文件复制到离线电脑。标记 **Pre-release** 的是开发版，手动选择后安装，不会通过稳定版在线更新自动获取。
+
+| 发布产物 | 用途 |
+| --- | --- |
+| `cocos-mcp-creator2.zip` / `cocos-mcp-creator3.zip` | **手动安装选择 ZIP**，分别用于 Creator 2 / 3 |
+| `SHA256SUMS` / `release-manifest.json` | 文件哈希校验；版本、构建标识和源码指纹核对 |
+| `*.full.json` / `cocos-mcp-creator{2,3}.json` | 插件在线更新器使用的完整包 / 旧版兼容包，不是编辑器直接安装包 |
+| GitHub 自动附加的 `Source code` | 仓库源码，需要按下方“快速开始”自行构建 |
+
+### 手动安装 ZIP
+
+1. 本机先准备好对应版本的 **Cocos Creator 和 Node.js 24+**。当前适配基线为 2.4.15 / 3.8.8；不要将两个主版本的包混装到同一工程。
+2. 用本机 SHA-256 工具核对 ZIP 与同版本 `SHA256SUMS` 中的对应行，例如 macOS/Linux 的 `shasum -a 256 <ZIP路径>` 或 PowerShell 的 `Get-FileHash <ZIP路径> -Algorithm SHA256`。升级前停止此工程的 MCP 服务并关闭 Creator，将旧扩展备份到工程 `.codex-work/build/extension-backups/`。
+3. 将 ZIP 内容解压到下表对应目录。**`package.json` 必须直接位于该目录内**，不能多套一层解压文件夹；不要把扩展放进 `assets/`。
+
+| Creator | 工程内安装目录 |
+| --- | --- |
+| 2.x | `<工程>/packages/cocos-mcp-creator2/` |
+| 3.x | `<工程>/extensions/cocos-mcp-creator3/` |
+
+4. 在扩展目录内、与 `package.json` 同级，新建 `service-config.json`。先运行 `node --version` 确认版本，再用 `node -p "process.execPath"` 获取本机 Node 绝对路径，填入以下配置（Windows 路径中的反斜杠须按 JSON 转义）：
+
+```json
+{
+  "nodeExecutable": "/absolute/path/to/node"
+}
+```
+
+发布 ZIP 特意不携带这份机器相关配置；这里需要独立安装的 Node.js 24+，不能直接使用 Creator 内置的 Node。离线 ZIP 方式不需要填写源码 `buildRoot`。
+
+5. 打开工程，在扩展管理器确认扩展已加载，然后选择 **CocosMCP → 打开控制中心 → 启动 MCP 服务**。启动会同时连接编辑器桥接；游戏预览和运行时接入仍需另行开启。
+6. 在 AI 客户端中添加 **Streamable HTTP MCP** 连接，地址使用面板实际显示的 `http://127.0.0.1:<端口>/mcp`，认证使用工程 `.codex-work/cache/cocos-mcp/mcp-http-token` 文件中的 Bearer token。端口可能随重启变化，不要照抄固定端口；不同客户端的配置格式不同，按其 HTTP MCP 设置填写。连接后调用 `cocos_projects` 和 `cocos_instances` 验证工程与编辑器实例。
+
+此处“离线”指插件安装不需要联网下载依赖，不代表 AI 模型一定能离线运行。断网时可忽略在线更新检查失败；如果客户端仅支持 stdio，请使用下方源码安装方式。恢复旧版时先停止服务、关闭 Creator，再用备份替换本次扩展目录。
 
 ## 快速开始
 

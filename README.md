@@ -14,6 +14,7 @@
 </p>
 
 <p align="center">
+  <a href="#let-ai-download-and-install-automatically-recommended">AI installation</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#supported-features-by-creator-version">Version support</a> ·
   <a href="#mcp-feature-overview">Features</a> ·
@@ -91,6 +92,95 @@ See the [version support matrix](docs/version-support.md), [2.4.15 adaptation re
 - **Source discovery:** generate editor-message/type candidates from Creator source or ASAR, or an `engine-capabilities.json` catalog from engine source. Candidates remain `source-only` until separately verified.
 
 Version support is operation-specific. Inspect `creator2Operations`, `creator3Operations`, and each capability's verification evidence before use; unsupported versions are rejected before execution. See the [feature reference](docs/feature-reference.md) and [Shader guide](docs/shader-development.md).
+
+## Download and offline installation
+
+### Let AI download and install automatically (recommended)
+
+Send the prompt below to an **AI assistant with network, local filesystem, terminal, and desktop access**. You do not need to download files, locate paths, or fill in configuration first. The assistant discovers the target from your workspace and local environment, then downloads, installs, starts, and verifies the connection. This route needs network access; manual offline ZIP instructions follow.
+
+<details>
+<summary>Expand and copy: let AI handle the entire CocosMCP installation</summary>
+
+```text
+Download CocosMCP from GitHub, install it, and connect this AI client to my Cocos Creator project.
+Repository: https://github.com/iEfoam/CocosMcp
+Releases: https://github.com/iEfoam/CocosMcp/releases
+
+Prioritize convenience. Handle discovery, downloads, installation, configuration, startup and verification yourself.
+Do not ask me to download files, fill in paths, copy tokens, run commands or click through a tutorial.
+Use your available tools to perform the installation, rather than just describing steps.
+
+1. Identify the target project, exact Creator version/path, OS/architecture, current AI client and MCP configuration
+   from the workspace, open Creator project and client context. Prefer the current project; do not modify other projects.
+   Ask a brief question only if the target remains genuinely ambiguous.
+2. Query this repository's GitHub Releases, using the API and pagination when needed. Do not guess download URLs.
+   Prefer a stable release with complete installation assets; otherwise use the latest complete development prerelease
+   and report that choice. Download the matching Creator-major ZIP, SHA256SUMS and release-manifest.json
+   from the same release into the project's .codex-work/downloads/. Verify hashes, versions and package identity.
+   Do not install if verification fails.
+3. Discover and verify a standalone Node.js 24+. If missing, download an appropriate current Node 24.x LTS
+   distribution from the official Node.js site for this OS/architecture, verify it and preferably extract it
+   under the project's .codex-work/. Avoid changing system Node or requiring manual installation;
+   request necessary system authorization only when required.
+4. Preserve .gitignore rules and ensure .codex-work/ is ignored. Stage/extract inside the project and reject escaping paths.
+   Stop this extension's own MCP service and unload/reload the target extension using available tools.
+   Never force-close an editor with unsaved work. Back up the old extension under .codex-work/build/extension-backups/.
+   Install Creator 2 into packages/cocos-mcp-creator2/ with package name cocos-mcp-creator2;
+   install Creator 3 into extensions/cocos-mcp-creator3/ with package name cocos-mcp-creator3.
+   Place package.json directly in the extension root. Do not modify game assets/scripts/scenes or other extensions.
+5. Write service-config.json beside package.json, setting nodeExecutable to the verified absolute Node path.
+   Use the bundled service; do not clone source or install npm/pnpm dependencies.
+6. Use desktop/editor tools to open the project, load the extension and start MCP from its control center.
+   Read the actual HTTP endpoint and local Bearer token yourself. Back up and merge this AI client's Streamable HTTP
+   configuration, preserving other connections. Never print the token in chat or commit it to Git.
+   Do not guess ports or configuration formats. Reload the connection using the client's supported mechanism;
+   prefer project-scoped settings.
+7. Actually call cocos_projects and cocos_instances to verify the intended project and editor instance.
+   Finish with the installed version, project, verification result and backup location.
+   If permissions, client capabilities or unsaved work block automation, complete independent steps first,
+   then report only the concrete blocker and minimum required authorization. Do not hand the entire installation
+   back to me or claim an unverified connection succeeded.
+```
+
+</details>
+
+### Manual download and offline installation
+
+Prebuilt packages require no source checkout, pnpm installation, or compilation. Choose a version on [GitHub Releases](https://github.com/iEfoam/CocosMcp/releases), then download the matching ZIP and `SHA256SUMS` from **Assets**. You can transfer these files to an offline computer. **Pre-release** entries are development builds: select them manually; the stable updater does not automatically install them.
+
+| Release asset | Purpose |
+| --- | --- |
+| `cocos-mcp-creator2.zip` / `cocos-mcp-creator3.zip` | **Choose a ZIP for manual installation**, matching Creator 2 / 3 |
+| `SHA256SUMS` / `release-manifest.json` | File checksums; versions, build IDs, and source fingerprint |
+| `*.full.json` / `cocos-mcp-creator{2,3}.json` | Full / legacy bundles for the plugin updater, not directly installable editor packages |
+| GitHub-generated `Source code` archives | Repository source; follow Quick start below to build it |
+
+### Install a ZIP manually
+
+1. Have the matching **Cocos Creator and Node.js 24+** installed locally. The adaptation baselines are 2.4.15 / 3.8.8. Do not install both major-version packages into one project.
+2. Compare the ZIP's SHA-256 with its entry in the same release's `SHA256SUMS`, using a local tool such as `shasum -a 256 <ZIP-path>` on macOS/Linux or `Get-FileHash <ZIP-path> -Algorithm SHA256` in PowerShell. Before upgrading, stop this project's MCP service, close Creator, and back up its existing extension under `.codex-work/build/extension-backups/`.
+3. Extract the ZIP contents into the matching directory below. **`package.json` must be directly inside that directory**, without an extra enclosing folder. Do not put the extension in `assets/`.
+
+| Creator | Installation directory within the project |
+| --- | --- |
+| 2.x | `<project>/packages/cocos-mcp-creator2/` |
+| 3.x | `<project>/extensions/cocos-mcp-creator3/` |
+
+4. Create `service-config.json` alongside the extension's `package.json`. Check `node --version`, then use `node -p "process.execPath"` to find the absolute Node executable path. Insert that path below; escape Windows backslashes as required by JSON:
+
+```json
+{
+  "nodeExecutable": "/absolute/path/to/node"
+}
+```
+
+Release ZIPs intentionally omit this machine-specific file. Use a separately installed Node.js 24+, not Creator's embedded Node. The offline ZIP installation does not need a source `buildRoot`.
+
+5. Open the project, confirm the extension is loaded in the extension manager, and choose **CocosMCP → Open Control Center → Start MCP Service**. This also starts the editor bridge. Game preview and runtime integration remain separate steps.
+6. Add a **Streamable HTTP MCP** connection in your AI client using the actual `http://127.0.0.1:<port>/mcp` address shown in the panel and the Bearer token from `<project>/.codex-work/cache/cocos-mcp/mcp-http-token`. Ports may change after restart. Client configuration formats differ; use your client's HTTP MCP settings. Call `cocos_projects` and `cocos_instances` to verify the target project and editor instance.
+
+“Offline” means plugin installation needs no dependency downloads; it does not guarantee that your AI model runs offline. Online update checks may fail without a network connection. For stdio-only clients, use the source installation below. To roll back, stop the service, close Creator, and replace the extension directory with its backup.
 
 ## Quick start
 

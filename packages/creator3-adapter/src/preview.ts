@@ -42,7 +42,8 @@ export class PreviewService {
       // Creator 默认返回本机局域网地址；只在地址确属本机接口时转换到回环，不放宽窗口的同源限制。
       const localAddresses = Object.values(networkInterfaces()).flatMap(rows => rows ?? []).map(row => row.address);
       if (localAddresses.includes(localUrl.hostname)) localUrl.hostname = '127.0.0.1';
-      return this.port.preview('start', { ...params, url: localUrl.href, sceneId: info.sceneId! });
+      if (params.scene !== undefined && params.scene !== 'current' && params.scene !== info.sceneId) throw new CocosError('INVALID_ARGUMENT', 'Preview scene must be current or the current saved scene UUID');
+      return this.port.preview('start', { ...params, target: params.target ?? 'embedded', url: localUrl.href, sceneId: info.sceneId! });
     }
     return this.port.preview(id.slice('preview.'.length), params);
   }

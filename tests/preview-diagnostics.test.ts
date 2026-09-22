@@ -45,3 +45,26 @@ test('capture does not detach another debugger and reports missing instrumentati
  const d=new DebuggerStub();d.attached=true;const log=new PreviewDiagnostics();await log.attach(d);log.dispose();assert.equal(d.attached,true);assert.equal(d.commands.length,0);
  assert.equal(((await log.query({})).rows as JsonObject[])[0]!.kind,'capture-gap');
 });
+
+test('WebSocket capture retains only frame metadata and distinguishes explicit CORS errors', async () => {
+  const log = new PreviewDiagnostics(), d = new DebuggerStub(); await log.attach(d);
+  d.emit('Network.webSocketCreated', { requestId: 'ws', url: 'ws://localhost/socket?token=TOKEN-WS' });
+  d.emit('Network.webSocketHandshakeResponseReceived', { requestId: 'ws', response: { status: 101, headers: { Cookie: 'COOKIE-WS' } } });
+  d.emit('Network.webSocketFrameSent', { requestId: 'ws', response: { opcode: 2, payloadData: Buffer.from('password=PASSWORD-WS').toString('base64') } });
+  d.emit('Network.webSocketFrameReceived', { requestId: 'ws', response: { opcode: 1, payloadData: '{"token":"TOKEN-WS"}' } });
+  d.emit('Network.webSocketFrameReceived', { requestId: 'ws', response: { opcode: 8, payloadData: Buffer.from([3, 232]).toString('base64') } });
+  d.emit('Network.loadingFailed', { requestId: 'http', errorText: 'net::ERR_FAILED', corsErrorStatus: { corsError: 'MissingAllowOriginHeader' } });
+  const sockets = await log.query({ category: 'websocket' }), network = await log.query({ category: 'network' });
+  assert.equal((sockets.rows as JsonObject[]).length, 5);
+  const frames = (sockets.rows as JsonObject[]).filter(row => row.kind === 'websocket-frame');
+  assert.equal(frames[0]!.frameType, 'binary'); assert.equal(frames[0]!.size, 20); assert.equal(frames[2]!.closeCode, 1000);
+  assert.equal((network.rows as JsonObject[])[0]!.corsError, 'MissingAllowOriginHeader');
+  for (const secret of ['PASSWORD-WS', 'TOKEN-WS', 'COOKIE-WS', Buffer.from('password=PASSWORD-WS').toString('base64')]) assert.ok(!JSON.stringify(sockets).includes(secret));
+  log.record({ kind: 'console', message: 'password=PASSWORD-WS; token=TOKEN-WS', stack: 'Authorization: Bearer SECRET-AUTH' });
+  const all = await log.query({}); assert.equal(all.connection, 'connected'); assert.ok(!JSON.stringify(all).includes('SECRET-AUTH')); assert.ok(!JSON.stringify(all).includes('PASSWORD-WS'));
+  const at = (all.rows as JsonObject[])[0]!.occurredAt!;
+  assert.equal((await log.query({ to: at })).retained, 7);
+  assert.equal(((await log.query({ to: at })).rows as JsonObject[]).length, 0);
+  await assert.rejects(log.query({ from: '2026-09-22T12:00:00' }), /timezone/);
+  d.callbacks.get('detach')!({}, 'lost'); assert.equal((await log.query({})).connection, 'disconnected'); log.dispose();
+});

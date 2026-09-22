@@ -166,9 +166,9 @@ export class EditorBridge {
     const capability = this.catalog.get(request.capabilityId);
     if (!capability || !this.adapter.supportedCapabilities().includes(request.capabilityId)) throw new CocosError('UNSUPPORTED_CAPABILITY', `Not supported by this editor: ${request.capabilityId}`);
     this.validatePaths(request);
-    if (request.capabilityId === 'console.query') {
+    if (request.capabilityId === 'console.query' || ['preview.refresh.status', 'preview.refresh.cancel', 'preview.logs', 'preview.network', 'preview.websocket', 'preview.diagnose', 'preview.status'].includes(request.capabilityId)) {
       // 控制台诊断必须在场景脚本加载失败时仍可用；它不依赖场景 revision 或操作账本。
-      if (request.expectedRevision !== undefined) throw new CocosError('INVALID_ARGUMENT', 'Console queries do not accept a scene revision');
+      if (request.expectedRevision !== undefined) throw new CocosError('INVALID_ARGUMENT', 'Preview diagnostics and refresh operations do not accept a scene revision');
       return { result: await this.adapter.execute(request.capabilityId, request.params), revision: '' };
     }
     const fingerprint = createHash('sha256').update(Json.canonical({ capabilityId: request.capabilityId, params: request.params, expectedRevision: request.expectedRevision ?? null })).digest('hex');
@@ -180,7 +180,9 @@ export class EditorBridge {
       if (previous.status === 'failed') { const error = Json.object(previous.error); throw new CocosError(error.code as CocosError['code'], String(error.message)); }
       throw new CocosError('OUTCOME_UNKNOWN', 'This operation was interrupted; verify editor state before submitting a new operation');
     }
-    const revision = await this.adapter.revision();
+    const previewIndependent = request.capabilityId.startsWith('preview.');
+    if (previewIndependent && request.expectedRevision !== undefined) throw new CocosError('INVALID_ARGUMENT', 'Preview operations use explicit content evidence, not scene revision');
+    const revision = previewIndependent ? '' : await this.adapter.revision();
     if (request.expectedRevision !== undefined && request.expectedRevision !== revision) throw new CocosError('STALE_REVISION', 'Scene changed after it was read', { actualRevision: revision });
     this.writeLedger(ledger, { fingerprint, status: 'pending' });
     try {
@@ -191,7 +193,7 @@ export class EditorBridge {
         result = { rows, nextCursor: rows.length ? rows[rows.length - 1]!.sequence! : cursor, droppedBefore: this.events.length ? Number(this.events[0]!.sequence) - 1 : 0 };
       } else result = await this.adapter.execute(request.capabilityId, request.params);
       if (request.capabilityId !== 'logs.query') this.log('info', `${request.capabilityId} completed`);
-      const nextRevision = await this.adapter.revision();
+      const nextRevision = previewIndependent ? '' : await this.adapter.revision();
       this.writeLedger(ledger, { fingerprint, status: 'completed', result, revision: nextRevision });
       return { result, revision: nextRevision };
     } catch (error) {

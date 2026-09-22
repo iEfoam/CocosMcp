@@ -1,3 +1,7 @@
+import { ExternalPreview, ProjectBrowserConnector, type ExternalBrowserPort } from '../../shared/external-preview.js';
+import { PreviewRefresh, type PreviewRefreshHost } from '../../shared/preview-refresh.js';
+import { PreviewRedaction } from '../../shared/preview-redaction.js';
+import { PreviewDiagnosis } from '../../shared/preview-diagnose.js';
 import { PreviewDiagnostics, type PreviewDebugger } from './preview-diagnostics.js';
 import { CocosError, type JsonObject, type JsonValue } from '../../../packages/contracts/src/index.js';
 import { randomBytes } from 'crypto';
@@ -31,10 +35,20 @@ export class ManagedPreview {
   private window: PreviewWindow | undefined;
   private sceneId: string | undefined;
   private ready = false;
+  private gameReady = false;
   private runtimeRegistered = false;
   private readonly diagnostics: JsonObject[] = [];
   private diagnosticLog: PreviewDiagnostics;
-  constructor(private readonly factory: PreviewWindowFactory, private readonly projectPath?: string, private readonly major: 2 | 3 = 3) { this.diagnosticLog = new PreviewDiagnostics(projectPath); }
+  private target: 'embedded' | 'external-browser' = 'embedded';
+  private previewAddress: string | null = null;
+  private readonly external: ExternalPreview;
+  private readonly refresh: PreviewRefresh | undefined;
+  private readonly redact = new PreviewRedaction();
+  constructor(private readonly factory: PreviewWindowFactory, private readonly projectPath?: string, private readonly major: 2 | 3 = 3, refreshHost?: PreviewRefreshHost, externalBrowser?: ExternalBrowserPort) {
+    this.diagnosticLog = new PreviewDiagnostics(projectPath);
+    this.external = new ExternalPreview(externalBrowser ?? (projectPath ? new ProjectBrowserConnector(projectPath) : undefined));
+    this.refresh = refreshHost ? new PreviewRefresh({ ...refreshHost, reload: manifest => this.external.execute('reload', manifest) as Promise<JsonObject> }) : undefined;
+  }
 
   private async bounded<T>(task: Promise<T>, milliseconds: number): Promise<T> {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -53,7 +67,8 @@ export class ManagedPreview {
   }
 
   private status(): JsonObject {
-    return { diagnosticSessionId: this.diagnosticLog.sessionId, running: Boolean(this.window && !this.window.isDestroyed()), pageReady: this.ready, sceneId: this.sceneId ?? null,
+    const running = Boolean(this.window && !this.window.isDestroyed() && !this.window.webContents.isDestroyed());
+    return { target: 'embedded', url: this.previewAddress, gameReady: running && this.gameReady, status: running && this.gameReady ? 'game-ready' : running && this.ready ? 'page-opened' : 'stopped', diagnosticSessionId: this.diagnosticLog.sessionId, running, pageReady: running && this.ready, sceneId: this.sceneId ?? null,
       viewport: this.window?.getContentSize ? this.window.getContentSize() : null, source: 'managed-preview-window', runtimeBridgeRegistration: this.runtimeRegistered ? 'succeeded' : 'not-requested', rows: this.diagnostics.slice(-50) };
   }
 
@@ -70,8 +85,31 @@ export class ManagedPreview {
   }
 
   async execute(method: string, params: JsonObject): Promise<JsonValue> {
+    if (method.startsWith('refresh')) {
+      if (!this.refresh) throw new CocosError('UNSUPPORTED_CAPABILITY', 'Resource refresh host unavailable');
+      return this.refresh.execute(method, params);
+    }
+    const requestedTarget = params.target ?? this.target;
+    if (!['embedded', 'external-browser'].includes(String(requestedTarget))) throw new CocosError('INVALID_ARGUMENT', 'Unknown preview target');
+    if (requestedTarget === 'external-browser') {
+      const result = await this.external.execute(method, params);
+      if (method === 'start') this.target = 'external-browser';
+      return result;
+    }
+    if (method === 'start') this.target = 'embedded';
     if (method === 'logs') return this.diagnosticLog.query(params);
-    if (method === 'status') return this.status();
+    if (method === 'network' || method === 'websocket') return this.diagnosticLog.query({ ...params, category: method });
+    if (method === 'diagnose') return new PreviewDiagnosis().summarize(await this.diagnosticLog.query(params));
+    if (method === 'status') {
+      const window = this.window; this.gameReady = false;
+      if (window && !window.isDestroyed() && !window.webContents.isDestroyed() && this.ready) {
+        try {
+          const observed = await this.bounded(window.webContents.executeJavaScript(`(async()=>{let cc;try{cc=${this.major === 2 ? 'globalThis.cc' : "globalThis.System?.get(await globalThis.System.resolve('cc'))"}}catch{};return !!cc?.director?.getScene() && cc.director.getScene().uuid === ${JSON.stringify(this.sceneId)};})()`), 3000);
+          this.gameReady = this.window === window && !window.isDestroyed() && observed === true;
+        } catch { this.ready = false; }
+      }
+      return this.status();
+    }
     if (method === 'connect-runtime') {
       const window = this.window;
       if (!window || window.isDestroyed() || !this.ready) throw new CocosError('CONTEXT_UNAVAILABLE', 'Start an MCP preview before connecting its runtime');
@@ -105,12 +143,16 @@ export class ManagedPreview {
       const width = Number(params.width ?? 1280), height = Number(params.height ?? 800);
       if (![width, height].every(n => Number.isInteger(n) && n >= 256 && n <= 2048)) throw new CocosError('INVALID_ARGUMENT', 'Preview dimensions must be 256..2048');
       const url = this.previewUrl(String(params.url), sceneId), origin = new URL(url).origin;
+      this.previewAddress = url;
       const window = this.factory.create({ width, height, useContentSize: true, show: params.visible !== false, title: 'CocosMCP Preview',
         webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, backgroundThrottling: false,
           partition: `cocos-mcp-preview-${randomBytes(8).toString('hex')}` } });
       this.diagnosticLog.dispose(); this.diagnosticLog = new PreviewDiagnostics(this.projectPath);
       const diagnosticLog = this.diagnosticLog;
       this.window = window; this.sceneId = sceneId; this.ready = false; this.diagnostics.length = 0;
+      this.gameReady = false;
+      window.webContents.on('did-start-loading', () => { if (this.window === window) { this.ready = false; this.gameReady = false; this.runtimeRegistered = false; } });
+      window.webContents.on('did-finish-load', () => { if (this.window === window) this.ready = true; });
       if (window.webContents.setWindowOpenHandler) window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
       else window.webContents.on('new-window', event => (event as { preventDefault(): void }).preventDefault());
       window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
@@ -124,11 +166,11 @@ export class ManagedPreview {
         const level = Number(args[1]), message = String(args[2]);
         if (level < 2) return;
         diagnosticLog.record({ kind: 'console', level: level >= 3 ? 'error' : 'warning', message, line: Number(args[3]) || null, url: String(args[4] ?? '') });
-        this.diagnostics.push({ level: level >= 3 ? 'error' : 'warning', message: String(message).slice(0, 2000) });
+        this.diagnostics.push({ level: level >= 3 ? 'error' : 'warning', message: this.redact.text(message, 2000) });
         if (this.diagnostics.length > 50) this.diagnostics.shift();
       });
       window.webContents.on('did-fail-load', (...args: unknown[]) => diagnosticLog.record({ kind: 'navigation-failure', message: String(args[2] ?? ''), url: String(args[3] ?? '') }));
-      window.webContents.on('render-process-gone', () => diagnosticLog.record({ kind: 'renderer-crash', message: 'Preview renderer exited' }));
+      window.webContents.on('render-process-gone', () => { this.ready = false; this.gameReady = false; this.runtimeRegistered = false; diagnosticLog.record({ kind: 'renderer-crash', message: 'Preview renderer exited' }); });
       // Electron 在首次导航前可能挂起 CDP 命令；先建立空白目标，再为下一次工程导航安装监听。
       try { await this.bounded(window.loadURL('about:blank'), 5000); }
       catch (error) { this.dispose(); throw new CocosError('EDITOR_ERROR', 'Preview page failed to load', { cause: String(error) }); }
@@ -240,6 +282,7 @@ export class ManagedPreview {
       })()`), 18000);
       if (!frame || typeof frame !== 'object' || (frame as { ready?: boolean }).ready !== true) throw new CocosError('CONTEXT_UNAVAILABLE', 'Preview has not rendered a game frame', frame as JsonValue);
       if ((frame as { sceneId?: string }).sceneId !== this.sceneId) throw new CocosError('VERIFICATION_FAILED', 'Preview launched a different scene', frame as JsonValue);
+      this.gameReady = true;
       const image = await window.webContents.capturePage();
       if (image.isEmpty()) throw new CocosError('VERIFICATION_FAILED', 'Preview capture returned an empty image');
       return { dataUrl: image.toDataURL(), ...image.getSize(), sceneId: this.sceneId!, source: 'managed-preview-window',
@@ -249,8 +292,9 @@ export class ManagedPreview {
   }
 
   dispose(): void {
+    this.refresh?.dispose();
     this.diagnosticLog.dispose();
-    const window = this.window; this.window = undefined; this.sceneId = undefined; this.ready = false; this.runtimeRegistered = false;
+    const window = this.window; this.window = undefined; this.sceneId = undefined; this.ready = false; this.gameReady = false; this.previewAddress = null; this.runtimeRegistered = false;
     if (window && !window.isDestroyed()) window.destroy();
   }
 }
