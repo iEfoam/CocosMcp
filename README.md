@@ -16,7 +16,7 @@
 <p align="center">
   <a href="#quick-start">Quick start</a> ·
   <a href="#supported-features-by-creator-version">Version support</a> ·
-  <a href="#capabilities">Capabilities</a> ·
+  <a href="#mcp-feature-overview">Features</a> ·
   <a href="#documentation">Documentation</a> ·
   <a href="#verification-and-safety">Verification &amp; safety</a>
 </p>
@@ -36,6 +36,25 @@ Work with scenes, nodes, components, assets, and runtime objects through structu
 The repository includes separate Creator 2.x and 3.x extensions, a standalone MCP service, a capability catalog, and a development runtime bridge. Registered operations span **54 functional modules**; registration, implementation, and verification are reported separately, so coverage is not a claim that every feature is complete.
 
 See the [Creator 2.4.15 implementation and acceptance record](docs/creator2-implementation.md) (Chinese) for the independent test project, native coverage, and remaining limitations.
+
+## MCP feature overview
+
+A compact overview of implemented MCP entry points. Exact version support, prerequisites, and verification levels are documented in the version table below and the [feature reference](docs/feature-reference.md).
+
+| Editor & assets | Runtime & interaction | Workflows & diagnostics |
+| --- | --- | --- |
+| **Scenes**<br>Create, open, save, inspect hierarchy | **Object inspection**<br>Hierarchy, properties, object handles | **Projects & instances**<br>Projects, editors, runtime sessions |
+| **Nodes**<br>Create, duplicate, reparent, delete, transform | **Runtime controls**<br>Pause, resume, inspect state | **Capability discovery**<br>Search, schemas, versions, coverage |
+| **Components**<br>Find types, add, configure, reset | **Controls & input**<br>Control actions, mouse, keyboard, touch | **Workflow orchestration**<br>Validate plans, sequence steps, bind results |
+| **Asset operations**<br>Query, import, save, move, resolve UUIDs | **Animation & actions**<br>Playback, track sampling, Tweens (2.x) | **Preview & captures**<br>Start/stop, screenshots, viewport checks |
+| **Asset organization**<br>Locate folders, preview plans, apply moves | **Skeleton animation**<br>Spine playback/skins, DragonBones (2.x) | **Logs & diagnostics**<br>Bridge, preview, native console (3.x) |
+| **Prefabs**<br>Create, instantiate, apply, revert | **Maps & physics**<br>Read/edit tiles, raycasts, contact queries | **Performance sampling**<br>Frame times, P99, budgets, render metrics |
+| **UI composition**<br>Declarative creation, updates, layout/events | **Cameras & rendering**<br>Coordinate conversion, visibility, diagnostics | **Build jobs**<br>Start, status, logs, list, cancel |
+| **Materials & Shaders**<br>Properties, macros, backups, native compile (3.x) | **Media & particles**<br>Audio/video playback, basic particle controls | **Artifact checks**<br>Build files, sizes, content hashes |
+| **Clips & templates**<br>Edit clips/keyframes, component templates (3.x) | **Runtime assets**<br>Load, preload, release references, inspect Bundles | **Recovery queries**<br>Operation results, workflow progress, build records |
+| **Scene & reference checks**<br>Snapshot diffs, missing components, dependencies | **Events & tasks**<br>Subscriptions, bounded sampling, poll/cancel tasks | **Visual & layout checks**<br>UI geometry, bounds, Shader preview comparisons |
+
+Find entry points with `cocos_capability_search` / `cocos_capability_describe`, then call them through `cocos_capability_execute`. Workflows and builds also provide dedicated MCP tools.
 
 ## Supported features by Creator version
 
@@ -63,13 +82,6 @@ As of 2026-09-18, 2.4.15 explicitly wires up to **112 editor + 99 runtime endpoi
 See the [version support matrix](docs/version-support.md), [2.4.15 adaptation record](docs/creator2-implementation.md), and [full acceptance tracker](docs/creator2-expansion-tracker.md) for details and evidence (Chinese).
 
 ## Capabilities
-
-| | Area | What you can do |
-| :---: | --- | --- |
-| <img src="docs/assets/editor.svg" width="28" height="28" alt="Editor"> | **Editor & assets** | Work with scenes, nodes, components, prefabs, selection, undo, and logs. Plan asset organization before applying changes. |
-| <img src="docs/assets/runtime.svg" width="28" height="28" alt="Runtime"> | **Development runtime** | Inspect object handles, use events, pause/resume, capture screenshots, and query available metrics through a guarded development bridge. |
-| <img src="docs/assets/workflow.svg" width="28" height="28" alt="Workflow"> | **Workflows & builds** | Validate multi-step plans, execute sequentially, compare scene snapshots, and manage Creator CLI build jobs. |
-| <img src="docs/assets/shader.svg" width="28" height="28" alt="Shader"> | **Shaders & materials** | Use Creator 3.8.8 native Effect compilation, dependency fingerprints, hash-guarded edits, material instances, macro variants, and RenderTexture previews. |
 
 - **Local MCP transports:** stdio and authenticated Streamable HTTP.
 - **Dockable control center:** project and editor instance information, capabilities, bridge logs, runtime state, and bridge start/stop controls. The panel supports Simplified Chinese and English, defaults to Chinese, and saves the preference per project. Logs retain their original text and support copying errors.
