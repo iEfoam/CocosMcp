@@ -4,7 +4,7 @@ CocosMCP 是面向 Cocos Creator 2.x 和 3.x 的 MCP 服务。它让 AI 客户�
 
 本文面向第一次使用 CocosMCP 的用户。实现边界、版本适配和真实验收方法请参阅 [实施与验收指南](./implementation-guide.md)；完整设计范围请参阅 [实施提案](./cocos-mcp-proposal.md)。
 
-版本范围（2026-09-18）：精确基线为 2.4.15 / 3.8.8，见 [版本支持矩阵](version-support.md)。其他小版本、原生平台和全部模块不自动继承验收。
+版本范围（2026-10-08）：精确基线为 2.4.15 / 3.8.8，见 [版本支持矩阵](version-support.md)。新增预览、配方和夹具的完整操作见 [预览验收指南](preview-acceptance.md)。其他小版本、原生平台和全部模块不自动继承验收。
 
 ## 1. 使用前准备
 
@@ -147,7 +147,7 @@ Authorization: Bearer <token>
 
 ### 5.3 注册全部独立工具
 
-默认只注册常用能力的独立工具，长尾能力通过 `cocos_capability_execute` 统一调用。当前 2.4.15 显式接线最多 112 个编辑器和 99 个运行时入口，不能用早期“50/246”或客户端工具列表长度推断支持范围；计数与条件见版本矩阵。需要让客户端看到目录中全部独立工具时：
+默认只注册常用能力的独立工具，长尾能力通过 `cocos_capability_execute` 统一调用。当前 2.4.15 接线最多 123 个编辑器和 106 个运行时入口，另有 11 个应用组合入口；不能用早期快照或客户端工具列表长度推断支持范围。计数与条件见版本矩阵。需要让客户端看到全部独立工具时：
 
 ```bash
 pnpm start serve \
@@ -284,7 +284,11 @@ Creator 3.x 的账号目录固定为 `<project>/.codex-work/cache/creator-home`�
 node scripts/project-env.mjs node scripts/open-creator.mjs --project /path/to/project --creator /Applications/Cocos/Creator/3.8.8/CocosCreator.app/Contents/MacOS/CocosCreator
 ```
 
-该入口沿用项目的 `creator-home` 和 `shader-editor` 用户目录；可加 `--dry-run` 只检查参数。首次使用隔离目录或登录凭证过期时仍需登录一次。它不读取或复制 Dashboard 账号，不应与另一实例同时打开同一个工程。
+该入口先复用工程已有编辑器实例，再沿用固定的 `creator-home` 和 `shader-editor`。项目中没有会话时，只从本机 `.CocosCreator/profiles/v2/editor/user.json` 读取 Creator 3 原生会话，并以 0600 权限原样保存；不会输出凭据或覆盖已有账号。`--dry-run` 不读取账号、不启动编辑器。过期凭据是否有效由原生编辑器判断。
+
+Creator 2 优先从已经登录的 Dashboard 打开工程。其 CLI 和 Creator 3 的账号格式不同，不能互相转换；没有可复用的原生 CLI 账号时，启动器与构建入口会在启动前返回说明，避免再弹出登录窗口。重启 MCP 或安装扩展不要求重新登录。
+
+多实例选择仍需核对工程、Creator 版本和 instanceId。启动器通过认证身份排除历史 PID 复用造成的假实例；不会关闭用户其他工程。两版隔离工程已实测返回 existing-editor-reused。`--dry-run` 只是参数检查，不能证明账号有效；不要将登录目录、runtime 配置、token 或 service-config.json 提交到 Git 或复制给他人。
 
 ## 9. 常见错误处理
 
@@ -319,6 +323,6 @@ node scripts/project-env.mjs node scripts/open-creator.mjs --project /path/to/pr
 
 控制中心从 `iEfoam/CocosMcp` 的最新 GitHub Release 读取版本，打开面板时检查，此后每 5 分钟检查一次。“更新版本”会重新查询最新版本、下载对应 Creator 2/3 扩展包，校验 SHA-256 和文件清单，备份并安装。无须本地源码或 GitHub token，但需要已配置的 Node.js 24+ 和联网。
 
-每次推送到 `main` 会触发 GitHub Actions：按锁文件安装依赖，运行类型检查、构建和测试，通过后发布版本 `0.1.0-build.<流水线编号>.<提交短号>`。无需手动修改版本号；失败的构建不会替换上一可用发布。基础版本从根目录 `package.json` 读取。
+推送到 `main` 会触发 GitHub Actions：按锁文件安装依赖，运行类型检查、构建和测试，通过后生成 `v<基础版本>-dev.<流水线编号>.<提交短号>`，标记为 prerelease 且 latest=false。稳定版只由与 package.json 一致的 `vMAJOR.MINOR.PATCH` 标签触发。失败的构建不会替换上一可用发布；开发版不会由稳定更新器自动安装。详见 [发布通道](extension-packaging.md#发布通道)。
 
 底部区分运行中版本、GitHub 最新版本和已安装待重载版本。安装完成后需在扩展管理器中重载并重新启动 MCP 服务，不会自动重启 Creator。下载或校验失败会保留现有扩展。下载和备份保存在工程 `.codex-work/`。

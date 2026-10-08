@@ -19,6 +19,7 @@ export class RuntimeTaskSessions {
   private generation = 0;
   private sequence = 0;
   constructor(private readonly cc: RuntimeObject) {}
+  snapshot(): JsonObject { return { runningTasks: [...this.tasks.values()].filter(task => task.status === 'running').length, retainedTasks: this.tasks.size }; }
   start(run: (frames: FrameSession, progress: (value: JsonObject) => void) => Promise<JsonObject>): JsonObject {
     if ([...this.tasks.values()].filter(task => task.status === 'running').length >= 4) throw new CocosError('RESOURCE_BUSY', 'At most four runtime tasks may run concurrently');
     while (this.tasks.size >= 8) {

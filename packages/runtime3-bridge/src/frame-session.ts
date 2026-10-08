@@ -8,8 +8,9 @@ export class FrameSession {
   private generation = 0;
   constructor(private readonly cc: RuntimeObject) {}
   token(): number { return this.generation; }
+  snapshot(): { pendingFrameWaits: number } { return { pendingFrameWaits: this.pending.size }; }
   check(token: number): void { if (token !== this.generation) throw new CocosError('STALE_HANDLE', '采样会话已结束'); }
-  wait(token: number): Promise<void> {
+  wait(token: number, sample?: () => void): Promise<void> {
     this.check(token);
     const director = F.require(this.cc.director, 'Director'); F.methods(director, ['on', 'off', 'getScene']);
     const scene = A.call(director, 'getScene'), event = F.require(this.cc.Director, 'Director events').EVENT_AFTER_DRAW;
@@ -22,7 +23,7 @@ export class FrameSession {
         if (error) reject(error); else resolve();
       };
       const callback = (): void => {
-        try { this.check(token); if (A.call(director, 'getScene') !== scene) throw new CocosError('STALE_HANDLE', '采样期间场景已切换'); finish(); }
+        try { this.check(token); if (A.call(director, 'getScene') !== scene) throw new CocosError('STALE_HANDLE', '采样期间场景已切换'); sample?.(); finish(); }
         catch (error) { finish(CocosError.from(error)); }
       };
       const cancel = (error: Error): void => finish(error);

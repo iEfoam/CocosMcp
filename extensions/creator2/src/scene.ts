@@ -183,6 +183,14 @@ class Creator2Scene {
       return { materialUuid: A.uuid(material), beforeUuid: A.uuid(before), componentId: A.uuid(component), slot };
     }
     if (method.startsWith('animation')) return new Creator2Animation(this.inspector, value => Editor.serialize(value), uuid => this.loadAsset(uuid)).execute(method, Json.object(args[0]));
+    if (method === 'ui.owned_snapshot') return this.inspector.execute(method, args);
+    if (method === 'ui.owned_remove') {
+      const p = Json.object(args[0]); this.inspector.execute('ui.owned_verify', args);
+      const audit = new Creator2ReferenceAudit().scene(this.inspector), owned = new Set(this.inspector.all(this.inspector.node(String(p.rootId))).flatMap(node => [A.uuid(node), ...this.inspector.components(node).map(component => A.uuid(component))]));
+      const blockers = (audit.rows as JsonObject[]).filter(row => owned.has(String(row.targetId)) && !owned.has(String(row.sourceId)));
+      if (blockers.length || (audit.issues as JsonObject[]).length) throw new CocosError('OPERATION_CONFLICT', 'Resolve native serialized references before owned cleanup', { rows: blockers, issues: audit.issues! });
+      return this.mutate('node.delete', { nodeId: p.rootId! });
+    }
     if (method.startsWith('ui.')) return new Creator2Ui(this.inspector, this.undo(), uuid => this.loadAsset(uuid)).execute(method, Json.object(args[0]));
     switch (method) {
       case 'scene.references': return new Creator2ReferenceAudit().scene(this.inspector);

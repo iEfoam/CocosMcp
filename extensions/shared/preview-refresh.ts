@@ -35,7 +35,7 @@ export class PreviewRefresh {
     const paths = await ProjectPaths.open(this.host.projectPath);
     for (const url of params.urls) await paths.asset(String(url));
     const operationId = randomBytes(16).toString('hex');
-    const state: JsonObject = { operationId, status: 'pending', nativePending: true, phase: 'import', import: { status: 'pending' }, compile: { status: 'pending', errors: [] }, preview: { status: 'unknown', expectedRevision: null, loadedRevision: null, revisionMatched: null }, startedAt: new Date().toISOString() };
+    const state: JsonObject = { operationId, binding: params.binding ?? null, status: 'pending', nativePending: true, phase: 'import', import: { status: 'pending' }, compile: { status: 'pending', errors: [] }, preview: { status: 'unknown', expectedRevision: null, loadedRevision: null, revisionMatched: null }, startedAt: new Date().toISOString() };
     const operation: RefreshOperation = { state, cancelled: false, pending: true, done: Promise.resolve() };
     if (this.operations.size >= 100) this.operations.delete(this.operations.keys().next().value!);
     this.operations.set(operationId, operation); this.active = operation;
@@ -75,6 +75,7 @@ export class PreviewRefresh {
     if (!this.host.compile) { state.compile = { status: 'unknown', errors: [], reason: 'Native compiler completion adapter unavailable; import completion is not compilation proof' }; state.status = 'unknown'; return; }
     const compile = await this.host.compile({ operationId: state.operationId!, sourceRevision: revision, rows: after }, () => operation.cancelled);
     if (!check()) return;
+    if (Json.canonical(after) !== Json.canonical(await this.fingerprint(paths, urls))) throw new CocosError('STALE_REVISION', 'Assets changed while compiling; no preview reload was issued');
     state.compile = this.redact.value(compile);
     if (compile.status === 'failed' || (Array.isArray(compile.errors) && compile.errors.length)) { state.status = 'failed'; return; }
     if (compile.status !== 'completed' || compile.sourceRevision !== revision || !Array.isArray(compile.artifacts) || !compile.artifacts.length) { state.status = 'unknown'; return; }
@@ -85,7 +86,7 @@ export class PreviewRefresh {
     if (!reload || !this.host.reload) { state.status = 'unknown'; return; }
     state.phase = 'preview';
     let loaded: JsonObject;
-    try { loaded = await this.host.reload({ artifacts, expectedRevision, sourceRevision: revision, operationId: state.operationId! }); }
+    try { loaded = await this.host.reload({ artifacts, binding: state.binding!, expectedRevision, sourceRevision: revision, operationId: state.operationId! }); }
     catch (error) {
       if (!check()) return;
       const failure = CocosError.from(error);
@@ -94,10 +95,13 @@ export class PreviewRefresh {
     }
     if (!check()) return;
     // 不接受 URL 参数或注入的 revision 变量；连接器必须从本次导航实际加载的脚本字节取摘要。
-    if (loaded.evidence !== 'loaded-script-bytes' || !loaded.navigationId || !Array.isArray(loaded.artifacts)) { state.status = 'unknown'; return; }
+    if (Json.canonical(after) !== Json.canonical(await this.fingerprint(paths, urls))) throw new CocosError('STALE_REVISION', 'Assets changed during preview reload');
+    if (!['loaded-script-bytes', 'loaded-artifact-bytes'].includes(String(loaded.evidence)) || !loaded.navigationId || !Array.isArray(loaded.artifacts)) { state.status = 'unknown'; return; }
     const actual = loaded.artifacts.map(row => Json.object(row));
-    const selected = artifacts.map(expected => actual.find(row => row.url === expected.url));
-    const matched = selected.every((row, index) => row?.sha256 === artifacts[index]!.sha256);
+    const selected = artifacts.map(expected => actual.find(row => row.url === expected.url || (loaded.url && row.url === new URL(String(expected.url), String(loaded.url)).href)));
+    if (selected.some(row => !row)) { state.preview = { ...Json.object(state.preview), reason: 'Actual loaded bytes were not observed for every artifact',
+      expectedArtifacts: artifacts, observedArtifacts: actual, navigationId: loaded.navigationId, gameReady: loaded.gameReady ?? null }; state.status = 'unknown'; return; }
+    const matched = selected.every((row, index) => row?.sha256 === artifacts[index]!.sha256 && (artifacts[index]!.kind !== 'resource' || row?.kind === 'resource'));
     state.preview = { status: matched && loaded.gameReady === true ? 'ready' : 'unknown', expectedRevision, loadedRevision: matched ? expectedRevision : null, revisionMatched: matched, navigationId: loaded.navigationId, url: loaded.url ?? null };
     state.status = matched && loaded.gameReady === true ? 'completed' : 'failed';
   }

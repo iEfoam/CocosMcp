@@ -168,6 +168,35 @@ export class SceneInspector {
   }
 
   execute(method: string, args: unknown[]): JsonValue {
+    if (method === 'ui.owned_snapshot' || method === 'ui.owned_verify' || method === 'ui.owned_remove') {
+      const p = Json.object(args[0]), rootId = Json.string(p.rootId, 'rootId'), root = this.node(rootId);
+      if (root === this.current()) throw new CocosError('INVALID_ARGUMENT', 'Owned cleanup cannot remove the scene root');
+      const snapshot = { serialized: new UiInspector(this).snapshot({ rootId }), identity: this.subtreeIdentity(rootId), sceneId: this.sceneInfo().sceneId! };
+      if (method === 'ui.owned_snapshot') return { snapshot };
+      if (Json.canonical(snapshot) !== Json.canonical(p.expectedSnapshot!)) throw new CocosError('STALE_REVISION', 'Owned subtree changed; cleanup preserved it');
+      const owned = new Set(this.all(root).flatMap(node => [A.uuid(node), ...this.components(node).map(component => A.uuid(component))]));
+      const blockers: JsonObject[] = [];
+      let visited = 0;
+      const references = (value: unknown, sourceId: string, path: string, seen = new Set<unknown>()): void => {
+        if (!value || typeof value !== 'object' || seen.has(value)) return;
+        if (++visited > 50000) throw new CocosError('RESOURCE_BUSY', 'Native reference audit exceeds limit; subtree was preserved');
+        seen.add(value); const uuid = A.uuid(value);
+        if (uuid) { if (owned.has(uuid)) blockers.push({ sourceId, targetId: uuid, path }); return; }
+        const object = A.object(value), constructor = object.constructor && typeof object.constructor === 'function' ? A.object(object.constructor) : undefined;
+        const fields = Array.isArray(constructor?.__props__) ? constructor.__props__ as string[] : Object.keys(object);
+        for (const key of fields) references(object[key], sourceId, `${path}.${key}`, seen);
+      };
+      for (const node of this.all()) if (!owned.has(A.uuid(node))) for (const component of this.components(node)) {
+        const fields = A.object(component.constructor).__props__;
+        if (!Array.isArray(fields)) throw new CocosError('UNSUPPORTED_CAPABILITY', 'Native serialization fields unavailable; cleanup preserved subtree');
+        for (const key of fields as string[]) if (!['node', '_name', '_objFlags'].includes(key)) references(component[key], A.uuid(component), key);
+      }
+      if (blockers.length) throw new CocosError('OPERATION_CONFLICT', 'Surviving components refer to owned subtree; cleanup preserved it', { rows: blockers });
+      if (method === 'ui.owned_verify') return { verified: true, rootId };
+      // 快照、位置和引用检查到删除之间不让出事件循环，避免属性被并发修改后仍被清理。
+      A.call(root, 'removeFromParent'); A.call(root, 'destroy');
+      return { removedRootId: rootId, needsSave: true, undoScope: 'owned-subtree-only', verifiedAbsent: !this.all().includes(root) };
+    }
     switch (method) {
       case 'ui.preflight_update': return new UiInspector(this).preflight(Json.object(args[0]), true);
       case 'ui.preflight': return new UiInspector(this).preflight(Json.object(args[0]));

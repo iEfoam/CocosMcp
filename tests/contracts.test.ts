@@ -84,9 +84,11 @@ test('adapter capability lists do not advertise handlers that are absent', () =>
   assert.equal(creator2.supportedCapabilities().includes('ui.build'), false);
   assert.equal(creator3.supportedCapabilities().includes('ui.build'), false);
   assert.equal(creator2.supportedCapabilities().includes('preview.start'), false);
+  assert.equal(creator2.supportedCapabilities().includes('preview.presets'), false);
   const ready2 = new Creator2Adapter({ version: '2.4.15', preview: async () => null, previewUrl: async () => 'http://127.0.0.1:7456/' } as unknown as ConstructorParameters<typeof Creator2Adapter>[0]);
   assert.equal(ready2.supportedCapabilities().includes('ui.build'), true);
   assert.equal(ready2.supportedCapabilities().includes('preview.start'), true);
+  assert.equal(ready2.supportedCapabilities().includes('preview.presets'), true);
   assert.equal(creator3.supportedCapabilities().includes('preview.start'), false);
 });
 

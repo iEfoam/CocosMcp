@@ -6,6 +6,8 @@ Creator 3.8.8 的 2D 加强与功能扩展包含 33 项新增能力和 13 种可
 
 2026-09-18 已补齐 Creator 2.4.15 第二轮的结构/引用、控件、资源趋势、Tween、骨骼、接触与 Camera 适配。完整对照见 [版本支持矩阵](version-support.md) 和 [2.4.15 验收台账](creator2-expansion-tracker.md)；本文领域概览不能代替每个版本的暴露清单。
 
+2026-10-08 新增的 [预览验收指南](preview-acceptance.md) 覆盖 CP-001～013：完整 runtime 包、场景/帧身份、真实输入、横屏/视图、加载版本、就绪/诊断、审计、配方/夹具和性能回归。两版各 14 项合成原生检查与真实业务、外部 Chrome、设备/GPU 分开记录。
+
 ## 1. 能力状态怎么看
 
 每项能力都包含以下字段：
@@ -90,6 +92,7 @@ Creator 3.x 属性写入会读取属性描述、生成版本对应的序列化�
 ### 预制体
 
 - `prefab.instantiate`：把预制体实例化到场景。
+- `prefab.open`：Creator 3.8.8 保存当前场景后，进入原生预制体资源编辑模式；核对模式与资产身份。
 - `prefab.create`：把节点保存为预制体资源。
 - `prefab.apply`：应用实例修改到预制体资源。
 
@@ -98,6 +101,8 @@ Creator 3 的 `prefab.apply` 返回 `nativeResult`、`resourceChanged` 与前后
 - `prefab.unlink`：解除实例关联。
 
 预制体的嵌套、覆盖和序列化格式随 Creator 版本变化，跨版本工作流应传语义参数，不要直接复用另一版本的内部 JSON。
+
+Creator 3 实例化显式保留并读回预制体关联，无法确认时返回 OUTCOME_UNKNOWN。原生编辑器不允许在普通场景中随意删除资产所属子节点；进入 prefab.open 后修改并 scene.save，再 scene.open 回原场景。保存结果里的 sceneUuid 为实际资产 UUID，不能将 native boolean 当作身份。
 
 ## 4. 编辑器视图、选择和设置
 
@@ -113,7 +118,7 @@ Creator 3.x 提供：
 - `view.set`：修改上述视图状态。
 - `view.focus`：让场景视图聚焦节点。
 
-这些能力当前不由 Creator 2.x 适配器暴露。2.x 的等价操作需要后续补充版本适配。
+Creator 2.4.15 已暴露 view.query/set 的有限子集，具体字段以 schema 和原生读回为准；view.focus/grid 的完整等价工作流仍未开放。编辑器视图与 runtime.view.inspect/configure/restore 是不同上下文，不能混用。
 
 ### 项目设置和编辑器消息
 
@@ -122,6 +127,8 @@ Creator 3.x 提供：
 - `project.settings.get`、`project.settings.set`：读取和修改项目配置。
 - `editor.messages`：列出本地发现的编辑器消息。
 - `editor.message`：调用发现的消息。
+
+Creator 2 的 project.settings.get/set 仅在宿主提供 profiles setting 接口时暴露，不继承 Creator 3 的任意消息接口。
 
 `editor.message` 要求传入精确的 `editorVersion`。内部消息和项目脚本调用需要服务使用 `--allow-project-code`；调用前应检查消息来源和副作用。
 

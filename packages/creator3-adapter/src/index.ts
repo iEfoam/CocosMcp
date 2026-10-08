@@ -83,7 +83,10 @@ export class Creator3Adapter implements EditorAdapter {
     const parent = Json.string(params.parentId ?? info.sceneId, 'parentId');
     if (!await this.port.scene('nodeExists', parent)) throw new CocosError('NOT_FOUND', 'Parent is not in the active scene');
     const options: JsonObject = { name: params.name ?? 'Node', parent };
-    if (params.assetUuid) options.assetUuid = params.assetUuid;
+    if (params.assetUuid) {
+      // 预制体实例化必须保留原生关联，不能依赖 create-node 的资源适配默认值。
+      options.assetUuid = params.assetUuid; options.type = 'cc.Prefab'; options.unlinkPrefab = false;
+    }
     const uuid = Json.string(await this.scene('create-node', options), 'created node UUID');
     if (!await this.port.scene('nodeExists', uuid)) throw new CocosError('VERIFICATION_FAILED', 'Created node was not attached to the active scene', { nodeId: uuid });
     // 预制体实例化可能忽略原生接口的 name 参数，显式设置并读回验证。
@@ -92,6 +95,15 @@ export class Creator3Adapter implements EditorAdapter {
     const tree = Json.object(await this.port.scene('hierarchy', { rootId: uuid, limit: 1, includeComponents: false }));
     const root = Json.object((tree.rows as JsonValue[])[0]);
     if (root.parentId !== parent || root.name !== options.name) throw new CocosError('VERIFICATION_FAILED', 'Created node parent or name differs from request', { nodeId: uuid });
+    if (params.assetUuid) {
+      try {
+        const reference = Json.object(await this.port.scene('prefabReference', uuid));
+        if (reference.assetUuid !== params.assetUuid) throw new Error('Prefab association differs');
+      } catch {
+        // 创建已发生，不能把关联核验失败当作无副作用的参数错误而诱导重试。
+        throw new CocosError('OUTCOME_UNKNOWN', 'Created node lost the requested prefab association', { nodeId: uuid });
+      }
+    }
     return { node, nodeId: uuid };
   }
 
@@ -128,6 +140,13 @@ export class Creator3Adapter implements EditorAdapter {
     }
     if (id.startsWith('texture.')) return new TextureService(this.port).execute(id, p);
     if (id.startsWith('spriteframe.')) return new TextureService(this.port, 'spriteframe').execute(id, p);
+    if (id === 'ui.owned_snapshot') return Json.value(await this.port.scene(id, p));
+    if (id === 'ui.owned_remove') {
+      await this.port.scene('ui.owned_verify', p);
+      // 原生 remove-node 负责撤销记录和 dirty 状态，不直接销毁编辑器树。
+      const result = await this.execute('node.delete', { nodeId: p.rootId! });
+      return { ...Json.object(result), removedRootId: p.rootId!, needsSave: true, verifiedAbsent: true, undoScope: 'native-remove-node' };
+    }
     if (id.startsWith('ui.')) return new UiService(this.port, (id, params) => this.execute(id, params)).execute(id, p);
     if (id === 'console.query') {
       if (!this.port.consoleAvailable || !this.port.consoleQuery || this.port.version !== '3.8.8') throw new CocosError('UNSUPPORTED_CAPABILITY', 'Creator console reader unavailable');
@@ -146,14 +165,14 @@ export class Creator3Adapter implements EditorAdapter {
     if (id.startsWith('shader.') || id.startsWith('material.')) return this.shaders.execute(id, p);
     const str = (key: string): string => Json.string(p[key], key);
     switch (id) {
-      case 'editor.status': return { editorVersion: this.port.version, creatorMajor: 3, projectPath: this.port.projectPath, ready: await this.scene('query-is-ready') };
-      case 'scene.query': return { scene: Json.value(await this.port.scene('sceneInfo')), dirty: await this.scene('query-dirty') };
+      case 'editor.status': return { editorVersion: this.port.version, creatorMajor: 3, projectPath: this.port.projectPath, ready: await this.scene('query-is-ready'), ...(this.port.extensionState ? { extension: this.port.extensionState() } : {}) };
+      case 'scene.query': return { context: 'editor', scene: Json.value(await this.port.scene('sceneInfo')), dirty: await this.scene('query-dirty') };
       case 'scene.snapshot': return { snapshot: Json.value(await this.port.scene('fingerprint')) };
       case 'scene.diff': {
         const current = Json.value(await this.port.scene('fingerprint')); const baseline = Json.value(p.baseline);
         return { equal: Json.canonical(current) === Json.canonical(baseline), rows: Json.diff(baseline, current), current, baseline };
       }
-      case 'scene.hierarchy': return Json.value(await this.port.scene('hierarchy', p));
+      case 'scene.hierarchy': return { ...Json.object(Json.value(await this.port.scene('hierarchy', p))), context: 'editor' };
       case 'scene.open': {
         const info = await this.asset('query-asset-info', str('uuid'));
         if (!info || typeof info !== 'object' || Array.isArray(info)) throw new CocosError('NOT_FOUND', 'Scene resource not found');
@@ -169,7 +188,10 @@ export class Creator3Adapter implements EditorAdapter {
         const uuid = await this.scene('save-scene');
         if (!uuid) throw new CocosError('VERIFICATION_FAILED', 'Scene save was cancelled or did not return an asset UUID');
         if (await this.scene('query-dirty')) throw new CocosError('VERIFICATION_FAILED', 'Scene remains dirty after save');
-        return { sceneUuid: uuid, saved: true };
+        // 预制体编辑模式的 save-scene 返回 true；资产身份必须另从原生上下文取得，不能把布尔值当成 UUID。
+        const assetUuid = typeof uuid === 'string' ? uuid : await this.scene('query-current-scene');
+        if (typeof assetUuid !== 'string' || !assetUuid) throw new CocosError('OUTCOME_UNKNOWN', 'Native save completed without a confirmed asset UUID');
+        return { sceneUuid: assetUuid, saved: true };
       }
       case 'scene.save_copy': {
         const url = str('url');
@@ -239,6 +261,18 @@ export class Creator3Adapter implements EditorAdapter {
       }
       case 'asset.resolve': return { uuid: await this.asset('query-uuid', str('reference')), url: await this.asset('query-url', str('reference')), path: await this.asset('query-path', str('reference')) };
       case 'prefab.instantiate': return this.createNode({ assetUuid: str('uuid'), ...(p.parentId ? { parentId: p.parentId } : {}), name: p.name ?? 'Prefab' });
+      case 'prefab.open': {
+        const info = Json.object(await this.asset('query-asset-info', str('uuid')));
+        if (info.type !== 'cc.Prefab' || typeof info.uuid !== 'string' || info.invalid === true || info.readonly === true) throw new CocosError('INVALID_ARGUMENT', 'Expected an editable Prefab asset');
+        await this.ensureSaved();
+        // Creator 3 禁止在普通场景中删除实例的资产子节点，必须进入原生预制体编辑上下文。
+        await this.scene('open-scene', info.uuid);
+        const result = Json.object(await this.execute('scene.query', {}));
+        // Prefab 的包装场景有独立临时 UUID；不能与正在编辑的资产 UUID 混用。
+        const current = await this.scene('query-current-scene'), mode = await this.scene('query-scene-mode');
+        if (current !== info.uuid || mode !== 'prefab') throw new CocosError('OUTCOME_UNKNOWN', 'Editor did not confirm the requested prefab context', { assetUuid: info.uuid, currentAssetUuid: current, mode, actual: result });
+        return { ...result, assetUuid: info.uuid, editing: 'native-prefab', mode };
+      }
       case 'prefab.create': {
         const before = Json.object(await this.port.scene('subtreeIdentity', str('nodeId')));
         if (!before.parentId) throw new CocosError('INVALID_ARGUMENT', 'The scene root cannot become a prefab');

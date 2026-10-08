@@ -10,6 +10,7 @@ export class RuntimeAssets {
   private watching = false;
   private readonly sceneChanged = (): void => this.dispose();
   constructor(private readonly cc: RuntimeObject) {}
+  snapshot(): JsonObject { return { ownedAssetRefs: this.handles.size, pendingAssetLoads: this.pending.size, assetSceneListeners: this.watching ? 1 : 0 }; }
   private scene(): unknown {
     return this.cc.director && typeof A.object(this.cc.director).getScene === 'function' ? A.call(this.cc.director, 'getScene') : null;
   }

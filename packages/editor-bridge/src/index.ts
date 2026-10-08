@@ -157,6 +157,9 @@ export class EditorBridge {
   private async perform(request: BridgeRequest): Promise<JsonValue> {
     const descriptor = this.descriptor!;
     if (request.protocolVersion !== 1 || request.projectId !== descriptor.projectId || request.instanceId !== descriptor.instanceId) throw new CocosError('UNAUTHORIZED', 'Bridge instance does not match');
+    // 启动器身份核验不依赖当前场景成功加载，也不返回认证令牌。
+    if (request.capabilityId === 'bridge.identity') return { result: { instanceId: descriptor.instanceId, projectId: descriptor.projectId,
+      projectPath: descriptor.projectPath, creatorMajor: descriptor.creatorMajor, pid: descriptor.pid }, revision: '' };
     if (request.capabilityId === 'bridge.describe') return { result: { supportedCapabilities: this.adapter.supportedCapabilities(), editorVersion: this.editorVersion }, revision: await this.adapter.revision() };
     if (request.capabilityId === 'bridge.operation') {
       const path = this.ledgerPath(Json.string(request.params.operationId, 'operationId'));

@@ -1,11 +1,13 @@
 import { createHash } from 'node:crypto';
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { CocosError, type BridgeDescriptor } from '../../contracts/src/index.js';
 import { ProjectPaths } from './paths.js';
+import { BridgeClient } from './bridge-client.js';
 
 export class ProjectRegistry {
   private readonly projects = new Map<string, ProjectPaths>();
+  constructor(private readonly bridge = new BridgeClient()) {}
 
   async add(root: string): Promise<{ projectId: string; projectPath: string }> {
     const paths = await ProjectPaths.open(root);
@@ -30,11 +32,12 @@ export class ProjectRegistry {
     let entries: string[];
     try { entries = await readdir(directory); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error; }
+    if (entries.length > 2000) throw new CocosError('RESOURCE_BUSY', 'Editor instance directory exceeds discovery limit');
     const rows: BridgeDescriptor[] = [];
     for (const entry of entries.filter(name => name.endsWith('.json'))) {
       const path = await paths.resolve(join(directory, entry));
       let descriptor: BridgeDescriptor;
-      try { descriptor = JSON.parse(await readFile(path, 'utf8')) as BridgeDescriptor; }
+      try { const info = await stat(path); if (!info.isFile() || info.size > 1024 * 1024) continue; descriptor = JSON.parse(await readFile(path, 'utf8')) as BridgeDescriptor; }
       catch { continue; }
       if (descriptor.protocolVersion !== 1 || descriptor.projectId !== projectId || descriptor.projectPath !== paths.root) continue;
       if (typeof descriptor.token !== 'string' || !/^[a-f\d]{64}$/.test(descriptor.token)) continue;
@@ -46,7 +49,13 @@ export class ProjectRegistry {
       if (![2, 3].includes(descriptor.creatorMajor) || typeof descriptor.instanceId !== 'string' || typeof descriptor.editorVersion !== 'string') continue;
       rows.push(descriptor);
     }
-    return rows;
+    // PID 存活不能证明原编辑器仍在：系统会复用 PID。保持真实多实例冲突，只排除认证探测失联的历史描述符。
+    const active: BridgeDescriptor[] = [];
+    for (let offset = 0; offset < rows.length; offset += 4) {
+      const batch = rows.slice(offset, offset + 4), results = await Promise.all(batch.map(row => this.bridge.identity(row)));
+      batch.forEach((row, index) => { if (results[index]) active.push(row); });
+    }
+    return active;
   }
 
   async instance(projectId: string, instanceId?: string): Promise<BridgeDescriptor> {

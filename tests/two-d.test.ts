@@ -10,7 +10,7 @@ import { TwoDControl } from '../packages/runtime3-bridge/src/two-d-control.js';
 import { TwoDInspector } from '../packages/runtime3-bridge/src/two-d-inspector.js';
 import { FrameSession } from '../packages/runtime3-bridge/src/frame-session.js';
 import { SceneInspector } from '../packages/runtime3-bridge/src/scene.js';
-import { Json, type JsonObject } from '../packages/contracts/src/index.js';
+import { Json, type JsonObject, type JsonValue } from '../packages/contracts/src/index.js';
 import { TwoDProduction } from '../packages/creator3-adapter/src/two-d-production.js';
 import { PreviewService } from '../packages/creator3-adapter/src/preview.js';
 import type { EditorPort } from '../packages/creator3-adapter/src/port.js';
@@ -147,9 +147,10 @@ test('production plan guards scene changes and queries asset location before cre
 });
 test('viewport batches restore after failure but never resize a replacement session on the same scene', async () => {
   for (const replaced of [false, true]) {
-    let session = 'first'; const sizes: unknown[] = [];
+    let session = 'first', viewport: JsonValue[] = [800, 600]; const sizes: unknown[] = [];
     const port = { version: '3.8.8', preview: async (method: string, params: JsonObject) => {
-      if (method === 'status') return { running: true, sceneId: 'same-scene', diagnosticSessionId: session, viewport: [800, 600] };
+      if (method === 'status') return { running: true, sceneId: 'same-scene', diagnosticSessionId: session, viewport };
+      viewport = [params.width!, params.height!];
       sizes.push([params.width, params.height]);
       if (params.width === 390) { if (replaced) session = 'replacement'; throw new Error('capture failed'); }
       return {};
@@ -157,4 +158,14 @@ test('viewport batches restore after failure but never resize a replacement sess
     await assert.rejects(new PreviewService(port).execute('preview.validate_viewports', { rows: [{ width: 390, height: 844 }] }), { code: 'OUTCOME_UNKNOWN' });
     assert.deepEqual(sizes, replaced ? [[390, 844]] : [[390, 844], [800, 600]]);
   }
+});
+
+test('viewport cleanup preserves another task size change in the same session', async () => {
+  let viewport: JsonValue[] = [800, 600]; const sizes: JsonValue[][] = [];
+  const port = { version: '3.8.8', preview: async (method: string, params: JsonObject) => {
+    if (method === 'status') return { running: true, sceneId: 'scene', sceneGeneration: 1, diagnosticSessionId: 'session', viewport };
+    sizes.push([params.width!, params.height!]); viewport = [900, 500]; return {};
+  } } as unknown as EditorPort;
+  await assert.rejects(new PreviewService(port).execute('preview.validate_viewports', { rows: [{ width: 390, height: 844 }] }), { code: 'OUTCOME_UNKNOWN' });
+  assert.deepEqual(sizes, [[390, 844]]); assert.deepEqual(viewport, [900, 500]);
 });

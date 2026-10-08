@@ -8,6 +8,7 @@ import { CocosError, type JsonObject, type JsonValue } from '../../contracts/src
 import { ProjectPaths } from '../../application/src/paths.js';
 import { AtomicJsonFile } from './atomic-json.js';
 import { CreatorLocator } from './creator.js';
+import { CreatorAccount } from '../../../scripts/creator-account.mjs';
 
 interface BuildJob {
   jobId: string; projectId: string; projectPath: string; state: 'running' | 'succeeded' | 'failed' | 'cancelled' | 'outcome-unknown';
@@ -16,6 +17,7 @@ interface BuildJob {
 }
 
 export class BuildJobs {
+  constructor(private readonly account = new CreatorAccount()) {}
   private readonly json = new AtomicJsonFile();
   private readonly jobs = new Map<string, BuildJob>();
   private readonly children = new Map<string, ChildProcess>();
@@ -58,7 +60,12 @@ export class BuildJobs {
     const temporary = await paths.work('tmp', `creator-${jobId}`);
     // 登录状态必须跨任务保留；按编辑器版本隔离，避免升级污染配置，也不占用 GUI 的用户目录。
     const cache = await paths.work('cache', `creator-build/${installation.version}`);
-    const creatorHome = await paths.work('cache', 'creator-home');
+    const account = installation.major === 3 ? await this.account.prepare(paths.root, 3) : { ...await this.account.local(2), home: '' };
+    // 2.x 的 CLI 不继承 Dashboard 会话，缺少其原生账号时启动只会产生重复登录窗口。
+    if (account.account === 'unavailable') throw new CocosError('UNAUTHORIZED', installation.major === 2
+      ? 'Creator 2 CLI has no reusable native account. Use the already signed-in Dashboard and its editor build entry.'
+      : 'No reusable Creator 3 native session. Inspect the preserved project account profile; another login window was not started.');
+    const creatorHome = account.home;
     const logs = await paths.work('logs', 'builds'); const logPath = join(logs, `${jobId}.log`);
     for (const reserved of ['project', 'projectPath', 'configPath', 'buildPath', 'dest', 'platform']) if (reserved in options) throw new CocosError('INVALID_ARGUMENT', `Build option is controlled by the runner: ${reserved}`);
     const configPath = join(temporary, 'build.json');

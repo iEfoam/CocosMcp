@@ -1,9 +1,10 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { execFile } from 'child_process';
+import { ExtensionHealth, type ExtensionHealthState } from '../../packages/native-adapters/src/extension-health.js';
 
 interface VersionManifest { name: string; version: string; buildId?: string }
-export interface ExtensionVersionState { version: string; buildId: string; installedVersion: string; installedBuildId: string; reloadRequired: boolean; updating: boolean; message: string | null; latestVersion?: string; checking?: boolean }
+export interface ExtensionVersionState { version: string; buildId: string; runningBuildId: string; installedVersion: string; installedBuildId: string; integrity: ExtensionHealthState; runtimeHandshake: 'unknown'; reloadRequired: boolean; updating: boolean; message: string | null; latestVersion?: string; checking?: boolean }
 
 /** 更新入口固定为随扩展打包的 GitHub 更新器，不接受面板传入的路径或命令。 */
 export class ExtensionUpdate {
@@ -13,6 +14,16 @@ export class ExtensionUpdate {
   private latestVersion: string | undefined;
   private checking: Promise<void> | undefined;
   private nextCheck = 0;
+  private installedSignature = '';
+  private readonly health = new ExtensionHealth();
+  private diskStamp = '';
+  private integrity: ExtensionHealthState | undefined;
+  private currentHealth(): ExtensionHealthState {
+    const stamp = this.health.stamp(this.root, this.major);
+    // 面板频繁轮询时只复查文件身份和修改时间；发生变化才重新摘要整套运行文件。
+    if (stamp !== this.diskStamp || !this.integrity) { this.integrity = this.health.inspect(this.root, this.major); this.diskStamp = stamp; }
+    return this.integrity;
+  }
   private invoke(command: 'check' | 'install'): Promise<{version: string}> {
     const config = JSON.parse(readFileSync(join(this.root, 'service-config.json'), 'utf8')) as {nodeExecutable?: string};
     if (!config.nodeExecutable) throw new Error('尚未配置 Node.js，请重新安装扩展');
@@ -34,12 +45,16 @@ export class ExtensionUpdate {
   }
   constructor(private readonly project: string, private readonly root: string, private readonly major: 2 | 3) {
     this.running = this.manifest(root);
+    this.installedSignature = JSON.stringify(this.currentHealth().rows);
   }
   private manifest(root: string): VersionManifest { return JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as VersionManifest; }
   snapshot(): ExtensionVersionState {
-    const installed = this.manifest(this.root);
-    return { version: this.running.version, buildId: this.running.buildId ?? '', installedVersion: installed.version,
-      installedBuildId: installed.buildId ?? '', reloadRequired: installed.version !== this.running.version || installed.buildId !== this.running.buildId,
+    let installed: VersionManifest;
+    try { installed = this.manifest(this.root); }
+    catch { installed = { name: this.running.name, version: '', buildId: '' }; }
+    const integrity = this.currentHealth();
+    return { version: this.running.version, buildId: this.running.buildId ?? '', runningBuildId: this.running.buildId ?? '', installedVersion: installed.version,
+      installedBuildId: installed.buildId ?? '', integrity, runtimeHandshake: 'unknown', reloadRequired: installed.version !== this.running.version || installed.buildId !== this.running.buildId || JSON.stringify(integrity.rows) !== this.installedSignature,
       ...(this.latestVersion ? { latestVersion: this.latestVersion } : {}), checking: Boolean(this.checking), updating: Boolean(this.pending), message: this.message };
   }
   update(): Promise<void> {

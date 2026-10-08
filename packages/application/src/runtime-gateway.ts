@@ -71,6 +71,14 @@ export class RuntimeGateway implements RuntimeExecutor {
     });
   }
 
+  select(projectId: string, runtimeInstanceId?: string): string {
+    this.projects.paths(projectId);
+    const rows = this.liveSessions().filter(session => session.projectId === projectId && (!runtimeInstanceId || session.id === runtimeInstanceId));
+    if (!rows.length) throw new CocosError('CONTEXT_UNAVAILABLE', 'No matching development runtime is connected');
+    if (rows.length > 1) throw new CocosError('AMBIGUOUS_TARGET', 'Specify runtimeInstanceId when several runtimes are connected');
+    return rows[0]!.id;
+  }
+
   private async body(request: IncomingMessage): Promise<JsonObject> {
     const chunks: Buffer[] = []; let size = 0;
     for await (const chunk of request) {

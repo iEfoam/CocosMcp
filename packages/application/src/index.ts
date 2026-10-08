@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 import { FeatureSupport } from '../../runtime3-bridge/src/feature-support.js';
-import { appendFile, readFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { CocosError, Json, type ExecutionRequest, type ExecutionResult, type JsonValue } from '../../contracts/src/index.js';
 import { CapabilityCatalog } from '../../capability-catalog/src/index.js';
@@ -10,14 +11,20 @@ import { ProjectQueue } from './queue.js';
 import { WorkflowValues, type WorkflowOptions } from './workflow-values.js';
 import { OperationStore } from './operation-store.js';
 import { AtomicJson } from './atomic-json.js';
+import { OperationAudit } from './operation-audit.js';
+import { RoadmapOperations } from './roadmap-operations.js';
+import { EvidenceStore } from './evidence-store.js';
 
-export interface RuntimeExecutor { execute(projectId: string, runtimeInstanceId: string | undefined, capabilityId: string, params: import('../../contracts/src/index.js').JsonObject, signal?: AbortSignal): Promise<JsonValue> }
+export interface RuntimeExecutor { select?(projectId: string, runtimeInstanceId?: string): string; execute(projectId: string, runtimeInstanceId: string | undefined, capabilityId: string, params: import('../../contracts/src/index.js').JsonObject, signal?: AbortSignal): Promise<JsonValue> }
 export interface WorkflowStep extends WorkflowOptions { capabilityId: string; params: import('../../contracts/src/index.js').JsonObject; instanceId?: string; runtimeInstanceId?: string; operationId?: string; expectedRevision?: string }
 
 export class CocosApplication {
   private readonly queue = new ProjectQueue();
   private readonly operations = new OperationStore();
   private readonly workflowFiles = new AtomicJson();
+  private readonly audit = new OperationAudit();
+  private readonly roadmap = new RoadmapOperations(this);
+  private readonly evidence = new EvidenceStore();
   private async persistWorkflow(projectId: string, workflowId: string, state: JsonValue, exclusive = false): Promise<void> {
     if (!/^[a-zA-Z0-9_-]{1,128}$/.test(workflowId)) throw new CocosError('INVALID_ARGUMENT', 'Invalid workflowId');
     const path = await this.projects.paths(projectId).work('cache', 'cocos-mcp/workflows');
@@ -27,44 +34,106 @@ export class CocosApplication {
     private readonly allowExternal = false, private readonly runtime?: RuntimeExecutor) {}
 
   async execute(request: ExecutionRequest, signal?: AbortSignal): Promise<ExecutionResult> {
-    const capability = this.catalog.validate(request.capabilityId, request.params);
-    if (capability.effect === 'external' && !this.allowExternal) throw new CocosError('UNAUTHORIZED', 'This operation executes project code or an unrestricted editor message. Start with --allow-project-code to enable it.');
-    const paths = this.projects.paths(request.projectId);
     const operationId = request.operationId ?? randomUUID();
-    const execution = () => this.queue.run(request.projectId, async () => {
+    let capability;
+    try { capability = this.catalog.validate(request.capabilityId, request.params); }
+    catch (error) {
+      let auditPaths;
+      try { auditPaths = this.projects.paths(request.projectId); } catch { /* 未注册工程没有可写的工程审计位置。 */ }
+      if (auditPaths) await this.audit.record(auditPaths, { operationId, projectId: request.projectId, capabilityId: request.capabilityId, context: 'unknown', effect: 'unknown',
+        startedAt: new Date().toISOString(), completedAt: new Date().toISOString(), durationMs: 0, outcome: 'failed', errorCode: CocosError.from(error).code, stage: 'validation', sideEffectState: 'not-sent' });
+      throw error;
+    }
+    const paths = this.projects.paths(request.projectId);
+    const fingerprint = Json.canonical({ capabilityId: capability.id, params: request.params, instanceId: request.instanceId ?? null, runtimeInstanceId: request.runtimeInstanceId ?? null, expectedRevision: request.expectedRevision ?? null });
+    const requestHash = createHash('sha256').update(fingerprint).digest('hex');
+    const metadata = { operationId, capabilityId: capability.id, projectId: request.projectId, context: capability.context, effect: capability.effect,
+      instanceId: request.instanceId ?? null, runtimeInstanceId: request.runtimeInstanceId ?? null, requestHash };
+    let recoveryPath: string | undefined, dispatched = false, auditedAttempt = false, selectedInstance: string | null = request.instanceId ?? null, selectedRuntime: string | null = request.runtimeInstanceId ?? null;
+    const dispatch = async (): Promise<ExecutionResult> => {
+      if (capability.effect === 'external' && !this.allowExternal) throw new CocosError('UNAUTHORIZED', 'This operation executes project code or an unrestricted editor message. Start with --allow-project-code to enable it.');
+      if (request.operationId && capability.effect !== 'read') recoveryPath = await this.audit.reserve(paths, operationId, requestHash, metadata);
+      if (capability.id === 'operation.audit.query' || this.roadmap.owns(capability.id)) {
+        if (capability.context === 'runtime' && this.runtime?.select) selectedRuntime = this.runtime.select(request.projectId, request.runtimeInstanceId);
+        dispatched = capability.effect !== 'read';
+        const result = capability.id === 'operation.audit.query' ? await this.audit.rows(paths, request.params) : await this.roadmap.execute({ ...request, ...(selectedRuntime ? { runtimeInstanceId: selectedRuntime } : {}) }, signal);
+        return { operationId, capabilityId: capability.id, projectId: request.projectId, result, verification: capability.verification, completedAt: new Date().toISOString() };
+      }
       if (capability.context === 'runtime') {
         if (!this.runtime) throw new CocosError(FeatureSupport.owns(capability.id) ? 'UNSUPPORTED_CAPABILITY' : 'CONTEXT_UNAVAILABLE', 'Runtime gateway is not enabled');
-        const result = await this.runtime.execute(request.projectId, request.runtimeInstanceId, capability.id, request.params, signal);
+        selectedRuntime = this.runtime.select?.(request.projectId, request.runtimeInstanceId) ?? request.runtimeInstanceId ?? null;
+        dispatched = true;
+        const result = await this.runtime.execute(request.projectId, selectedRuntime ?? undefined, capability.id, request.params, signal);
         const execution: ExecutionResult = { operationId, capabilityId: capability.id, projectId: request.projectId, result, verification: capability.verification, completedAt: new Date().toISOString() };
         return execution;
       }
       const descriptor = await this.projects.instance(request.projectId, request.instanceId);
+      selectedInstance = descriptor.instanceId;
       this.operations.target(`${request.projectId}:${operationId}`, descriptor.instanceId);
       if (!capability.versions.includes(descriptor.creatorMajor) || !capability.supportedMajors?.includes(descriptor.creatorMajor)) throw new CocosError('UNSUPPORTED_VERSION', 'Capability is not implemented by this Creator major version');
+      dispatched = true;
       const response = await this.bridge.call(descriptor, { protocolVersion: 1, projectId: request.projectId, instanceId: descriptor.instanceId,
         operationId, capabilityId: request.capabilityId, params: request.params,
         ...(request.expectedRevision !== undefined ? { expectedRevision: request.expectedRevision } : {}) }, signal);
+      if (request.capabilityId === 'preview.diagnose') {
+        const diagnostic = Json.object(response.result);
+        response.result = { ...diagnostic, layers: { ...Json.object(diagnostic.layers), mcpService: 'passed', editorRpc: 'passed' },
+          operationId, projectId: request.projectId, instanceId: descriptor.instanceId, transportProof: 'authenticated-application-and-editor-rpc-response', businessOutcomeVerified: false };
+      }
       const result: ExecutionResult = { operationId, capabilityId: request.capabilityId, projectId: request.projectId, instanceId: descriptor.instanceId,
         revision: response.revision, result: response.result, verification: capability.verification, completedAt: new Date().toISOString() };
-      try {
-        const logs = await paths.work('logs', 'cocos-mcp');
-        // 审计记录保留操作元信息，不把源码、资源内容和认证凭据写进通用日志。
-        await appendFile(join(logs, 'operations.jsonl'), JSON.stringify({ operationId, capabilityId: request.capabilityId, projectId: request.projectId,
-          instanceId: descriptor.instanceId, revision: response.revision, completedAt: result.completedAt }) + '\n', { mode: 0o600 });
-      } catch {
-        // 编辑器已经确认成功，日志失败必须单独报告，不能诱使客户端重放已完成的写操作。
-        result.warnings = [{ code: 'AUDIT_WRITE_FAILED', message: 'Operation completed, but its local audit record could not be written' }];
-      }
       return result;
-    }, signal).catch((error: unknown) => {
+    };
+    const execution = () => (this.roadmap.owns(capability.id) || capability.id === 'operation.audit.query' ? dispatch() : this.queue.run(request.projectId, dispatch, signal)).catch((error: unknown) => {
       if (!FeatureSupport.owns(capability.id) || !(error instanceof CocosError) || !['UNSUPPORTED_CAPABILITY', 'UNSUPPORTED_VERSION'].includes(error.code)) throw error;
       const execution: ExecutionResult = { operationId, capabilityId: capability.id, projectId: request.projectId, result: FeatureSupport.unsupported(capability.id, error.message), verification: capability.verification, completedAt: new Date().toISOString() };
       return execution;
     });
-    if (!request.operationId) return execution();
+    const audited = async (): Promise<ExecutionResult> => {
+      auditedAttempt = true;
+      const start = performance.now(), startedAt = new Date().toISOString();
+      const began = await this.audit.record(paths, { ...metadata, startedAt, outcome: 'started', sideEffectState: 'not-sent' });
+      try {
+        const result = await execution();
+        const payload = result.result && typeof result.result === 'object' && !Array.isArray(result.result) ? result.result : {};
+        let evidenceRefs: import('../../contracts/src/index.js').JsonObject[] = [], evidenceFailed = false;
+        if (['preview.capture', 'preview.input', 'preview.validate_viewports', 'runtime.capture'].includes(capability.id)) {
+          try { evidenceRefs = (await this.evidence.save(paths, createHash('sha256').update(operationId).digest('hex'), result.result)).evidenceRefs; }
+          catch { evidenceFailed = true; }
+        }
+        const terminal = { ...metadata, instanceId: selectedInstance, runtimeInstanceId: selectedRuntime, startedAt, completedAt: result.completedAt, durationMs: performance.now() - start,
+          outcome: 'completed', errorCode: null, sideEffectState: capability.effect === 'read' ? 'none' : dispatched ? 'acknowledged' : 'not-sent',
+          sessionId: typeof (payload.previewSessionId ?? payload.diagnosticSessionId) === 'string' && /^[a-f0-9]{32}$/.test(String(payload.previewSessionId ?? payload.diagnosticSessionId)) ? payload.previewSessionId ?? payload.diagnosticSessionId ?? null : null,
+          evidenceRefs, auditWarnings: began && !evidenceFailed ? [] : ['AUDIT_WRITE_FAILED'] };
+        const recorded = await this.audit.record(paths, terminal), recovered = !recoveryPath || await this.audit.finish(recoveryPath, { status: 'completed', completedAt: result.completedAt, sideEffectState: terminal.sideEffectState });
+        if (!began || !recorded || !recovered || evidenceFailed) result.warnings = [{ code: 'AUDIT_WRITE_FAILED', message: 'Operation completed, but its local audit, evidence or recovery record could not be written; do not replay it' }];
+        return result;
+      } catch (error) {
+        const failure = CocosError.from(error), detail = failure.details && typeof failure.details === 'object' && !Array.isArray(failure.details) ? failure.details : {};
+        const sideEffectState = !dispatched || detail.inputSent === false ? 'not-sent' : capability.effect === 'read' ? 'none' : 'unknown';
+        const completedAt = new Date().toISOString();
+        const recorded = await this.audit.record(paths, { ...metadata, instanceId: selectedInstance, runtimeInstanceId: selectedRuntime, startedAt, completedAt, durationMs: performance.now() - start,
+          outcome: failure.code === 'OUTCOME_UNKNOWN' ? 'unknown' : 'failed', errorCode: failure.code, sideEffectState,
+          inputSent: typeof detail.inputSent === 'boolean' ? detail.inputSent : null, sentEvents: typeof detail.sentEvents === 'number' ? detail.sentEvents : null,
+          stage: typeof detail.stage === 'string' && ['focus', 'frame'].includes(detail.stage) ? detail.stage : dispatched ? 'dispatch' : 'preflight', evidenceRefs: [], auditWarnings: [] });
+        const recovered = !recoveryPath || await this.audit.finish(recoveryPath, { status: failure.code === 'OUTCOME_UNKNOWN' ? 'unknown' : 'failed', completedAt, errorCode: failure.code, sideEffectState });
+        if (!recorded || !recovered || !began) throw new CocosError(failure.code, failure.message, { ...detail, auditWarnings: ['AUDIT_WRITE_FAILED'] });
+        throw failure;
+      }
+    };
+    if (!request.operationId) return audited();
     const key = `${request.projectId}:${request.operationId}`;
-    const fingerprint = Json.canonical({ capabilityId: capability.id, params: request.params, instanceId: request.instanceId ?? null, runtimeInstanceId: request.runtimeInstanceId ?? null, expectedRevision: request.expectedRevision ?? null });
-    return this.operations.run(key, fingerprint, execution);
+    try { return await this.operations.run(key, fingerprint, audited); }
+    catch (error) {
+      // 去重冲突/容量拒绝发生在执行器之前；缓存的相同请求错误不重复计作执行失败。
+      if (!auditedAttempt && this.operations.binding(key) !== fingerprint) {
+        const failure = CocosError.from(error), rejectedAt = new Date().toISOString();
+        const recorded = await this.audit.record(paths, { ...metadata, startedAt: rejectedAt, completedAt: rejectedAt, durationMs: 0,
+          outcome: 'rejected', errorCode: failure.code, sideEffectState: 'not-sent', stage: 'idempotency', evidenceRefs: [], auditWarnings: [] });
+        if (!recorded) throw new CocosError(failure.code, failure.message, { ...Json.object(failure.details ?? {}), auditWarnings: ['AUDIT_WRITE_FAILED'] });
+      }
+      throw error;
+    }
   }
 
   async instances(projectId: string): Promise<JsonValue> {
@@ -101,7 +170,7 @@ export class CocosApplication {
   }
 
   /** 顺序执行工作流，失败时默认停止并保留已完成步骤，便于调用方按能力的 rollback 提示做补偿。 */
-  async executeWorkflow(projectId: string, steps: WorkflowStep[], signal?: AbortSignal, continueOnError = false, workflowId: string = randomUUID()): Promise<JsonValue> {
+  async executeWorkflow(projectId: string, steps: WorkflowStep[], signal?: AbortSignal, continueOnError = false, workflowId: string = randomUUID(), observe?: (result: ExecutionResult, index: number) => Promise<ExecutionResult>): Promise<JsonValue> {
     const plan = Json.object(this.plan(projectId, steps));
     if (plan.valid !== true) throw new CocosError('INVALID_ARGUMENT', 'Workflow contains invalid steps', plan);
     const rows: JsonValue[] = [];
@@ -128,6 +197,7 @@ export class CocosApplication {
           const delay = Math.min(step.waitFor.intervalMs ?? 200, (step.waitFor.timeoutMs ?? 10000) - (Date.now() - started));
           await new Promise(resolve => setTimeout(resolve, delay));
         }
+        if (observe) result = await observe(result, index);
         rows.push({ index, capabilityId: step.capabilityId, status: 'succeeded', result: Json.value(result) });
         await this.persistWorkflow(projectId, workflowId, { workflowId, projectId, status: 'running', total: steps.length, currentIndex: index, rows });
       } catch (error) {
@@ -154,6 +224,10 @@ export class CocosApplication {
     const cached = this.operations.result(`${projectId}:${operationId}`);
     if (cached) return Json.value(cached);
     const localState = this.operations.state(`${projectId}:${operationId}`);
+    if (localState === undefined) {
+      const recovery = await this.audit.query(this.projects.paths(projectId), operationId);
+      if (recovery !== undefined) return recovery;
+    }
     if (localState !== undefined && Json.object(localState).status !== 'unknown') return localState;
     try {
       const key = `${projectId}:${operationId}`;

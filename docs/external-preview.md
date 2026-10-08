@@ -1,20 +1,22 @@
 # 外部预览、刷新与诊断
 
-## 当前交付边界
+## 当前交付边界（2026-10-08）
 
 本次复用 `PreviewService`、`ManagedPreview`、`PreviewDiagnostics`、工程路径策略和现有工作流，不另行启动预览服务或 Chrome 调试服务器。
 
 | 能力 | Creator 2.4.15 | Creator 3.8.8 |
 | --- | --- | --- |
 | `preview.start` 的 `embedded` 默认值 | 保持兼容 | 保持兼容 |
-| `external-browser` 服务发现与连接器协议 | 已在原生编辑器验证仅服务就绪分支 | 已实现，原生未验证 |
-| AssetDB 导入回调、异步状态和取消 | 原生导入已验证；取消/超时经适配器测试 | 已实现，原生未验证 |
-| 普通 JS/TS 的原生编译确认 | JS 成功、语法错误、恢复已原生验证；TS 未原生验证 | 尚无编译适配器，返回 `unknown` |
+| `external-browser` 服务发现与连接器协议 | 服务就绪有历史原生记录；Chrome 端到端未验证 | 协议已实现；Chrome 端到端未验证 |
+| AssetDB 导入回调、异步状态和取消 | 本轮原生导入/刷新；取消/超时经适配器测试 | 本轮原生导入/刷新；取消/超时经适配器测试 |
+| 普通 JS/TS 的原生编译确认 | JS 编译、source map 与实际加载摘要已实测；TS 未单独原生验证 | TS 原生编译、source map/chunk 与实际加载摘要已实测 |
+| 图片、Prefab、场景 importer / 加载证据 | 图片/Prefab completed；场景运行层级读回，字节证明不足时 unknown | 图片/Prefab/场景字节匹配 completed |
 | HTTP/WS/Console 诊断与脱敏 | 共享实现和自动化测试 | 共享实现和自动化测试 |
 | 外部 Chrome 页面控制、加载字节证明、截图 | **依赖外部连接器，当前未配置，也未提供其浏览器驱动实现** | 同左 |
-| 浏览器运行时节点路径点击与 EditBox 输入 | **本次未实现**；不能用编辑器 `node.*` 代替 | 同左 |
+| `runtime.ui.select/check/click` | embedded 唯一节点和真实点击后态实测；Mask 无法证明时拒绝 | embedded 唯一节点和真实点击后态实测 |
+| external-browser 输入与运行时连接 | 已有受控客户端协议；依赖连接器驱动，未原生验收 | 同左；不能借用 embedded 的结论 |
 
-当前没有完整端到端浏览器验收。不能把“编译完成”或测试替身提供的版本摘要当作真实 Chrome 加载了新代码。
+当前没有完整外部 Chrome MCP 端到端验收。embedded 两版在独立合成工程通过各 14 项检查，详细结果和复现方式见 [预览验收指南](preview-acceptance.md)。不能把“编译完成”、原生 Electron 检查或 UI 工具取得的 Chrome 图片当作 MCP 外部连接器已加载新代码。
 
 ## 外部预览
 
@@ -34,7 +36,7 @@
 
 `scene` 可以省略，或传当前已保存场景的 UUID；不会自动切换或保存场景。服务地址从当前 Creator 实例获取。默认 `target: embedded` 保留旧调用行为。
 
-结果独立包含 `target`、`url`、`sceneId`、`sessionId`、`tabId`、`owned`、`connection`、`pageReady`、`gameReady` 和 `status`。`service-ready` 只代表实际预览 HTTP 服务响应成功；`page-opened` 和 `game-ready` 必须由连接器实时证明。没有连接器时不会打开 Electron 窗口冒充 Chrome。
+结果区分 `launchSceneId`、`currentSceneId`、`sceneGeneration` 和 `runtimeInstanceId`，并包含 `target`、`url`、`sceneId`、`sessionId`、`tabId`、`owned`、`connection`、`pageReady`、`gameReady` 和 `status`。`service-ready` 只代表实际预览 HTTP 服务响应成功；`page-opened` 和 `game-ready` 必须由连接器实时证明。没有连接器时不会打开 Electron 窗口冒充 Chrome。
 
 `preview.status`、`preview.stop`、`preview.capture`、`preview.logs` 和新诊断能力接受 `target`。省略时使用最近选择的目标。`start` 省略 target 始终使用兼容默认值 `embedded`。
 
@@ -59,9 +61,9 @@
 1. 检查资源路径、符号链接和大小；计算指定文件的 SHA-256。
 2. 等待每次 AssetDB `refresh` 的原生回调；再次比较源文件，拒绝导入期间的修改。
 3. 2.4.15 在调用 `ProjectCompiler.compileScripts()` **之前**检查 `errorScripts`。原生方法会清除错误，若先调用可能把旧导入文件重新打包成假成功。
-4. 等待原生 Promise，检查错误和 source map 的 `sourcesContent` 摘要，确认导入产物来自请求的源码。普通 JS/TS 以外的资源、插件脚本及没有可信 source map 的情况返回 `unknown`。
-5. 计算原生 `__qc_bundle__.js` 与 `__quick_compile__.js` 的 SHA-256。它们的排序清单摘要是 `expectedRevision`，不是时间戳。
-6. 仅在编译成功且 `reload: true` 时调用外部连接器。它必须从该次导航实际加载的脚本/编译 bundle 字节获取摘要，并返回新的 `navigationId`、加载清单和运行就绪状态。仅返回 `loadedRevision`、在 URL 拼接 revision 或向页面注入 revision 变量不会被接受。
+4. 2.4.15 等待原生 Promise 后继续核对实际模块 inline source map 的 `sourcesContent` 摘要和产物稳定状态，避免 extern map 已更新而 JS 仍旧的竞态。3.8.8 等待 programming 完成信号，核对 source map/chunk。插件脚本及缺可信 source map 的情况返回 `unknown`。
+5. 图片/Prefab/场景采用 AssetDB 原生 library/subAssets 清单及 UUID。普通脚本采用原生 bundle/chunk/模块摘要；所有预期产物的排序清单摘要是 `expectedRevision`，不是时间戳。未知 importer、未加载子资源和未覆盖的传递依赖保持 unknown。
+6. 仅在编译完成且 `reload: true` 时重载所选目标。embedded 使用自有窗口和 CDP，不依赖 Chrome；external-browser 调用工程连接器。必须从本次导航正确 frame/loader 实际加载的字节取得摘要，返回新 `navigationId`、清单和绘制就绪状态。仅回显 `loadedRevision`、在 URL 拼接 revision 或注入变量不会被接受。
 7. 完成版本匹配且游戏就绪后才返回 `completed`；缺少连接器或无法证明版本时返回 `unknown`，摘要不同则失败。`reload:false` 仍保留编译证据，整个浏览器链路不算完成。
 
 `preview.refresh.cancel` 使用相同刷新句柄。取消和超时阻止后续阶段；不能撤销已经交给 AssetDB 的导入。`nativePending: true` 时禁止开始另一次刷新，防止迟到回调污染后续操作；原生回调返回后会变为 false。不会用固定等待代替原生完成信号。
@@ -113,11 +115,16 @@
 | `start` | 按精确项目 URL/scene 复用标签页；同一 sessionId 幂等；只有新建标签页才返回 owned=true；不得使用内置模拟器 |
 | `status` | 实时检查浏览器连接、目标标签页、URL 与引擎场景；断连立即返回 disconnected，不复用旧成功快照 |
 | `stop` | closeTab=false 只解除采集；closeTab=true 也须复核创建者；返回停止前的会话绑定信息 |
-| `reload` | 必须先监听导航、网络和脚本事件，再刷新；仅采集指定 tab；返回 evidence=`loaded-script-bytes`、新 navigationId、artifacts 和 gameReady；请求中的 expectedRevision 不能用作加载证明 |
+| `reload` | 先监听导航、网络和脚本事件，再刷新；仅采集指定 tab/frame/loader；返回 evidence=`loaded-script-bytes` 或 `loaded-artifact-bytes`、新 navigationId、artifacts 和 gameReady；expectedRevision 回显不是证明 |
 | `capture` | 等待目标场景实际绘制；返回工程内相对 path，如 `.codex-work/logs/preview/frame.png`；不得返回系统临时路径 |
+| `resize` | 修改指定自有标签页视口，读回实际尺寸/场景/帧；可返回同样受守卫的 PNG 路径，不改变其他标签页 |
+| `input` | 发送前核对归属和严格期待，发送真实输入；返回投递证据和后态，响应中断为 OUTCOME_UNKNOWN/inputSent=null，不自动重放 |
+| `connect-runtime` | 仅把 MCP 生成的开发桥接与本工程回环网关配置接入当前受控页面，返回实际 runtime 身份，不写正式资源 |
 | `logs`, `network`, `websocket` | 返回 rows、nextCursor、hasMore、droppedBefore；按 session 和时间窗口隔离；不收集其他标签页 |
 
-每次调用携带并核对 sessionId、tabId、sceneId 和精确 URL。浏览器导航到其他页面后立即拒绝后续操作。broker 请求超时 15 秒、响应上限 8 MiB。连接器必须在有副作用动作之前检查页面归属；MCP 的返回值校验不能补救连接器已经向错误页面发送的动作。
+每次调用携带并核对 sessionId、tabId 和精确 URL，严格期待使用 expectedSceneId/expectedGeneration/expectedRuntimeInstanceId；启动 sceneId 与当前场景分开，合法切场景不误判为旧页面。响应须报告实际 currentSceneId、sceneGeneration、frameIndex 和 runtimeInstanceId。浏览器导航到其他工程后拒绝后续操作。broker 请求超时 15 秒、响应上限 8 MiB。连接器必须在副作用之前检查页面归属；MCP 的返回值校验不能补救已经向错误页面发送的动作。
+
+截图只接受工程 `.codex-work/` 内的有限 regular PNG，最大 32 MiB；客户端核验 PNG 签名、IHDR 尺寸和 SHA-256 后交付图片。配置及截图路径仍通过工程 containment/symlink 守卫。external-browser 未提供可强制执行的 fixture 网络隔离，带 fixtureId 的启动会拒绝。
 
 ## 诊断、安全和错误契约
 
@@ -140,11 +147,11 @@ WebSocket 默认只保留连接状态、101 握手响应、帧方向、类型、
 | 刷新 `unknown` | 证据不足，包括缺失编译适配器/浏览器加载证明 |
 | 刷新 `timeout` / `cancelled` | 停止后续阶段，明确原生工作可能仍在完成 |
 
-## 组合验收与 P1 后续
+## 组合验收与剩余边界
 
 复用现有 `cocos_workflow_*` 的 paramRefs、waitFor、持久化步骤和失败停止，不另建工作流调度器。推荐顺序：`preview.start(external-browser)` → `preview.refresh` → 轮询 `preview.refresh.status`（同时检查失败终态）→ 检查 `revisionMatched` → 浏览器操作 → 预期状态 → `preview.capture` → `preview.diagnose`。失败或 unknown 立即保留现场，不重复点击。
 
-节点路径交互仍需开发预览桥接。现有 `node.*` 是编辑器场景，不用于浏览器业务点击。后续必须拒绝路径歧义，检查 activeInHierarchy/enabled/interactable，经过真实输入分发器和 EditBox 输入事件，并将密码排除在账本及报告外。桥接只能由开发预览注入，不写入正式构建资源。未实现前不注册可执行 capability。
+`runtime.ui.select/check/click` 已复用开发运行时桥接；`node.*` 仍仅操作编辑器场景。embedded 点击核对唯一节点、active/按钮/相机/可见/遮罩与命中候选，通过原生输入并独立检查 after；不直接调用业务回调。输入法、真实设备与外部 Chrome 接收者仍需专项验证。Creator 2 的 EditBox 语义操作复用 runtime.control.text，不能把程序赋值等同于键盘/输入法事件。声明式配方与夹具的操作、取消及清理见 [预览验收指南](preview-acceptance.md)。
 
 ## 本次验收证据（2026-09-22）
 

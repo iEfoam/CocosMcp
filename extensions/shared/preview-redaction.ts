@@ -3,6 +3,10 @@ import type { JsonValue } from '../../packages/contracts/src/index.js';
 /** 在存储和输出边界都脱敏；正文默认不采集，未知格式不当作安全文本透传。 */
 export class PreviewRedaction {
   private readonly sensitive = /pass(?:word|wd)?|pwd|token|authorization|cookie|secret|signature|api[-_]?key|session[-_]?id|credential|private[-_]?key/i;
+  sensitiveKey(key: string, value: unknown): boolean {
+    // 验收结果的布尔 passed 不是凭据；仅豁免明确类型，字符串仍按保守规则脱敏。
+    return !(key === 'passed' && typeof value === 'boolean') && this.sensitive.test(key);
+  }
   text(value: unknown, limit = 16384): string {
     let text = String(value ?? '').slice(0, limit + 1024);
     try {
@@ -30,7 +34,7 @@ export class PreviewRedaction {
     if (typeof value === 'number') return Number.isFinite(value) ? value : null;
     if (typeof value === 'string') return this.text(value);
     if (Array.isArray(value)) return value.slice(0, 500).map(row => this.value(row, depth + 1));
-    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).slice(0, 200).map(([key, content]) => [key, this.sensitive.test(key) ? '[REDACTED]' : this.value(content, depth + 1)]));
+    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).slice(0, 200).map(([key, content]) => [key, this.sensitiveKey(key, content) ? '[REDACTED]' : this.value(content, depth + 1)]));
     return null;
   }
 }

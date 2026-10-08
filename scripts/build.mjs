@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { build } from 'esbuild';
 import { mkdir, readFile, writeFile, copyFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
+import files from '../packages/native-adapters/src/extension-files.json' with { type: 'json' };
 
 const root = process.cwd();
 const define = await new VerificationBuild().definitions();
@@ -46,6 +47,14 @@ for (const major of [2, 3]) {
     const content = template.replace(/\{\{(major|version|buildId|builtAt)\}\}/g, (_, key) => String(values[key]));
     for (const name of names) await writeFile(join(extensionRoot, name), content);
   }
+  manifest.fileHashes = {};
+  // package.json 不能摘要自身；其身份由更新包整体 SHA-256 与安装身份校验保护。
+  for (const path of [...files[major], ...files.presentation].filter(path => path !== 'package.json')) {
+    const bytes = await readFile(join(extensionRoot, path));
+    if (!bytes.length) throw new Error(`Empty extension file: ${path}`);
+    manifest.fileHashes[path] = createHash('sha256').update(bytes).digest('hex');
+  }
+  await writeFile(join(extensionRoot, 'package.json'), JSON.stringify(manifest, null, 2) + '\n');
 }
 await mkdir(join(output, 'runtime'), { recursive: true });
 await build({ define, entryPoints: ['packages/runtime3-bridge/src/bootstrap.ts'], outfile: join(output, 'runtime/cocos-mcp.js'), bundle: true,

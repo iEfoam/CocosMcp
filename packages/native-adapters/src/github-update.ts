@@ -1,9 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { readFile, writeFile, stat } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ProjectPaths } from '../../application/src/paths.js';
 import { ExtensionInstaller } from './installer.js';
 import files from './extension-files.json' with { type: 'json' };
+import { ExtensionHealth } from './extension-health.js';
 
 export const RELEASE_API = 'https://api.github.com/repos/iEfoam/CocosMcp/releases/latest';
 export interface ReleaseVersion { version: string; buildId: string; url: string; digest: string }
@@ -40,11 +41,16 @@ export class GithubUpdate {
     for (const row of bundle.rows) {
       if (!allowed.includes(row.path) || seen.has(row.path) || typeof row.content !== 'string') throw new Error('更新包包含非法或重复路径');
       seen.add(row.path);
+      if (!Buffer.from(row.content, 'base64').length) throw new Error('更新包包含空运行文件');
     }
     // 旧包必须保留所有运行文件，新包必须同时带齐展示资料，不能用文档替换必需入口。
     if (required.some(path => !seen.has(path)) || (bundle.rows.length === allowed.length && allowed.some(path => !seen.has(path)))) throw new Error('更新包版本或结构不匹配');
     const manifest = JSON.parse(Buffer.from(bundle.rows.find(row => row.path === 'package.json')!.content, 'base64').toString());
     if (manifest.name !== `cocos-mcp-creator${major}` || manifest.version !== bundle.version || manifest.buildId !== bundle.buildId) throw new Error('扩展身份校验失败');
+    for (const row of bundle.rows) {
+      const expected = manifest.fileHashes?.[row.path];
+      if (row.path !== 'package.json' && expected !== undefined && createHash('sha256').update(Buffer.from(row.content, 'base64')).digest('hex') !== expected) throw new Error('更新包运行文件摘要不匹配');
+    }
     return bundle;
   }
   async install(project: string, major: 2 | 3): Promise<ReleaseVersion> {
@@ -53,12 +59,8 @@ export class GithubUpdate {
     const target = await paths.resolve(`${major === 2 ? 'packages' : 'extensions'}/cocos-mcp-creator${major}`);
     const installed = JSON.parse(await readFile(join(target, 'package.json'), 'utf8'));
     if (installed.version === release.version && installed.buildId === release.buildId) {
-      const complete = await Promise.all(files.presentation.map(path => stat(join(target, path)).then(value => value.isFile(), error => {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
-        throw error;
-      })));
-      // 旧更新器第一次升级只能安装运行文件；新版更新器允许同版本补齐缺失资料。
-      if (!release.url.endsWith('.full.json') || complete.every(Boolean)) return release;
+      // 版本号相同不能证明运行文件同源；缺文件、混入旧 bundle 或无摘要都重新核对整包。
+      if (new ExtensionHealth().inspect(target, major, release.url.endsWith('.full.json')).health === 'healthy') return release;
     }
     const data = await this.download(release.url, 40 * 1024 * 1024);
     const bundle = this.validate(data, release, major);

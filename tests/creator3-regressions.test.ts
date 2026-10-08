@@ -57,6 +57,35 @@ test('scene opening resolves URLs, rejects wrong assets before mutation, and ver
   await assert.rejects(adapter.execute('scene.open', {uuid: 'db://assets/Scenes/target.scene'}), error => error instanceof CocosError && error.code === 'VERIFICATION_FAILED');
 });
 
+test('prefab opening requires a saved scene and verifies native editing context', async () => {
+  let dirty = true, sceneId = 'asset', opened = 0;
+  const port = {
+    request: async (_channel: string, method: string) => {
+      if (method === 'query-asset-info') return {uuid: 'asset', type: 'cc.Prefab'};
+      if (method === 'query-dirty') return dirty;
+      if (method === 'open-scene') { opened++; return true; }
+      if (method === 'query-current-scene') return sceneId;
+      if (method === 'query-scene-mode') return 'prefab';
+      throw new Error(method);
+    }, scene: async () => ({sceneId}),
+  } as unknown as EditorPort;
+  const adapter = new Creator3Adapter(port);
+  await assert.rejects(adapter.execute('prefab.open', {uuid: 'asset'}), error => error instanceof CocosError && error.code === 'RESOURCE_BUSY');
+  assert.equal(opened, 0); dirty = false;
+  assert.equal((await adapter.execute('prefab.open', {uuid: 'asset'}) as {editing: string}).editing, 'native-prefab');
+  sceneId = 'other';
+  await assert.rejects(adapter.execute('prefab.open', {uuid: 'asset'}), error => error instanceof CocosError && error.code === 'OUTCOME_UNKNOWN');
+});
+
+test('native prefab save acknowledgements resolve asset identity instead of returning boolean UUIDs', async () => {
+  let uuid: unknown = 'prefab-asset';
+  const port = {request: async (_channel: string, method: string) => method === 'save-scene' ? true : method === 'query-dirty' ? false : uuid} as unknown as EditorPort;
+  const adapter = new Creator3Adapter(port);
+  assert.deepEqual(await adapter.execute('scene.save', {}), {sceneUuid: 'prefab-asset', saved: true});
+  uuid = null;
+  await assert.rejects(adapter.execute('scene.save', {}), error => error instanceof CocosError && error.code === 'OUTCOME_UNKNOWN');
+});
+
 class Harness {
   calls: Array<{message: string; args: unknown[]}> = [];
   property = 1;
@@ -147,6 +176,36 @@ test('prefab conversion returns replacement IDs matched by subtree position', as
       {path: '/0', previousNodeId: 'old-child', nodeId: 'new-child'},
     ],
   });
+});
+
+test('prefab instantiation preserves native association and reports uncertain creation without replay', async () => {
+  let name = 'AssetName', associated = true, creations = 0;
+  const port = {
+    scene: async (method: string) => {
+      if (method === 'sceneInfo') return {sceneId: 'scene'};
+      if (method === 'nodeExists') return true;
+      if (method === 'hierarchy') return {rows: [{nodeId: 'instance', parentId: 'scene', name}]};
+      if (method === 'prefabReference') {
+        if (!associated) throw new CocosError('INVALID_ARGUMENT', 'Select the prefab instance root');
+        return {assetUuid: 'asset', rootId: 'instance'};
+      }
+      throw new Error(method);
+    },
+    request: async (_channel: string, method: string, value: {dump?: {value: string}}) => {
+      if (method === 'create-node') {
+        assert.deepEqual(value, {name: 'Editing', parent: 'scene', assetUuid: 'asset', type: 'cc.Prefab', unlinkPrefab: false});
+        creations++; return 'instance';
+      }
+      if (method === 'query-node') return {name: {type: 'String', value: name}};
+      if (method === 'set-property') { name = value.dump!.value; return true; }
+      return 'record';
+    },
+  } as unknown as EditorPort;
+  const adapter = new Creator3Adapter(port);
+  assert.equal((await adapter.execute('prefab.instantiate', {uuid: 'asset', name: 'Editing'}) as {nodeId: string}).nodeId, 'instance');
+  associated = false;
+  await assert.rejects(adapter.execute('prefab.instantiate', {uuid: 'asset', name: 'Editing'}), error => error instanceof CocosError && error.code === 'OUTCOME_UNKNOWN');
+  assert.equal(creations, 2);
 });
 
 test('save copy refuses existing resource before serialization or write', async t => {

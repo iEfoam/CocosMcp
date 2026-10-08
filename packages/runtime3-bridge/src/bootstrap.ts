@@ -11,11 +11,13 @@ interface XhrLike {
   send(body: string): void;
 }
 declare const XMLHttpRequest: new () => XhrLike;
+declare const __COCOS_SOURCE_FINGERPRINT__: string;
 
 export class DevelopmentConnection {
   private active = false;
   private runtimeInstanceId = '';
   get instanceId(): string { return this.runtimeInstanceId; }
+  get sourceFingerprint(): string | null { return typeof __COCOS_SOURCE_FINGERPRINT__ === 'string' ? __COCOS_SOURCE_FINGERPRINT__ : null; }
   private readonly controller: RuntimeController;
   constructor(private readonly options: RuntimeConnectionOptions) {
     if (!options.development) throw new CocosError('UNAUTHORIZED', 'Runtime bridge must only be enabled in a development build');

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { PreviewDiagnostics, type PreviewDebugger } from '../extensions/creator3/src/preview-diagnostics.js';
 import type { JsonObject } from '../packages/contracts/src/index.js';
+import { createHash } from 'node:crypto';
 class DebuggerStub implements PreviewDebugger {
   attached = false; commands: Array<{method: string; params?: Record<string, unknown>}> = []; callbacks = new Map<string, (...args: any[]) => void>();
   attach(): void { this.attached = true; } detach(): void { this.attached = false; } isAttached(): boolean { return this.attached; }
@@ -67,4 +68,99 @@ test('WebSocket capture retains only frame metadata and distinguishes explicit C
   assert.equal(((await log.query({ to: at })).rows as JsonObject[]).length, 0);
   await assert.rejects(log.query({ from: '2026-09-22T12:00:00' }), /timezone/);
   d.callbacks.get('detach')!({}, 'lost'); assert.equal((await log.query({})).connection, 'disconnected'); log.dispose();
+});
+
+test('loaded script digests belong to a new native navigation and never persist script bodies', async () => {
+  const log = new PreviewDiagnostics(), d = new DebuggerStub(); await log.attach(d);
+  const source = 'const token = "source-must-not-be-logged";', url = 'http://localhost:7456/compiled.js';
+  d.sendCommand = async method => method === 'Debugger.getScriptSource' ? { scriptSource: source } : {};
+  const id = await log.beginRevision([{ url: '/compiled.js', sha256: 'expected' }], 'http://localhost:7456');
+  const script = { url, scriptId: 'script', length: source.length, executionContextAuxData: { frameId: 'main' } };
+  d.emit('Debugger.scriptParsed', script); assert.deepEqual((await log.revision(id)).artifacts, []);
+  d.emit('Page.frameNavigated', { frame: { id: 'main', loaderId: 'real-navigation', url: 'http://localhost:7456/?scene=s' } });
+  d.emit('Debugger.scriptParsed', { ...script, executionContextAuxData: { frameId: 'other-frame' } });
+  assert.deepEqual((await log.revision(id)).artifacts, []);
+  d.emit('Debugger.scriptParsed', script);
+  const proof = await log.revision(id); assert.equal(proof.navigationId, 'real-navigation');
+  assert.deepEqual(proof.artifacts, [{ url, sha256: createHash('sha256').update(source).digest('hex') }]);
+  assert.doesNotMatch(JSON.stringify(await log.query({})), /source-must-not-be-logged/);
+  await assert.rejects(log.beginRevision([{ url: 'http://other-project/compiled.js' }], 'http://localhost:7456'), { code: 'UNAUTHORIZED' });
+  log.dispose();
+});
+
+test('resource byte observation is restricted to reviewed artifacts and the exact native navigation', async () => {
+  const log = new PreviewDiagnostics(), d = new DebuggerStub(); await log.attach(d);
+  const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), origin = 'http://localhost:7457', url = `${origin}/assets/image.png`;
+  d.sendCommand = async method => method === 'Network.getResponseBody' ? { body: png.toString('base64'), base64Encoded: true } : {};
+  const id = await log.beginRevision([{ url: '/assets/image.png', kind: 'resource' }], origin);
+  d.emit('Page.frameNavigated', { frame: { id: 'main', loaderId: 'navigation-1', url: origin } });
+  const request = { requestId: 'asset', loaderId: 'navigation-1', frameId: 'main', timestamp: 1, wallTime: 1791420000, request: { url, method: 'GET' } };
+  d.emit('Network.requestWillBeSent', { ...request, requestId: 'business', request: { url: `${origin}/login`, method: 'POST', postData: 'password=do-not-record' } });
+  d.emit('Network.loadingFinished', { requestId: 'business', encodedDataLength: 20 });
+  assert.equal(d.commands.filter(row => row.method === 'Network.getResponseBody').length, 0);
+  d.emit('Network.requestWillBeSent', request);
+  d.emit('Network.responseReceived', { requestId: 'asset', frameId: 'main', loaderId: 'navigation-1', response: { url, status: 200 } });
+  d.emit('Network.loadingFinished', { requestId: 'asset', encodedDataLength: png.length });
+  const proof = await log.revision(id); assert.equal(proof.evidence, 'loaded-artifact-bytes'); assert.equal(proof.navigationId, 'navigation-1');
+  assert.deepEqual(proof.artifacts, [{ url, kind: 'resource', sha256: createHash('sha256').update(png).digest('hex') }]);
+  assert.doesNotMatch(JSON.stringify(await log.query({})), /do-not-record|base64|iVBOR/);
+  log.endRevision(); await assert.rejects(log.revision(id), { code: 'STALE_HANDLE' }); log.dispose();
+});
+
+test('Creator 2 current-scene snapshot interception changes only its owned scene request', async () => {
+  const log = new PreviewDiagnostics(), d = new DebuggerStub(); await log.attach(d);
+  const data = '{"scene":"native-current-snapshot"}';
+  await log.prepareScene({ sceneId: 'scene', data }, 'http://127.0.0.1:7458');
+  d.emit('Fetch.requestPaused', { requestId: 'scene', request: { url: 'http://127.0.0.1:7458/preview-scene.json', method: 'GET' } });
+  d.emit('Fetch.requestPaused', { requestId: 'business', request: { url: 'http://elsewhere/login', method: 'POST' } });
+  const fulfilled = d.commands.find(row => row.method === 'Fetch.fulfillRequest')!;
+  assert.equal(Buffer.from(String(fulfilled.params!.body), 'base64').toString(), data);
+  assert.equal(d.commands.filter(row => row.method === 'Fetch.fulfillRequest').length, 1);
+  assert.equal(d.commands.find(row => row.method === 'Fetch.continueRequest')!.params!.requestId, 'business');
+  assert.doesNotMatch(JSON.stringify(await log.query({})), /native-current-snapshot/); log.dispose();
+});
+
+test('resource proof maps native UUID files across Bundle prefixes while excluding wrong UUIDs and origins', async () => {
+  const log = new PreviewDiagnostics(), d = new DebuggerStub(), body = 'native bytes'; await log.attach(d);
+  const file = 'ab000000-0000-0000-0000-000000000001.json', origin = 'http://127.0.0.1:7458', canonical = `/assets/others/import/ab/${file}`;
+  d.sendCommand = async method => method === 'Network.getResponseBody' ? { body, base64Encoded: false } : {};
+  const id = await log.beginRevision([{ url: canonical, kind: 'resource', nativeFile: file }], origin);
+  d.emit('Page.frameNavigated', { frame: { id: 'main', loaderId: 'navigation', url: origin } });
+  for (const [index, url] of [`http://elsewhere/assets/main/import/ab/${file}`, `${origin}/assets/main/import/ac/${file}`, `${origin}/assets/main/import/ab/${file}?v=2`].entries()) {
+    const requestId = String(index);
+    d.emit('Network.requestWillBeSent', { requestId, loaderId: 'navigation', frameId: 'main', request: { url, method: 'GET' } });
+    d.emit('Network.responseReceived', { requestId, loaderId: 'navigation', frameId: 'main', response: { url, status: 200 } });
+    d.emit('Network.loadingFinished', { requestId, encodedDataLength: body.length });
+  }
+  const proof = await log.revision(id), artifacts = proof.artifacts as JsonObject[];
+  assert.equal(artifacts.length, 1); assert.equal(artifacts[0]!.url, origin + canonical); assert.equal(artifacts[0]!.sha256, createHash('sha256').update(body).digest('hex'));
+  assert.equal(artifacts[0]!.mapping, 'native-uuid-file-in-same-preview-origin'); log.dispose();
+});
+
+test('old Electron script events use native execution context identity and ignore destroyed or child contexts', async () => {
+  const log = new PreviewDiagnostics(), d = new DebuggerStub(); await log.attach(d); const source = 'compiled native source', origin = 'http://127.0.0.1:7458';
+  d.sendCommand = async method => method === 'Debugger.getScriptSource' ? { scriptSource: source } : {};
+  const id = await log.beginRevision([{ url: '/compiled.js' }], origin);
+  d.emit('Page.frameNavigated', { frame: { id: 'main', loaderId: 'navigation', url: origin } });
+  d.emit('Runtime.executionContextCreated', { context: { id: 1, auxData: { frameId: 'child' } } });
+  d.emit('Debugger.scriptParsed', { url: origin + '/compiled.js', scriptId: 'wrong', executionContextId: 1 }); assert.deepEqual((await log.revision(id)).artifacts, []);
+  d.emit('Runtime.executionContextCreated', { context: { id: 2, auxData: { frameId: 'main' } } });
+  d.emit('Debugger.scriptParsed', { url: origin + '/compiled.js', scriptId: 'correct', executionContextId: 2 });
+  const proof = await log.revision(id); assert.deepEqual(proof.artifacts, [{ url: origin + '/compiled.js', sha256: createHash('sha256').update(source).digest('hex') }]); assert.equal(proof.navigationId, 'navigation');
+  log.endRevision(); const next = await log.beginRevision([{ url: '/compiled.js' }], origin);
+  d.emit('Page.frameNavigated', { frame: { id: 'main', loaderId: 'next', url: origin } });
+  d.emit('Runtime.executionContextsCleared', {}); d.emit('Debugger.scriptParsed', { url: origin + '/compiled.js', scriptId: 'stale', executionContextId: 2 }); assert.deepEqual((await log.revision(next)).artifacts, []); log.dispose();
+});
+
+test('Creator 2 anonymous eval proof requires the reviewed native source map digest and hashes actual VM bytes', async () => {
+  const log = new PreviewDiagnostics(), d = new DebuggerStub(); await log.attach(d);
+  const origin = 'http://127.0.0.1:7458', sourceMap = 'data:application/json;base64,e30=', source = 'requested compiled module'; let reads = 0;
+  d.sendCommand = async method => { if (method === 'Debugger.getScriptSource') { reads++; return { scriptSource: source }; } return {}; };
+  const id = await log.beginRevision([{ url: '/preview-scripts/assets/Test.js', sourceMapSha256: createHash('sha256').update(sourceMap).digest('hex') }], origin);
+  d.emit('Page.frameNavigated', { frame: { id: 'main', loaderId: 'navigation', url: origin } });
+  d.emit('Runtime.executionContextCreated', { context: { id: 1, auxData: { frameId: 'main' } } });
+  d.emit('Debugger.scriptParsed', { url: '', scriptId: 'business', sourceMapURL: 'unreviewed', executionContextId: 1 }); assert.equal(reads, 0);
+  d.emit('Debugger.scriptParsed', { url: '', scriptId: 'requested', sourceMapURL: sourceMap, executionContextId: 1 });
+  const artifacts = (await log.revision(id)).artifacts as JsonObject[]; assert.equal(reads, 1); assert.equal(artifacts[0]!.sha256, createHash('sha256').update(source).digest('hex'));
+  assert.equal(artifacts[0]!.mapping, 'native-inline-source-map-digest'); assert.doesNotMatch(JSON.stringify(await log.query({})), /requested compiled module|e30=/); log.dispose();
 });

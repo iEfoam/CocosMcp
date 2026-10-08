@@ -17,6 +17,7 @@ export interface Creator2Port {
   environment?(): JsonObject;
   preview?(method: string, params: JsonObject): Promise<JsonValue>;
   disposePreview?(): void;
+  extensionState?(): JsonValue;
   version: string;
   projectPath: string;
   scene(method: string, ...args: unknown[]): Promise<unknown>;
@@ -59,6 +60,7 @@ export class Creator2Adapter implements EditorAdapter {
       if (channel === 'preview' && message === 'query-preview-url' && this.port.previewUrl) return this.port.previewUrl();
       throw new CocosError('UNSUPPORTED_CAPABILITY', `${channel}.${message}`);
     } }).execute(id, p);
+    if (id === 'ui.owned_snapshot' || id === 'ui.owned_remove') return Json.value(await this.port.scene(id, p));
     if (id.startsWith('ui.')) return new Creator2UiService(this.port).execute(id, p);
     const str = (key: string): string => Json.string(p[key], key);
     switch (id) {
@@ -70,16 +72,16 @@ export class Creator2Adapter implements EditorAdapter {
       case 'asset.users': return this.assets.references(str('url'), true);
       case 'scene.save_copy': { const saved = Json.object(await this.port.scene('serializeCurrentScene')); return { rows: await this.asset('create', str('url'), typeof saved.content === 'string' ? saved.content : JSON.stringify(saved.content)) }; }
       case 'view.query': case 'view.set': case 'view.focus': return Json.value(await this.port.scene(id, p));
-      case 'editor.status': return { editorVersion: this.port.version, creatorMajor: 2, projectPath: this.port.projectPath, scene: Json.value(await this.port.scene('sceneInfo')) };
+      case 'editor.status': return { editorVersion: this.port.version, creatorMajor: 2, projectPath: this.port.projectPath, scene: Json.value(await this.port.scene('sceneInfo')), ...(this.port.extensionState ? { extension: this.port.extensionState() } : {}) };
       case 'scene.references': return new Creator2AssetReferenceAudit(this.port).resolve(Json.object(Json.value(await this.port.scene('scene.references'))));
       case 'asset.references.audit': return new Creator2AssetReferenceAudit(this.port).source(str('url'));
-      case 'scene.query': { const scene = Json.object(Json.value(await this.port.scene('sceneInfo'))); return { scene, dirty: scene.dirty ?? null }; }
+      case 'scene.query': { const scene = Json.object(Json.value(await this.port.scene('sceneInfo'))); return { context: 'editor', scene, dirty: scene.dirty ?? null }; }
       case 'scene.snapshot': return { snapshot: Json.value(await this.port.scene('fingerprint')) };
       case 'scene.diff': {
         const current = Json.value(await this.port.scene('fingerprint')); const baseline = Json.value(p.baseline);
         return { equal: Json.canonical(current) === Json.canonical(baseline), rows: Json.diff(baseline, current), current, baseline };
       }
-      case 'scene.hierarchy': return Json.value(await this.port.scene('hierarchy', p));
+      case 'scene.hierarchy': return { ...Json.object(Json.value(await this.port.scene('hierarchy', p))), context: 'editor' };
       case 'node.find': return Json.value(await this.port.scene('findNodes', p));
       case 'scene.validate': return Json.value(await this.port.scene('validateScene'));
       case 'scene.open': return Json.value(await this.port.scene('openScene', p));

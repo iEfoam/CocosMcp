@@ -5,6 +5,8 @@ import { McpService } from '../../shared/mcp-service.js';
 import { dirname, join } from 'path';
 import { createHash } from 'crypto';
 import { readFileSync, readdirSync, realpathSync } from 'fs';
+import { readdir } from 'node:fs/promises';
+import { ProjectPaths } from '../../../packages/application/src/paths.js';
 import { ManagedPreview, type PreviewWindow } from '../../creator3/src/preview.js';
 import { Creator2Adapter, type Creator2Port } from '../../../packages/creator2-adapter/src/index.js';
 import { EditorBridge } from '../../../packages/editor-bridge/src/index.js';
@@ -15,7 +17,7 @@ interface ReplyEvent { reply?(error: { message: string } | null, result?: unknow
 
 interface CreatorEditor extends PanelMenuHost {
   ProjectCompiler?: Creator2ProjectCompiler;
-  PreviewServer?: { _previewPort?: number; _validateStashedScene?(callback: () => void): void };
+  PreviewServer?: { _previewPort?: number; _validateStashedScene?(callback: () => void): void; getPreviewScene?: Function; query?(path: string, callback: (error: unknown, data: unknown) => void): void };
   stashedScene?: unknown;
   currentSceneUuid?: string;
   Profile: { load(url: string): { get(key: string): unknown; set(key: string, value: unknown): void; save(): void } };
@@ -29,9 +31,11 @@ interface CreatorEditor extends PanelMenuHost {
   Panel: { open(name: string): void };
 }
 declare const Editor: CreatorEditor;
+declare const __COCOS_SOURCE_FINGERPRINT__: string;
 
 class CreatorHost implements Creator2Port {
-  environment(): JsonObject { return { main: Object.keys(Editor).sort(), previewServer: Object.keys(Editor.PreviewServer ?? {}).sort() }; }
+  extensionState(): JsonValue { return Json.value(lifecycle.extensionState()); }
+  environment(): JsonObject { return { main: Object.keys(Editor).sort(), previewServer: Object.keys(Editor.PreviewServer ?? {}).sort(), assetdbMethods: [...new Set([...Object.keys(Editor.assetdb), ...Object.getOwnPropertyNames(Object.getPrototypeOf(Editor.assetdb))])].sort(), previewSceneSource: Editor.PreviewServer?.getPreviewScene?.toString().slice(0, 16000) ?? null, previewSceneStashingSource: Editor.PreviewServer?._validateStashedScene?.toString().slice(0, 16000) ?? null }; }
   async setting(method: string, params: JsonObject): Promise<JsonValue> {
     const name = Json.string(params.name, 'name');
     if (!['project', 'builder'].includes(name)) throw new CocosError('UNAUTHORIZED', 'Only project and builder profiles are exposed');
@@ -43,29 +47,54 @@ class CreatorHost implements Creator2Port {
   }
   async previewUrl(): Promise<string> {
     if (this.version !== '2.4.15') throw new CocosError('UNSUPPORTED_VERSION', 'Preview server adapter requires Creator 2.4.15');
-    const configured = Editor.Profile.load('project://project.json').get('start-scene');
-    if (configured && configured !== 'current' && configured !== Editor.currentSceneUuid) throw new CocosError('RESOURCE_BUSY', 'Preview start scene differs from current scene; select current scene in Creator project settings');
     const port = Editor.PreviewServer?._previewPort;
     if (!Number.isInteger(port) || Number(port) < 1 || Number(port) > 65535) throw new CocosError('CONTEXT_UNAVAILABLE', 'Creator preview server is unavailable');
     if (!Editor.PreviewServer?._validateStashedScene) throw new CocosError('UNSUPPORTED_CAPABILITY', 'Native preview scene stashing unavailable');
+    return `http://127.0.0.1:${port}/`;
+  }
+  private async previewSceneSnapshot(): Promise<{ sceneId: string; data: string }> {
     // 2.x 会复用上一次预览快照，同一场景 UUID 也可能包含旧节点；启动自有窗口前强制刷新快照。
     Editor.stashedScene = null;
     await new Promise<void>((accept, reject) => {
       const timer = setTimeout(() => reject(new CocosError('TIMEOUT', 'Creator did not refresh preview scene snapshot')), 10000);
       Editor.PreviewServer!._validateStashedScene!(() => { clearTimeout(timer); accept(); });
     });
-    return `http://127.0.0.1:${port}/`;
+    if (!Editor.PreviewServer?.query || !Editor.currentSceneUuid) throw new CocosError('CONTEXT_UNAVAILABLE', 'Native current-scene snapshot unavailable');
+    const sceneId = Editor.currentSceneUuid;
+    const value = await new Promise<unknown>((accept, reject) => Editor.PreviewServer!.query!('stashed-scene.json', (error, data) => error ? reject(error) : accept(data)));
+    if (Editor.currentSceneUuid !== sceneId) throw new CocosError('STALE_HANDLE', 'Editor scene changed while stashing');
+    return { sceneId, data: Buffer.isBuffer(value) ? value.toString('utf8') : typeof value === 'string' ? value : JSON.stringify(value) };
   }
   get version(): string { return Editor.versions?.creator ?? Editor.App?.version ?? '2.unknown'; }
+  private async previewAssetInfo(url: string): Promise<JsonObject> {
+    if (this.version !== '2.4.15') throw new CocosError('UNSUPPORTED_VERSION', 'Importer mapping requires Creator 2.4.15');
+    const asset = Json.object(await this.asset('assetInfo', url)), paths = await ProjectPaths.open(Editor.Project.path);
+    const library: JsonObject = {}, subAssets: JsonObject = {};
+    const descendants = typeof Editor.assetdb.subAssetInfos === 'function' ? Reflect.apply(Editor.assetdb.subAssetInfos, Editor.assetdb, [url]) as unknown[] : [];
+    if (!Array.isArray(descendants) || descendants.length > 100) throw new CocosError('RESOURCE_BUSY', 'Native subasset manifest exceeds limit');
+    for (const value of [asset, ...descendants.map(row => Json.object(row))]) {
+      const uuid = Json.string(value.uuid, 'native asset UUID');
+      // 2.4.15 的 PreviewServer 使用同一原生 UUID 产物路径，避免自行拼接 library 根目录。
+      const stem = Reflect.apply(Editor.assetdb._uuidToImportPathNoExt as Function, Editor.assetdb, [uuid]) as string;
+      const directory = await paths.resolve(dirname(stem)), outputs: JsonObject = {};
+      for (const name of await readdir(directory)) if (name.startsWith(`${uuid}.`) && !name.endsWith('.map')) outputs[name.slice(uuid.length)] = await paths.resolve(join(directory, name));
+      if (uuid === asset.uuid) Object.assign(library, outputs); else subAssets[uuid] = { uuid, library: outputs };
+    }
+    return { ...asset, imported: true, library, subAssets };
+  }
   private managedPreview: ManagedPreview | undefined;
   preview(method: string, params: import('../../../packages/contracts/src/index.js').JsonObject): Promise<JsonValue> {
+    if (method === 'start' && params.target === 'external-browser') {
+      const configured = Editor.Profile.load('project://project.json').get('start-scene');
+      if (configured && configured !== 'current' && configured !== Editor.currentSceneUuid) throw new CocosError('UNSUPPORTED_CAPABILITY', 'External Creator 2 preview cannot intercept the native current-scene snapshot; project settings were preserved');
+    }
     this.managedPreview ??= new ManagedPreview({ activate: () => {
       // macOS 前台焦点切换是异步的；仅在用户请求自有预览输入时激活应用。
       (require('electron') as { app: { focus(options: { steal: boolean }): void } }).app.focus({ steal: true });
     }, create: options => {
       const electron = require('electron') as { BrowserWindow: new (options: unknown) => PreviewWindow };
       return new electron.BrowserWindow(options);
-    } }, Editor.Project.path, 2, { projectPath: Editor.Project.path, importResource: url => this.asset('refresh', url), compile: (batch, cancelled) => new Creator2PreviewCompiler(Editor.Project.path, this.version, () => Editor.ProjectCompiler, url => Reflect.apply(Editor.assetdb.urlToUuid as Function, Editor.assetdb, [url]) as string, uuid => Reflect.apply(Editor.assetdb.uuidToUrl as Function, Editor.assetdb, [uuid]) as string).compile(batch, cancelled) });
+    } }, Editor.Project.path, 2, { projectPath: Editor.Project.path, importResource: url => this.asset('refresh', url), compile: (batch, cancelled) => new Creator2PreviewCompiler(Editor.Project.path, this.version, () => Editor.ProjectCompiler, url => Reflect.apply(Editor.assetdb.urlToUuid as Function, Editor.assetdb, [url]) as string, uuid => Reflect.apply(Editor.assetdb.uuidToUrl as Function, Editor.assetdb, [uuid]) as string, url => this.previewAssetInfo(url)).compile(batch, cancelled) }, undefined, () => this.previewSceneSnapshot());
     if (method === 'connect-runtime') {
       const root = join(Editor.Project.path, '.codex-work/cache/cocos-mcp');
       const projectId = createHash('sha256').update(realpathSync(Editor.Project.path)).digest('hex').slice(0, 24);
@@ -79,7 +108,7 @@ class CreatorHost implements Creator2Port {
         } catch { return []; }
       });
       if (gateways.length !== 1) throw new CocosError('CONTEXT_UNAVAILABLE', 'Start one project runtime gateway, or select gatewayPort explicitly');
-      return this.managedPreview.execute(method, { config: gateways[0]!, source: readFileSync(join(__dirname, 'runtime.js'), 'utf8') });
+      return this.managedPreview.execute(method, { ...params, expectedSourceFingerprint: typeof __COCOS_SOURCE_FINGERPRINT__ === 'string' ? __COCOS_SOURCE_FINGERPRINT__ : null, config: gateways[0]!, source: readFileSync(join(__dirname, 'runtime.js'), 'utf8') });
     }
     return this.managedPreview.execute(method, params);
   }
@@ -119,6 +148,7 @@ class ExtensionLifecycle {
   checkExtension(): void { this.getUpdater().check(true); }
   private updater: ExtensionUpdate | undefined;
   private getUpdater(): ExtensionUpdate { return this.updater ??= new ExtensionUpdate(Editor.Project.path, dirname(__dirname), 2); }
+  extensionState(): ReturnType<ExtensionUpdate['snapshot']> { return this.getUpdater().snapshot(); }
   async updateExtension(): Promise<void> { await this.getUpdater().update(); }
   private service: McpService | undefined;
   private getService(): McpService { return this.service ??= new McpService(Editor.Project.path, dirname(__dirname)); }

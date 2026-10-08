@@ -13,6 +13,7 @@ import { readFileSync, readdirSync, existsSync, realpathSync } from 'fs';
 import { join } from 'path';
 import { Creator3Adapter, type EditorPort } from '../../../packages/creator3-adapter/src/index.js';
 import { EditorBridge } from '../../../packages/editor-bridge/src/index.js';
+import { Creator3PreviewCompiler } from './preview-compiler.js';
 import type { JsonValue } from '../../../packages/contracts/src/index.js';
 import type { PanelState } from '../../../packages/editor-bridge/src/panel-state.js';
 
@@ -26,8 +27,10 @@ interface CreatorEditor extends PanelMenuHost {
   Logger?: CreatorLogger;
 }
 declare const Editor: CreatorEditor;
+declare const __COCOS_SOURCE_FINGERPRINT__: string;
 
 class CreatorHost implements EditorPort {
+  extensionState(): JsonValue { return Json.value(lifecycle.extensionState()); }
   private consoleReader: CreatorConsole | undefined;
   get consoleAvailable(): boolean { return Editor.App.version === '3.8.8' && typeof Editor.Logger?.query === 'function'; }
   consoleQuery(params: import('../../../packages/contracts/src/index.js').JsonObject): Promise<JsonValue> {
@@ -43,7 +46,7 @@ class CreatorHost implements EditorPort {
     }, create: options => {
       const electron = require('electron') as { BrowserWindow: new (options: unknown) => PreviewWindow };
       return new electron.BrowserWindow(options);
-    } }, Editor.Project.path, 3, { projectPath: Editor.Project.path, importResource: url => this.request('asset-db', 'refresh-asset', url) });
+    } }, Editor.Project.path, 3, { projectPath: Editor.Project.path, importResource: url => this.request('asset-db', 'refresh-asset', url), compile: (batch, cancelled) => new Creator3PreviewCompiler(Editor.Project.path, Editor.App.version, () => this.request('programming', 'packer-driver/ready'), url => this.request('asset-db', 'query-asset-info', url)).compile(batch, cancelled) });
     if (method === 'connect-runtime') {
       const root = join(Editor.Project.path, '.codex-work/cache/cocos-mcp');
       const projectId = createHash('sha256').update(realpathSync(Editor.Project.path)).digest('hex').slice(0, 24);
@@ -57,7 +60,7 @@ class CreatorHost implements EditorPort {
         } catch { return []; }
       });
       if (gateways.length !== 1) throw new CocosError('CONTEXT_UNAVAILABLE', 'Start one project runtime gateway, or select gatewayPort explicitly');
-      return this.managedPreview.execute(method, { config: gateways[0]!, source: readFileSync(join(__dirname, 'runtime.js'), 'utf8') });
+      return this.managedPreview.execute(method, { ...params, expectedSourceFingerprint: typeof __COCOS_SOURCE_FINGERPRINT__ === 'string' ? __COCOS_SOURCE_FINGERPRINT__ : null, config: gateways[0]!, source: readFileSync(join(__dirname, 'runtime.js'), 'utf8') });
     }
     return this.managedPreview.execute(method, params);
   }
@@ -104,6 +107,7 @@ class ExtensionLifecycle {
   checkExtension(): void { this.getUpdater().check(true); }
   private updater: ExtensionUpdate | undefined;
   private getUpdater(): ExtensionUpdate { return this.updater ??= new ExtensionUpdate(Editor.Project.path, dirname(__dirname), 3); }
+  extensionState(): ReturnType<ExtensionUpdate['snapshot']> { return this.getUpdater().snapshot(); }
   async updateExtension(): Promise<void> { await this.getUpdater().update(); }
   private service: McpService | undefined;
   private getService(): McpService { return this.service ??= new McpService(Editor.Project.path, dirname(__dirname)); }

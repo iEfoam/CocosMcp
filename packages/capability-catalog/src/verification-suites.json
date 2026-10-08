@@ -1,5 +1,53 @@
 [
   {
+    "source": "tests/roadmap-services.test.ts",
+    "level": "adapter-tested",
+    "entryIds": [
+      "runtime.view.inspect",
+      "runtime.view.configure",
+      "runtime.view.restore",
+      "fixture.plan",
+      "fixture.create",
+      "fixture.status",
+      "fixture.cleanup",
+      "acceptance.plan",
+      "acceptance.run",
+      "acceptance.status",
+      "operation.audit.query"
+    ]
+  },
+  {
+    "source": "tests/preview-compiler3.test.ts",
+    "level": "adapter-tested",
+    "entryIds": [
+      "preview.refresh"
+    ]
+  },
+  {
+    "source": "tests/preview-roadmap.test.ts",
+    "level": "adapter-tested",
+    "entryIds": [
+      "runtime.capture"
+    ]
+  },
+  {
+    "source": "tests/external-preview.test.ts",
+    "level": "adapter-tested",
+    "entryIds": [
+      "preview.refresh",
+      "preview.refresh.status",
+      "preview.refresh.cancel"
+    ]
+  },
+  {
+    "source": "tests/preview-input.test.ts",
+    "level": "adapter-tested",
+    "entryIds": [
+      "preview.capture",
+      "preview.wait"
+    ]
+  },
+  {
     "source": "tests/asset-organization.test.ts",
     "level": "adapter-tested",
     "entryIds": [
@@ -32,6 +80,8 @@
       "node.create",
       "node.delete",
       "prefab.create",
+      "prefab.instantiate",
+      "prefab.open",
       "scene.save_copy"
     ]
   },

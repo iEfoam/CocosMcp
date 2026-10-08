@@ -76,11 +76,17 @@ Creator 2.4.15 的新增适配、独立测试工程、原生覆盖结果和未�
 | 媒体与诊断 | 音视频、粒子基础控制，UI/Label/图集/Graphics 诊断 | 音视频、粒子及性能/渲染诊断；平台体验和 GPU 性能需独立验证 |
 | 工作流与构建 | 本地工作流、CLI 任务；游戏构建存在已记录环境失败 | 本地工作流、CLI 任务与产物检查；签名、真机、SDK 和发布单独验收 |
 
-截至 2026-09-18，2.4.15 显式登记最多 **112 个编辑器入口 + 99 个运行时入口**；3.x 在目录中有 **246 个版本适用条目**。这些是接线/目录计数，不是当前可用数或原生通过数，也不是默认 MCP 工具列表长度。最近代码回归 **249 项通过**；本轮原生扩展在独立 2.4.15 工程验收，尚未同步 Texas。
+截至 2026-10-08，全局目录有 **315 个能力入口、54 个模块**；2.4.15 显式接线最多 **123 个编辑器入口 + 106 个运行时入口**，另有 11 个由应用层组合/处理的入口；3.x 有 **276 个适用条目**。这些不是当前可用数、原生通过数或默认工具列表长度。最近回归 **333 项通过**；本轮仅在两版隔离工程安装和原生验收，未更新正式游戏工程。
 
 **仍未完成**：2.4.15 的其他关节、Prefab 差异/修复、图片字体图集质量、加载轨迹、TMX 持久化、2.x 模板、材质管线、视图 focus/grid、单步/Scheduler 等。2.4.15 游戏构建仍有 `exportSimpleProject` 与 FBX 转换器错误；插件构建通过不代表游戏可成功发布。3.8.8 后处理/蒙皮也有明确限制。
 
 详细功能、证据与缺口见[版本支持矩阵](docs/version-support.md)、[2.4.15 适配记录](docs/creator2-implementation.md)和[完整验收台账](docs/creator2-expansion-tracker.md)。
+
+### 预览优化与自动验收（2026-10-08）
+
+CP-001～013 已实现：完整 runtime 包、场景身份/帧截图、先聚焦再输入、横屏/视图恢复、实际加载摘要、分层就绪、脱敏审计、语义点击、验收配方、夹具清理与生命周期回归。此前源码快照两版各通过 14 项合成原生检查；最新快照自动测试 333 项、Creator 2 原生 14/14 通过，Creator 3 为 12/14，隐藏窗口输入后态未知且配方成功断言未通过，当前源码不能标记两版原生全通过。启动器复用本地凭据及已有登录，不再每轮创建登录环境。
+
+Creator 2 场景加载字节证明仍可为 unknown；外部 Chrome MCP 端到端、真机、GPU 内存和真实匹配/扣费尚未验证。操作示例、复现命令及完整边界见 [预览验收指南](docs/preview-acceptance.md)。
 
 ## 核心能力
 
@@ -149,7 +155,7 @@ Creator 2.4.15 的新增适配、独立测试工程、原生覆盖结果和未�
 | --- | --- |
 | `cocos-mcp-creator2.zip` / `cocos-mcp-creator3.zip` | **手动安装选择 ZIP**，分别用于 Creator 2 / 3 |
 | `SHA256SUMS` / `release-manifest.json` | 文件哈希校验；版本、构建标识和源码指纹核对 |
-| `*.full.json` / `cocos-mcp-creator{2,3}.json` | 插件在线更新器使用的完整包 / 旧版兼容包，不是编辑器直接安装包 |
+| `*.full.json` / `cocos-mcp-creator{2,3}.json` | 在线更新完整包 / 必需运行文件包；Creator 2 旧七文件更新器需先整包升级，不是编辑器直接安装包 |
 | GitHub 自动附加的 `Source code` | 仓库源码，需要按下方“快速开始”自行构建 |
 
 ### 手动安装 ZIP
@@ -301,6 +307,7 @@ pnpm start catalog --project /path/to/project --engine /path/to/cocos-engine
 | [场景生产与预览](docs/scene-production.md) | Creator 3.8.8 几何体、阵列、渲染、预览窗口与截图 |
 | [Shader 开发指南](docs/shader-development.md) | 原生 Effect 编译、材质与验证边界 |
 | [项目资源整理](docs/asset-organization.md) | 目录复用、整理计划与受守卫保护的资源移动 |
+| [预览验收指南](docs/preview-acceptance.md) · [可靠性说明](docs/mcp-reliability-and-performance.md) · [外部连接器](docs/external-preview.md) | CP-001～013、登录复用、真实输入、配方/夹具、刷新证明与复现 |
 | [实施提案](docs/cocos-mcp-proposal.md) · [实施方案](docs/capability-roadmap.md) | 项目范围与分阶段实现规划 |
 | [清单说明](docs/capability-verification.md) · [阶段实现说明](docs/roadmap-implementation.md) | 完成度证据、新增能力与示例 |
 

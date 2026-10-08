@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
-import { mkdtemp, readFile, readdir, mkdir, unlink } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, mkdir, unlink, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { OperationStore } from '../packages/application/src/operation-store.js';
 import { ProjectQueue } from '../packages/application/src/queue.js';
@@ -16,6 +17,29 @@ class Deferred<T> {
 }
 
 const result: ExecutionResult = { operationId: 'op', projectId: 'project', capabilityId: 'runtime.query', result: {}, verification: 'unverified', completedAt: '2026-09-22T00:00:00Z' };
+
+test('editor discovery excludes reused PIDs but preserves genuine ambiguity and authenticated legacy bridges', async () => {
+  const root = await mkdtemp(join(process.env.TMPDIR!, 'registry-identity-')), registry = new ProjectRegistry(), {projectId} = await registry.add(root);
+  const server = createServer(async (request, response) => {
+    assert.equal(request.headers.authorization, `Bearer ${'a'.repeat(64)}`);
+    const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(chunk as Buffer);
+    const command = JSON.parse(Buffer.concat(chunks).toString());
+    const body = command.instanceId === 'legacy' ? command.capabilityId === 'bridge.identity' ? {error: {code: 'UNSUPPORTED_CAPABILITY'}} : {result: {editorVersion: '3.8.8', supportedCapabilities: ['scene.query']}, revision: ''}
+      : {result: {instanceId: command.instanceId, projectPath: root, pid: command.instanceId === 'stale' ? process.pid + 1 : process.pid}, revision: ''};
+    response.setHeader('content-type', 'application/json'); response.end(JSON.stringify(body));
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = server.address(); assert.ok(address && typeof address !== 'string');
+    const directory = join(root, '.codex-work/cache/cocos-mcp/instances'); await mkdir(directory, {recursive: true});
+    const save = async (instanceId: string): Promise<void> => writeFile(join(directory, instanceId + '.json'), JSON.stringify({protocolVersion: 1, projectId, projectPath: root, instanceId,
+      creatorMajor: 3, editorVersion: '3.8.8', pid: process.pid, endpoint: `http://127.0.0.1:${address.port}/rpc`, token: 'a'.repeat(64)}));
+    await save('stale'); await save('active'); assert.equal((await registry.instance(projectId)).instanceId, 'active');
+    await save('second'); await assert.rejects(registry.instance(projectId), {code: 'AMBIGUOUS_TARGET'});
+    assert.equal((await registry.instance(projectId, 'second')).instanceId, 'second');
+    await save('legacy'); assert.equal((await registry.instance(projectId, 'legacy')).instanceId, 'legacy');
+  } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
+});
 
 test('operation retention bounds failed records, protects unknowns, and expires confirmed results', async () => {
   let clock = 0, calls = 0;
@@ -136,4 +160,60 @@ test('truncated editor JSON is an unknown outcome, never a retryable ordinary fa
   t.mock.method(globalThis, 'fetch', async () => new Response('{'));
   await assert.rejects(new BridgeClient().call({ protocolVersion: 1, projectId: 'p', projectPath: '.', instanceId: 'i', editorVersion: '3', creatorMajor: 3, endpoint: 'http://127.0.0.1', token: '', pid: 1, startedAt: '' },
     { protocolVersion: 1, projectId: 'p', instanceId: 'i', operationId: 'o', capabilityId: 'scene.query', params: {} }), { code: 'OUTCOME_UNKNOWN' });
+});
+
+test('runtime success, failure and authorization rejection are audited without request contents or error secrets', async () => {
+  const root = await mkdtemp(join(process.cwd(), '.codex-work/tmp/audit-runtime-')), registry = new ProjectRegistry(), { projectId } = await registry.add(root);
+  let calls = 0;
+  const app = new CocosApplication(registry, undefined, undefined, false, { execute: async () => {
+    calls++; if (calls === 2) throw new CocosError('RUNTIME_ERROR', 'password=never-log-this');
+    return { dataUrl: 'data:image/png;base64,never-log-image' };
+  } });
+  const request = { projectId, capabilityId: 'runtime.set', params: { path: 'name', value: { token: 'never-log-token', message: 'never-log-payload' } } };
+  await app.execute(request); await assert.rejects(app.execute(request), { code: 'RUNTIME_ERROR' });
+  await assert.rejects(app.execute({ projectId, capabilityId: 'runtime.invoke', params: {} }), { code: 'UNAUTHORIZED' });
+  await assert.rejects(app.execute({ projectId, capabilityId: 'runtime.query', params: { secret: 'never-log-validation' } }), { code: 'INVALID_ARGUMENT' });
+  const content = await readFile(join(root, '.codex-work/logs/cocos-mcp/operations.jsonl'), 'utf8');
+  assert.doesNotMatch(content, /never-log|base64/);
+  const rows = content.trim().split('\n').map(line => JSON.parse(line));
+  assert.ok(rows.some(row => row.context === 'runtime' && row.outcome === 'completed'));
+  assert.ok(rows.some(row => row.errorCode === 'RUNTIME_ERROR' && row.durationMs >= 0));
+  assert.ok(rows.some(row => row.errorCode === 'UNAUTHORIZED' && row.sideEffectState === 'not-sent'));
+  assert.ok(rows.some(row => row.stage === 'validation'));
+  assert.ok(rows.every(row => /Z$/.test(row.startedAt)));
+});
+
+test('durable operation reservation prevents mutation replay after restart and rejects changed parameters', async () => {
+  const root = await mkdtemp(join(process.cwd(), '.codex-work/tmp/audit-restart-')), registry = new ProjectRegistry(), { projectId } = await registry.add(root);
+  let calls = 0; const runtime = { execute: async () => { calls++; return { paused: false }; } };
+  const first = new CocosApplication(registry, undefined, undefined, false, runtime), request = { projectId, capabilityId: 'runtime.resume', params: {}, operationId: 'resume-once' };
+  const result = await first.execute(request); assert.equal(await first.execute(request), result); assert.equal(calls, 1);
+  const restarted = new CocosApplication(registry, undefined, undefined, false, runtime);
+  assert.equal(Json.object(await restarted.operation(projectId, request.operationId)).status, 'completed');
+  await assert.rejects(restarted.execute(request), { code: 'OUTCOME_UNKNOWN' }); assert.equal(calls, 1);
+  const other = new CocosApplication(registry, undefined, undefined, false, runtime);
+  await assert.rejects(other.execute({ ...request, capabilityId: 'runtime.pause' }), { code: 'OPERATION_CONFLICT' }); assert.equal(calls, 1);
+});
+
+test('idempotency conflict is audited before dispatch without exposing changed parameters', async () => {
+  const root = await mkdtemp(join(process.cwd(), '.codex-work/tmp/audit-idempotency-')), registry = new ProjectRegistry(), { projectId } = await registry.add(root);
+  let calls = 0; const app = new CocosApplication(registry, undefined, undefined, false, { execute: async () => { calls++; return {}; } });
+  const request = { projectId, capabilityId: 'runtime.set', params: { path: 'name', value: 'initial' }, operationId: 'same-id' };
+  await app.execute(request);
+  await assert.rejects(app.execute({ ...request, params: { path: 'name', value: 'never-log-conflicting-value' } }), { code: 'OPERATION_CONFLICT' });
+  assert.equal(calls, 1);
+  const content = await readFile(join(root, '.codex-work/logs/cocos-mcp/operations.jsonl'), 'utf8');
+  assert.doesNotMatch(content, /never-log/);
+  const rows = content.trim().split('\n').map(line => JSON.parse(line));
+  assert.equal(rows.length, 3); assert.equal(rows[2].stage, 'idempotency'); assert.equal(rows[2].outcome, 'rejected');
+  assert.equal(rows[2].sideEffectState, 'not-sent'); assert.notEqual(rows[0].requestHash, rows[2].requestHash);
+});
+
+test('runtime audit failure preserves successful mutation response and in-memory deduplication', async () => {
+  const root = await mkdtemp(join(process.cwd(), '.codex-work/tmp/runtime-audit-failure-')), registry = new ProjectRegistry(), { projectId } = await registry.add(root);
+  await mkdir(join(root, '.codex-work/logs/cocos-mcp/operations.jsonl'), { recursive: true });
+  let calls = 0; const app = new CocosApplication(registry, undefined, undefined, false, { execute: async () => { calls++; return { paused: false }; } });
+  const request = { projectId, capabilityId: 'runtime.resume', params: {}, operationId: 'resume' };
+  const result = await app.execute(request); assert.equal(result.warnings?.[0]?.code, 'AUDIT_WRITE_FAILED');
+  assert.equal(await app.execute(request), result); assert.equal(calls, 1);
 });

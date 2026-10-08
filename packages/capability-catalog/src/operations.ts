@@ -13,6 +13,7 @@ import { RuntimeAnimationCapabilities } from './animation-runtime.js';
 import { AnimationCapabilities } from './animation.js';
 import { RuntimeAssetCapabilities } from './runtime-assets.js';
 import { Creator2Support } from './creator2-support.js';
+import { RoadmapCapabilities } from './roadmap.js';
 
 export class Operations {
   private readonly rows: Capability[] = [];
@@ -34,7 +35,9 @@ export class Operations {
     if (this.rows.length) return this.rows;
     this.rows.push(...new EngineFeatureCapabilities().list());
     this.rows.push(...new TwoDCapabilities().list());
+    this.rows.push(...new RoadmapCapabilities().list());
     const str = S.string(); const bool = S.boolean(); const obj = S.record(); const strings = S.array(str);
+    const expectation = { expectedSceneId: str, expectedGeneration: S.integer() };
     const node = { nodeId: str }; const component = { componentId: str }; const asset = { url: str };
     this.add('editor.status', 'F01', '读取编辑器实例、版本和场景状态', 'read');
     for (const action of ['inspect', 'play']) this.add(`runtime.dragonbones.${action}`, 'F26', 'Creator 2 DragonBones 原生动画控制', action === 'inspect' ? 'read' : 'runtime', { componentId: str, name: str, playTimes: { type: 'integer', minimum: 0, maximum: 1000 } }, action === 'inspect' ? ['componentId'] : ['componentId', 'name'], [2]);
@@ -83,6 +86,7 @@ export class Operations {
     this.add('asset.set_meta', 'F14', '合并指定资源的导入设置并重新导入', 'asset', { ...asset, userData: obj }, ['url', 'userData']);
     this.add('asset.resolve', 'F13', '转换资源 URL、UUID 和文件路径', 'read', { reference: str }, ['reference']);
     this.add('prefab.instantiate', 'F09', '实例化预制体到场景', 'scene', { uuid: str, parentId: str, name: str }, ['uuid']);
+    this.add('prefab.open', 'F09', '在原生预制体编辑模式打开资源；当前场景必须已保存', 'scene', { uuid: str }, ['uuid'], [3]);
     this.add('prefab.create', 'F09', '将节点保存成预制体资源', 'asset', { ...node, url: str }, ['nodeId', 'url']);
     this.add('prefab.apply', 'F09', '将预制体实例修改应用到资源', 'asset', node, ['nodeId']);
     this.add('prefab.revert', 'F09', '还原预制体实例修改', 'scene', node, ['nodeId']);
@@ -111,10 +115,33 @@ export class Operations {
     this.add('preview.refresh.cancel', 'F43', '取消后续刷新阶段；正在执行的原生导入仍可能完成，不自动回滚', 'runtime', { operationId: str }, ['operationId']);
     for (const kind of ['network', 'websocket', 'diagnose']) this.add(`preview.${kind}`, 'F44', kind === 'diagnose' ? '按时间线汇总可观察证据，不推断业务协议兼容性' : `分页读取 ${kind} 元数据；请求正文、头和帧内容默认不采集`, 'read', { target: S.enum('embedded', 'external-browser'), sessionId: str, cursor: S.integer(), limit: { type: 'integer', minimum: 1, maximum: 500 }, from: str, to: str });
     for (const capability of this.rows.filter(row => row.id.startsWith('preview.'))) {
+      const properties = capability.inputSchema.properties as Record<string, JsonSchema>;
+      if (['preview.capture', 'preview.resize', 'preview.input', 'preview.validate_viewports'].includes(capability.id)) properties.imageDelivery = S.enum('image', 'legacy-json');
+      if (['preview.capture', 'preview.input'].includes(capability.id)) Object.assign(properties, expectation);
+      if (capability.id === 'preview.capture') properties.frameMode = S.enum('nextFrame', 'lastFrame');
+      if (['preview.resize', 'preview.start'].includes(capability.id)) properties.orientation = S.enum('landscape', 'portrait', 'square');
+      if (['preview.resize', 'preview.start'].includes(capability.id)) properties.preset = S.enum(...RoadmapCapabilities.presets.map(row => row.id));
+      if (capability.id === 'preview.resize') {
+        delete capability.inputSchema.required;
+        capability.inputSchema.anyOf = [{ properties: { preset: properties.preset! }, required: ['preset'] },
+          { properties: { width: properties.width!, height: properties.height! }, required: ['width', 'height'] }];
+      }
+      if (capability.id === 'preview.start') properties.fixtureId = str;
+      if (capability.id === 'preview.diagnose') properties.connectionRoles = { type: 'array', maxItems: 16, items: S.object({ layer: S.enum('previewHttp', 'runtimeGateway', 'businessHttp', 'businessWebsocket'), origin: str }, ['layer', 'origin']) };
+      if (capability.id === 'preview.refresh') properties.target = S.enum('embedded', 'external-browser');
+      if (capability.id === 'preview.input') {
+        properties.coordinateSpace = S.enum('window-css', 'canvas-css', 'design-top-left', 'image-pixels');
+        properties.captureId = str;
+        properties.allowResume = bool;
+        properties.expectedRuntimeInstanceId = str;
+        for (const key of ['x', 'y', 'endX', 'endY']) properties[key] = { type: 'number', minimum: 0, maximum: 32768 };
+      }
       if (capability.id.startsWith('preview.refresh')) capability.outputSchema = { type: 'object', required: ['operationId', 'status', 'import', 'compile', 'preview'], properties: { operationId: str, status: S.enum('pending', 'completed', 'failed', 'unknown', 'cancelled', 'timeout'), phase: S.enum('import', 'compile', 'preview'), import: obj, compile: obj, preview: obj }, additionalProperties: true };
       else if (['preview.logs', 'preview.network', 'preview.websocket', 'preview.diagnose'].includes(capability.id)) capability.outputSchema = { type: 'object', required: ['rows', 'nextCursor', 'hasMore'], properties: { rows: S.array(obj), nextCursor: S.integer(), hasMore: bool, connection: S.enum('connected', 'disconnected') }, additionalProperties: true };
       else if (['preview.start', 'preview.status'].includes(capability.id)) capability.outputSchema = { type: 'object', required: ['target', 'url', 'running', 'pageReady', 'gameReady', 'status'], properties: { target: S.enum('embedded', 'external-browser'), url: { type: ['string', 'null'] }, running: bool, pageReady: bool, gameReady: bool, status: S.enum('service-ready', 'page-opened', 'game-ready', 'stopped', 'unknown') }, additionalProperties: true };
     }
+    this.add('preview.runtime.connect', 'F43', '连接本工程自有预览的开发运行时；shader.preview.connect 的兼容别名', 'runtime', { gatewayPort: { type: 'integer', minimum: 1, maximum: 65535 }, ...expectation });
+    this.add('preview.wait', 'F43', '有界等待当前场景、绘制帧或声明式 UI 条件，不自动恢复暂停', 'read', { sceneId: str, afterFrameIndex: S.integer(), uiChecks: RoadmapCapabilities.checks, timeoutMs: { type: 'integer', minimum: 100, maximum: 30000 }, ...expectation });
     this.add('logs.query', 'F44', '分页查询桥接事件，按级别过滤；Creator 控制台请用 console.query', 'read', { cursor: S.integer(), level: S.enum('debug', 'info', 'warn', 'error'), limit: S.integer(1) });
     this.add('console.query', 'F44', '读取 Creator 控制台（含 Scene 报错和堆栈），支持级别、进程、关键词和游标分页', 'read', {
       cursor: S.integer(), limit: { type: 'integer', minimum: 1, maximum: 500 }, level: S.enum('debug', 'info', 'warn', 'error'), process: str, contains: str,
@@ -149,6 +176,7 @@ export class Operations {
       const props: Record<string, JsonSchema> = {
         target: str, path: str, method: str, args: S.array(), value: {}, type: str, event: str,
         subscriptionId: str, cursor: S.integer(), offset: S.integer(), limit: S.integer(1), destroy: bool,
+        ...expectation, ...(id === 'capture' ? { frameMode: S.enum('nextFrame', 'lastFrame'), imageDelivery: S.enum('image', 'legacy-json') } : {}),
       };
       this.add(`runtime.${id}`, id === 'capture' ? 'F46' : id === 'statistics' ? 'F45' : id === 'subscribe' || id === 'events' ? 'F36' : 'F39', title, effect, props, [], [2, 3], {
         platforms: ['development-runtime'], prerequisites: ['开发构建运行时桥接'],

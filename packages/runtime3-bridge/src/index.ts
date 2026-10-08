@@ -27,6 +27,8 @@ import { MediaController } from './media.js';
 import { AnimationController } from './animation-control.js';
 import { RuntimeAssets } from './assets.js';
 import { RuntimeTaskSessions } from './task-session.js';
+import { RuntimeViewSession } from './view-session.js';
+import { RuntimeUiSelector } from './ui-selector.js';
 
 interface Handle { value: unknown; owned: boolean; generation: number }
 interface Subscription { owner: RuntimeObject; event: string; callback: (...args: unknown[]) => void }
@@ -48,16 +50,27 @@ export class RuntimeController {
   private readonly frames: FrameSession;
   private readonly debug: DebugOverlayController;
   private readonly tasks: RuntimeTaskSessions;
+  private readonly view: RuntimeViewSession;
+  private lastCapture: JsonObject | undefined;
+  private sceneListenerActive = true;
+  private readonly sceneChanged = (): void => { if (this.sceneListenerActive) this.synchronize(); };
+  private sceneEvent: string | undefined;
 
   constructor(private readonly environment: SceneEnvironment, private readonly eventCapacity = 1000, private readonly policy = new RuntimePolicy()) {
     this.inspector = new SceneInspector(environment);
     this.tasks = new RuntimeTaskSessions(environment.cc);
+    this.view = new RuntimeViewSession(environment.cc);
     this.creator2Materials = new Creator2Material(this.inspector);
     this.materials = new MaterialController(environment);
     this.shaderPreview = new ShaderPreview(environment, this.materials);
     this.assets = new RuntimeAssets(environment.cc);
     this.frames = new FrameSession(environment.cc);
     this.debug = new DebugOverlayController(this.inspector);
+    const director = A.object(environment.cc.director);
+    const event = environment.cc.Director && A.object(environment.cc.Director).EVENT_AFTER_SCENE_LAUNCH;
+    if (typeof event === 'string' && typeof director.on === 'function' && typeof director.off === 'function') {
+      this.sceneEvent = event; A.call(director, 'on', event, this.sceneChanged);
+    }
   }
 
   private synchronize(): void {
@@ -151,6 +164,45 @@ export class RuntimeController {
     if (this.environment.major === 2 && Creator2Features.ids.includes(id)) { this.synchronize(); return new Creator2Features(this.inspector).execute(id, p); }
     if (FeatureSupport.owns(id) && A.engineVersion(this.environment.cc) !== '3.8.8') return FeatureSupport.unsupported(id, '当前适配仅支持 Creator 3.8.8', { actualVersion: A.engineVersion(this.environment.cc) });
     this.synchronize();
+    if (p.expectedGeneration !== undefined && p.expectedGeneration !== this.generation) throw new CocosError('STALE_HANDLE', 'Runtime scene generation changed', { generation: this.generation });
+    if (p.expectedSceneId !== undefined && p.expectedSceneId !== this.inspector.sceneInfo().sceneId) throw new CocosError('VERIFICATION_FAILED', 'Runtime scene differs from expected scene');
+    if (id === 'runtime.ui.select' || id === 'runtime.ui.check') {
+      const selector = new RuntimeUiSelector(this.inspector);
+      return { ...(id.endsWith('select') ? selector.select(p) : selector.check(p)), sceneId: this.inspector.sceneInfo().sceneId!, sceneGeneration: this.generation };
+    }
+    if (id === 'runtime.view.inspect') return this.view.inspect();
+    if (id === 'runtime.view.configure') return this.view.configure(p);
+    if (id === 'runtime.view.restore') return this.view.restore(p);
+    if (id === 'runtime.lifecycle.snapshot') {
+      const nodes = this.inspector.all(), cache = this.environment.cc.assetManager && A.object(this.environment.cc.assetManager).assets;
+      let assetCount: number | null = null;
+      if (cache && typeof A.object(cache).forEach === 'function') { assetCount = 0; A.call(cache, 'forEach', () => { assetCount!++; }); }
+      const director = A.object(this.environment.cc.director);
+      return { sceneId: this.inspector.sceneInfo().sceneId!, sceneGeneration: this.generation, handles: this.handles.size, subscriptions: this.subscriptions.size,
+        sceneListeners: this.sceneEvent ? 1 : 0, eventRows: this.events.length, cleanupErrors: this.cleanupErrors, nodeCount: nodes.length,
+        componentCount: nodes.reduce((sum, node) => sum + this.inspector.components(node).length, 0), assetCount,
+        frameIndex: typeof director.getTotalFrames === 'function' ? Number(A.call(director, 'getTotalFrames')) : null,
+        ...this.frames.snapshot(), ...this.tasks.snapshot(), ...this.assets.snapshot(), ...this.view.snapshot() };
+    }
+    if (id === 'runtime.scene.load') {
+      const director = A.object(this.environment.cc.director), uuid = Json.string(p.sceneUuid, 'sceneUuid');
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        const timer = setTimeout(() => { settled = true; reject(new CocosError('OUTCOME_UNKNOWN', 'Native scene load deadline exceeded; it may still finish')); }, 15000);
+        try {
+          // 两个版本的 director.loadScene 接收场景名称；UUID 必须通过公开 AssetManager 加载，不能按名称猜测或读取私有场景表。
+          const manager = A.object(this.environment.cc.assetManager);
+          A.call(manager, 'loadAny', { uuid, type: this.environment.cc.SceneAsset }, (error: unknown, scene: unknown) => {
+            if (settled) return;
+            if (error) { settled = true; clearTimeout(timer); reject(CocosError.from(error)); return; }
+            try { A.call(director, 'runSceneImmediate', scene, undefined, (failure: unknown) => {
+              if (settled) return; settled = true; clearTimeout(timer); if (failure) reject(CocosError.from(failure)); else resolve();
+            }); } catch (failure) { settled = true; clearTimeout(timer); reject(failure); }
+          });
+        } catch (error) { if (!settled) { settled = true; clearTimeout(timer); reject(error); } }
+      });
+      this.synchronize(); return { loaded: true, scene: this.inspector.sceneInfo(), sceneGeneration: this.generation };
+    }
     if (/^runtime\.(ui|render2d|label|atlas|spine|tilemap)\./.test(id) || id === 'runtime.physics2d.trace_contacts') return FeatureSupport.run(id, A.engineVersion(this.environment.cc), async () => {
       const control = new TwoDControl(this.inspector, this.frames);
       if (id.startsWith('runtime.spine.')) return control.spine(id, p);
@@ -198,8 +250,8 @@ export class RuntimeController {
     if (id.startsWith('runtime.shader.')) return this.shaderPreview.execute(id, p);
     const str = (key: string): string => Json.string(p[key], key);
     switch (id) {
-      case 'runtime.query': return { scene: this.inspector.sceneInfo(), engineVersion: A.engineVersion(this.environment.cc), generation: this.generation, cleanupErrors: this.cleanupErrors, componentIdentity: this.environment.major === 2 ? 'runtime-local-read-hierarchy-after-connect' : 'scene-component-id' };
-      case 'runtime.hierarchy': return this.inspector.hierarchy(p);
+      case 'runtime.query': return { context: 'runtime', scene: this.inspector.sceneInfo(), engineVersion: A.engineVersion(this.environment.cc), generation: this.generation, sceneGeneration: this.generation, cleanupErrors: this.cleanupErrors, componentIdentity: this.environment.major === 2 ? 'runtime-local-read-hierarchy-after-connect' : 'scene-component-id' };
+      case 'runtime.hierarchy': return { ...Json.object(this.inspector.hierarchy(p)), context: 'runtime', sceneGeneration: this.generation };
       case 'runtime.types': return { rows: A.propertyNames(this.environment.cc).map(name => {
         const descriptor = A.descriptor(this.environment.cc, name);
         return { name, kind: descriptor?.get ? 'accessor' : typeof descriptor?.value };
@@ -276,7 +328,24 @@ export class RuntimeController {
       case 'runtime.capture': {
         const game = A.object(this.environment.cc.game); const canvas = game.canvas;
         if (!canvas) throw new CocosError('UNSUPPORTED_CAPABILITY', 'Canvas capture is unavailable on this platform');
-        return { dataUrl: String(A.call(canvas, 'toDataURL', 'image/png')), source: 'game-canvas' };
+        if (p.frameMode === 'lastFrame') {
+          if (!this.lastCapture) throw new CocosError('CONTEXT_UNAVAILABLE', 'No captured frame exists in this scene generation');
+          return { ...this.lastCapture, stale: true, imageDelivery: p.imageDelivery ?? 'image' };
+        }
+        const generation = this.generation; let capture: JsonObject | undefined;
+        // WebGL 缓冲可能在帧回调后被清空；必须在 AFTER_DRAW 回调内同步读取，不能 await 后再读。
+        await this.frames.wait(this.frames.token(), () => {
+          if (generation !== this.generation) throw new CocosError('STALE_HANDLE', 'Runtime changed while capturing');
+          const director = A.object(this.environment.cc.director), dimensions = A.object(canvas);
+          capture = { dataUrl: String(A.call(canvas, 'toDataURL', 'image/png')), source: 'game-canvas-after-draw',
+            imageDelivery: p.imageDelivery ?? 'image',
+            sceneId: this.inspector.sceneInfo().sceneId!, sceneGeneration: generation, capturedAt: new Date().toISOString(), stale: false,
+            width: Number(dimensions.width) || null, height: Number(dimensions.height) || null,
+            frameIndex: typeof director.getTotalFrames === 'function' ? Number(A.call(director, 'getTotalFrames')) : null,
+            layoutVerified: false, pixelDiagnostic: { status: 'unknown', reason: 'Canvas pixels not sampled; compositor capture is preferred for WebGL' } };
+        });
+        this.lastCapture = capture;
+        return capture!;
       }
       case 'runtime.statistics': {
         const rows = this.inspector.all();
@@ -300,6 +369,7 @@ export class RuntimeController {
   }
 
   private clearSession(): void {
+    this.view.dispose();
     // 每项独立收敛；一项原生释放异常不能阻止取消订阅和使旧句柄失效。
     this.generation++;
     this.tasks.dispose();
@@ -310,9 +380,17 @@ export class RuntimeController {
     }
     if (failures.length) this.cleanupErrors = [...this.cleanupErrors, ...failures].slice(-20);
     this.handles.clear(); this.events.length = 0;
+    this.lastCapture = undefined;
   }
   connectionLost(): void { this.clearSession(); }
-  dispose(): void { this.clearSession(); }
+  dispose(): void {
+    this.sceneListenerActive = false;
+    if (this.sceneEvent) {
+      try { A.call(this.environment.cc.director, 'off', this.sceneEvent, this.sceneChanged); this.sceneEvent = undefined; }
+      catch { this.cleanupErrors = [...this.cleanupErrors, { scope: 'scene-listener', message: 'Scene listener cleanup failed; callback is inactive and dispose may retry' }].slice(-20); }
+    }
+    this.clearSession();
+  }
 
 }
 

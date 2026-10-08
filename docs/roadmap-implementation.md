@@ -4,6 +4,8 @@
 
 ## 已实现入口
 
+2026-10-08 的 CP-001～013 是独立的预览优化清单，已补齐可靠截图/输入/刷新、视图、语义交互、配方/夹具、审计与回归；详见 [预览验收指南](preview-acceptance.md)。它不将本文 P0～P5 长期范围改为全部完成，也不取消后续设备和领域缺口。
+
 | 范围 | 可调用能力 | 当前边界 |
 |---|---|---|
 | UI | `ui.plan`、`ui.build`、`ui.diff`、`ui.apply`、`ui.inspect_layout`、`ui.validate_interaction` | 创建新树、最多 200 节点/16 层；已有树按显式映射更新字段；布局/交互为静态检查 |
@@ -12,7 +14,8 @@
 | 动画剪辑 | `animation.clip.create`、`animation.clip.inspect`、`animation.clip.sample` | position/scale/eulerAngles、线性/常量曲线；采样不改变节点、不派发事件 |
 | 动画编辑 | `animation.clip.read/patch/restore` | 已有 VectorTrack 关键帧；哈希和 UUID 守卫、备份；拒绝外部资源引用 |
 | 动画运行 | `runtime.animation.state/play/pause/resume/stop/seek/blend` | 真实 Animation 组件；返回前后状态，帧和事件另行验收 |
-| 预览验收 | `preview.resize/input` | MCP 自有窗口尺寸、点击、滚轮和截图；不自动判定业务成功 |
+| 预览验收 | `preview.presets/resize/input/wait/runtime.connect`、`runtime.ui.select/check/click` | 自有窗口真实输入、帧/场景/后态与横屏检查；未知输入不重放 |
+| 自动验收 | `acceptance.plan/run/status/cancel`、`fixture.plan/create/status/cleanup`、`preview.regression` | 有界配方、原生所有权清理、证据包、生命周期与 P50/P95；合成与真实业务分开 |
 | 物理查询 | `runtime.physics2d.inspect/raycast`、`runtime.physics3d.inspect/raycast` | 世界状态和射线查询；不修改模拟 |
 | 媒体 | `runtime.audio.state/play/pause/stop/seek`、`runtime.video.state/play/pause/stop/seek`、`runtime.webview.inspect` | 原生组件控制；WebView 只读；不宣称平台播放验收 |
 | 运行时资源 | `runtime.asset.load/preload/inspect/release`、`runtime.bundle.inspect` | 本地完整 UUID；工具引用生命周期；Bundle 只读查询 |

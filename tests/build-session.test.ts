@@ -17,6 +17,9 @@ class BuildSessionHarness {
     await mkdir(resources, { recursive: true });
     await mkdir(join(this.creator, 'Contents/MacOS'), { recursive: true });
     await writeFile(join(resources, 'package.json'), JSON.stringify({ version: '3.8.8' }));
+    const account = join(this.project, '.codex-work/cache/creator-home/profiles/v2/editor');
+    await mkdir(account, { recursive: true });
+    await writeFile(join(account, 'user.json'), JSON.stringify({ session_id: 'fake-session', session_key: 'fake-key', cocos_uid: 1 }));
     // 用假的持久会话验证跨服务重启的目录复用，不读取任何真实账号凭证。
     await writeFile(executable, `#!${process.execPath}
 import fs from 'node:fs'; import path from 'node:path';

@@ -3,11 +3,13 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { CocosError } from '../../contracts/src/index.js';
 import { ProjectPaths } from '../../application/src/paths.js';
+import { ExtensionHealth } from './extension-health.js';
 
 export class ExtensionInstaller {
   async install(project: string, major: 2 | 3, buildRoot: string): Promise<{ installedPath: string; backupPath: string | null }> {
     const paths = await ProjectPaths.open(project);
     const source = join(buildRoot, `extensions/creator${major}`);
+    new ExtensionHealth().require(source, major);
     const manifest = JSON.parse(await readFile(join(source, 'package.json'), 'utf8')) as { name: string };
     const parent = await paths.resolve(major === 2 ? 'packages' : 'extensions');
     const target = await paths.resolve(join(parent, manifest.name));
@@ -15,6 +17,7 @@ export class ExtensionInstaller {
     // 只创建临时目录父级，staging 目标必须保持不存在才能让 cp 的 errorOnExist 真正防止覆盖。
     const staging = join(await paths.work('tmp'), `extension-${randomUUID()}`);
     await cp(source, staging, { recursive: true, force: false, errorOnExist: true });
+    new ExtensionHealth().require(staging, major);
     await writeFile(join(staging, 'service-config.json'), JSON.stringify({ nodeExecutable: process.execPath, buildRoot }), { mode: 0o600 });
     let backupPath: string | null = null;
     if (await stat(target).then(() => true, () => false)) {

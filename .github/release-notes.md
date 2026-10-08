@@ -1,3 +1,13 @@
+## 预览优化 / Preview improvements
+
+CP-001～013 已实现：Creator 2/3 完整 runtime 包及 SHA 健康检查、当前场景/帧证据、真实输入、横屏预设、加载字节刷新、就绪与诊断、脱敏审计、语义点击、验收配方、夹具清理和生命周期回归。启动器沿用本地凭据和已有会话。
+
+Implemented CP-001–013: complete runtime packages and integrity checks, current scene/frame evidence, real input, landscape presets, loaded-byte refresh, readiness/diagnostics, sanitized auditing, semantic clicks, recipes, guarded fixtures and lifecycle regression. Launchers reuse local credentials and existing sessions.
+
+最新源码本地验证为 333 项自动测试、Creator 2 原生 14/14、Creator 3 原生 12/14；3.8.8 隐藏窗口输入后态未知且配方成功断言未通过。此前两版 14/14 记录按原指纹保留，不作为当前源码全通过证明。CI 按本 Release 的提交重新验证。Creator 2 场景字节证明仍可 unknown，外部 Chrome MCP、真实设备和真实匹配/资金未验证。详见 [预览验收指南](https://github.com/iEfoam/CocosMcp/blob/main/docs/preview-acceptance.md)。Creator 2 旧七文件更新器需用完整 ZIP/安装器升级，不继续分发缺 runtime 的旧清单。
+
+Latest local checks: 333 automated tests, Creator 2 native 14/14, and Creator 3 native 12/14. Creator 3 hidden-window input has an unknown outcome, and its recipe did not meet the success assertion. Earlier 14/14 results retain their original source fingerprint. CI rechecks this release's source. Creator 2 scene byte proof may remain unknown; external Chrome MCP, physical devices and real business/payment flows remain unverified. Legacy seven-file Creator 2 updaters require the full ZIP/installer upgrade.
+
 ## 安装 / Installation
 
 **推荐：[让 AI 自动下载安装](https://github.com/iEfoam/CocosMcp/blob/main/README.zh-CN.md#让-ai-自动下载安装推荐)** — 直接复制提示词，AI 自动识别工程、从 GitHub 下载、安装、配置并验证连接，无需先手动准备 ZIP 或路径。

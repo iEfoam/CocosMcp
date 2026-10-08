@@ -9,7 +9,7 @@ import { ManagedPreview, type PreviewWindow, type PreviewWindowFactory } from '.
 import { CapabilityCatalog } from '../packages/capability-catalog/src/index.js';
 import { CaptureResult } from '../apps/server/src/capture-result.js';
 import type { EditorPort } from '../packages/creator3-adapter/src/port.js';
-import type { JsonObject, JsonValue } from '../packages/contracts/src/index.js';
+import { Json, type JsonObject, type JsonValue } from '../packages/contracts/src/index.js';
 
 class AssetHarness {
   requests: unknown[] = [];
@@ -121,7 +121,8 @@ test('managed preview isolates its window, blocks nonlocal navigation, and only 
   await preview.execute('start', { url: 'http://localhost:7456', sceneId: 'scene-a' }); assert.equal(h.windows.length, 1);
   await assert.rejects(preview.execute('start', { url: 'http://localhost:7456', sceneId: 'scene-b' }), /existing MCP preview/);
   h.frame = { ready: false }; await assert.rejects(preview.execute('capture', {}), /rendered/); assert.equal(h.captures, 0);
-  h.frame = { ready: true, sceneId: 'scene-b' }; await assert.rejects(preview.execute('capture', {}), /different scene/);
+  h.frame = { ready: true, sceneId: 'scene-b' }; assert.equal(Json.object(await preview.execute('capture', {})).sceneId, 'scene-b');
+  await assert.rejects(preview.execute('capture', { expectedSceneId: 'scene-a' }), /expected scene/);
   h.frame = { ready: true, sceneId: 'scene-a' }; assert.equal((await preview.execute('capture', {}) as JsonObject).source, 'managed-preview-window');
   h.empty = true; await assert.rejects(preview.execute('capture', {}), /empty image/);
   await preview.execute('stop', {}); assert.equal(h.windows[0]!.isDestroyed(), true);
@@ -170,13 +171,17 @@ test('scene production capability schemas bound mesh, array, reflection and prev
   assert.equal(catalog.describe('rendering.configure').module, 'F31');
 });
 
-test('MCP screenshot results expose image content while preserving structured compatibility', () => {
+test('MCP screenshot results expose image content without duplicating Base64 in structured JSON', () => {
   const value = { capabilityId: 'preview.capture', result: { dataUrl: 'data:image/png;base64,dGVzdA==', width: 1280 } };
   const result = new CaptureResult().format(value);
   assert.equal(result.content[1]!.type, 'image');
   assert.equal((result.content[0] as { text: string }).text.includes('base64'), false);
-  assert.deepEqual(result.structuredContent, value); assert.equal(value.result.dataUrl, 'data:image/png;base64,dGVzdA==');
+  assert.deepEqual(result.structuredContent, { capabilityId: 'preview.capture', result: { width: 1280 } }); assert.equal(value.result.dataUrl, 'data:image/png;base64,dGVzdA==');
   assert.equal(new CaptureResult().format({ capabilityId: 'shader.read', result: value.result }).content.length, 1);
+  const legacy = { ...value, result: { ...value.result, imageDelivery: 'legacy-json' } };
+  assert.deepEqual(new CaptureResult().format(legacy).structuredContent, legacy);
+  const batch = new CaptureResult().format({ capabilityId: 'preview.validate_viewports', result: { rows: [value.result, value.result] } });
+  assert.equal(batch.content.length, 3); assert.equal(JSON.stringify(batch.structuredContent).includes('base64'), false);
 });
 
 class GeometryHarness {

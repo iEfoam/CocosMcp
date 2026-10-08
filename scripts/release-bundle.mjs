@@ -28,6 +28,7 @@ for (const major of [2, 3]) {
   const rows = [], archive = {};
   for (const path of [...files[major], ...files.presentation]) {
     const bytes = await readFile(join(root, path));
+    if (!bytes.length || (path !== 'package.json' && createHash('sha256').update(bytes).digest('hex') !== manifest.fileHashes?.[path])) throw new Error(`Creator ${major} release file is incomplete or corrupt: ${path}`);
     rows.push({ path, content: bytes.toString('base64') });
     // ZIP 和更新包使用同一份字节及白名单，不夹带本机凭据、缓存或 service-config。
     archive[path] = [bytes, { mtime: new Date('2000-01-01T00:00:00Z') }];
@@ -35,7 +36,8 @@ for (const major of [2, 3]) {
   const bundle = { major, version: manifest.version, buildId: manifest.buildId, rows };
   await save(`cocos-mcp-creator${major}.full.json`, JSON.stringify(bundle));
   await save(`cocos-mcp-creator${major}.zip`, zipSync(archive));
-  // 已发布的旧更新器要求精确的文件数，继续保留兼容资产。
+  // Creator 2 旧更新器的七文件白名单不含 runtime，无法安全兼容新完整包。
+  // 升级必须使用整包本地安装/ZIP；禁止为旧白名单继续发布缺运行文件的包。
   await save(`cocos-mcp-creator${major}.json`, JSON.stringify({ ...bundle, rows: rows.filter(row => files[major].includes(row.path)) }));
 }
 await save('release-manifest.json', JSON.stringify({ sourceFingerprint: fingerprint, packages, artifacts: artifacts.slice() }, null, 2));

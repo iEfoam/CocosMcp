@@ -76,11 +76,17 @@ The exact adaptation baselines are **Creator 2.4.15** and **Creator 3.8.8**. Thi
 | Media & diagnostics | Basic audio/video/particle controls and UI/Label/atlas/Graphics diagnostics | Media, particles and performance/render diagnostics; platform experience and GPU performance need separate evidence |
 | Workflows & builds | Local workflows and CLI jobs; recorded game-build environment failures remain | Local workflows, CLI jobs and artifact checks; signing, devices, SDKs and publication require separate acceptance |
 
-As of 2026-09-18, 2.4.15 explicitly wires up to **112 editor + 99 runtime endpoints**; the catalog contains **246 entries applicable to major version 3**. These are wiring/catalog counts, not current availability, native pass counts, or the default MCP tool-list length. The latest code regression passed **249 tests**. This expansion was accepted in an independent 2.4.15 project and has not been synced to Texas.
+As of 2026-10-08, the catalog contains **315 capability entries across 54 modules**. Creator 2.4.15 wires up to **123 editor + 106 runtime endpoints**, with another 11 handled or composed in the application layer; **276 entries apply to major version 3**. These are not current availability, native pass counts, or the default tool-list length. The latest regression passed **333 tests**. This batch was installed and tested in isolated projects for both versions; production game projects were not updated.
 
 **Still incomplete:** additional 2.4.15 joints, Prefab differences/repair, image/font/atlas quality workflows, loading traces, TMX persistence, 2.x templates, material pipeline controls, focus/grid, single stepping/Scheduler, and other tracked work. The 2.4.15 game build still has recorded `exportSimpleProject` and FBX converter failures; building the plugin does not prove game export succeeds. The 3.8.8 post-processing and skinning paths also retain explicit limitations.
 
 See the [version support matrix](docs/version-support.md), [2.4.15 adaptation record](docs/creator2-implementation.md), and [full acceptance tracker](docs/creator2-expansion-tracker.md) for details and evidence (Chinese).
+
+### Preview reliability and acceptance (2026-10-08)
+
+CP-001 through CP-013 are implemented: complete runtime bundles, scene/frame identity, focus before input, landscape/view restoration, loaded-byte refresh evidence, layered readiness, sanitized auditing, semantic clicks, acceptance recipes, guarded fixtures, and lifecycle regression. An earlier source snapshot passed 14 synthetic native checks per version. The latest snapshot passed 333 automated tests and 14/14 native checks on Creator 2; Creator 3 passed 12/14, with hidden-window input outcome unknown and the recipe failing its success assertion. This is not a full native pass for the current source. Launchers reuse local credentials and existing sessions rather than creating a fresh login environment for every run.
+
+Creator 2 scene loaded-byte proof may still be unknown. External Chrome MCP integration, physical devices, GPU memory, and real matchmaking/payment flows remain unverified. See the [preview acceptance guide](docs/preview-acceptance.md) for examples, reproduction steps, and evidence boundaries (Chinese).
 
 ## Capabilities
 
@@ -153,7 +159,7 @@ Prebuilt packages require no source checkout, pnpm installation, or compilation.
 | --- | --- |
 | `cocos-mcp-creator2.zip` / `cocos-mcp-creator3.zip` | **Choose a ZIP for manual installation**, matching Creator 2 / 3 |
 | `SHA256SUMS` / `release-manifest.json` | File checksums; versions, build IDs, and source fingerprint |
-| `*.full.json` / `cocos-mcp-creator{2,3}.json` | Full / legacy bundles for the plugin updater, not directly installable editor packages |
+| `*.full.json` / `cocos-mcp-creator{2,3}.json` | Full / required-runtime updater bundles; legacy seven-file Creator 2 updaters need a full upgrade; not directly installable editor packages |
 | GitHub-generated `Source code` archives | Repository source; follow Quick start below to build it |
 
 ### Install a ZIP manually
@@ -305,6 +311,7 @@ The detailed guides below are currently written in Chinese. Both README editions
 | [Scene production & preview](docs/scene-production.md) | Creator 3.8.8 geometry, arrays, rendering, preview windows, and screenshots |
 | [Shader development](docs/shader-development.md) | Native Effect compilation, materials, and validation boundaries |
 | [Asset organization](docs/asset-organization.md) | Directory reuse, organization plans, and guarded asset moves |
+| [Preview acceptance](docs/preview-acceptance.md) · [Reliability](docs/mcp-reliability-and-performance.md) · [External connector](docs/external-preview.md) | CP-001–013, session reuse, real input, recipes/fixtures, refresh proof and reproduction |
 | [Proposal](docs/cocos-mcp-proposal.md) · [Roadmap](docs/capability-roadmap.md) | Project scope and phased implementation |
 | [Verification checklist](docs/capability-verification.md) · [Implementation notes](docs/roadmap-implementation.md) | Completion evidence, added capabilities, and examples |
 

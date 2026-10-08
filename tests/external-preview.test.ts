@@ -4,21 +4,23 @@ import { createServer, type Server } from 'node:http';
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { ExternalPreview, type ExternalBrowserPort } from '../extensions/shared/external-preview.js';
+import { ExternalPreview, ProjectBrowserConnector, type ExternalBrowserPort } from '../extensions/shared/external-preview.js';
 import { PreviewRefresh, type PreviewRefreshHost } from '../extensions/shared/preview-refresh.js';
 import { PreviewRedaction } from '../extensions/shared/preview-redaction.js';
 import { PreviewDiagnosis } from '../extensions/shared/preview-diagnose.js';
-import { ManagedPreview } from '../extensions/creator3/src/preview.js';
+import { ManagedPreview, type PreviewWindow } from '../extensions/creator3/src/preview.js';
+import type { PreviewDebugger } from '../extensions/creator3/src/preview-diagnostics.js';
 import { Creator2PreviewCompiler, type Creator2ProjectCompiler } from '../extensions/creator2/src/preview-compiler.js';
 import { CapabilityCatalog } from '../packages/capability-catalog/src/index.js';
-import { Json, type JsonObject } from '../packages/contracts/src/index.js';
+import { Json, type JsonObject, type JsonValue } from '../packages/contracts/src/index.js';
 
 class BrowserStub implements ExternalBrowserPort {
   calls: Array<{ method: string; params: JsonObject }> = [];
   connected = true; owned = false; wrongPage = false;
+  observed: JsonObject = {};
   async call(method: string, params: JsonObject): Promise<JsonObject> {
     this.calls.push({ method, params });
-    return { sessionId: params.sessionId!, url: this.wrongPage ? 'http://localhost/another-project' : params.url!, tabId: 'tab-1', owned: this.owned, connection: this.connected ? 'connected' : 'disconnected', pageOpened: true, gameReady: false };
+    return { ...this.observed, sessionId: params.sessionId!, url: this.wrongPage ? 'http://localhost/another-project' : params.url!, tabId: 'tab-1', owned: this.owned, connection: this.connected ? 'connected' : 'disconnected', pageOpened: true, gameReady: false };
   }
 }
 class Fixture {
@@ -34,7 +36,7 @@ class Fixture {
     await mkdir(join(root, 'assets')); await writeFile(join(root, 'assets/source.js'), 'const label = "new text";');
     return root;
   }
-  async finish(refresh: PreviewRefresh, operationId: string): Promise<JsonObject> {
+  async finish(refresh: { execute(method: string, params: JsonObject): Promise<JsonValue> }, operationId: string): Promise<JsonObject> {
     // 等待状态而非固定睡眠；测试有显式 deadline。
     const deadline = Date.now() + 2000;
     while (Date.now() < deadline) {
@@ -54,6 +56,73 @@ test('external target never creates Electron; absent connector reports service o
     assert.equal(result.status, 'service-ready'); assert.equal(result.pageReady, false); assert.equal(result.gameReady, false); assert.equal(result.connection, 'disconnected');
     assert.ok(String(result.url).includes('scene=scene'));
   } finally { await fixture.stop(); }
+});
+
+test('external state distinguishes launch from current scene and preserves full image and identity while rejecting stale input before dispatch', async () => {
+  const fixture = new Fixture(), url = await fixture.start(), browser = new BrowserStub(), preview = new ExternalPreview(browser);
+  try {
+    browser.observed = { currentSceneId: 'room', sceneGeneration: 4, frameIndex: 10, runtimeInstanceId: 'runtime', dataUrl: 'data:image/png;base64,' + Buffer.alloc(20000).toString('base64'), token: 'secret-account' };
+    const start = Json.object(await preview.execute('start', { url, sceneId: 'login' })); assert.equal(start.launchSceneId, 'login'); assert.equal(start.currentSceneId, 'room'); assert.equal(start.sceneGeneration, 4);
+    const capture = Json.object(await preview.execute('capture', {})); assert.equal(capture.dataUrl, browser.observed.dataUrl); assert.equal(capture.sessionId, start.sessionId); assert.doesNotMatch(JSON.stringify(capture), /secret-account/);
+    await assert.rejects(preview.execute('input', { expectedSceneId: 'login' }), { code: 'VERIFICATION_FAILED' }); assert.equal(browser.calls.filter(row => row.method === 'input').length, 0);
+    const call = browser.call.bind(browser); browser.call = async (method, params) => { if (method === 'input') throw new Error('Input acknowledgement lost'); return call(method, params); };
+    await assert.rejects(preview.execute('input', { expectedSceneId: 'room' }), { code: 'OUTCOME_UNKNOWN' });
+  } finally { await fixture.stop(); }
+});
+
+test('scoped connector exports project PNG bytes without allowing screenshot paths outside the project', async () => {
+  const root = await new Fixture().project(), directory = join(root, '.codex-work/cache/cocos-mcp'); await mkdir(directory, { recursive: true });
+  const png = Buffer.alloc(24); Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(png); png.writeUInt32BE(20, 16); png.writeUInt32BE(10, 20);
+  const image = join(root, '.codex-work/artifacts/capture.png'); await mkdir(join(image, '..'), { recursive: true }); await writeFile(image, png);
+  let path = '.codex-work/artifacts/capture.png'; const token = 't'.repeat(64);
+  const server = createServer((request, response) => {
+    assert.equal(request.headers.authorization, `Bearer ${token}`); response.setHeader('content-type', 'application/json');
+    response.end(JSON.stringify({ protocolVersion: 1, projectPath: root, result: { path } }));
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = server.address(); assert.ok(address && typeof address !== 'string');
+    await writeFile(join(directory, 'browser-connector.json'), JSON.stringify({ protocolVersion: 1, projectPath: root, endpoint: `http://127.0.0.1:${address.port}`, token }));
+    const connector = new ProjectBrowserConnector(root), captured = await connector.call('capture', {});
+    assert.equal(captured.width, 20); assert.equal(captured.height, 10); assert.equal(Json.object(captured.image).byteLength, png.length);
+    assert.equal(captured.dataUrl, 'data:image/png;base64,' + png.toString('base64')); assert.doesNotMatch(JSON.stringify(captured), new RegExp(token));
+    path = '../outside.png'; await assert.rejects(connector.call('capture', {}), { code: 'CONTEXT_UNAVAILABLE' });
+  } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
+});
+
+test('embedded refresh uses its own window without a Chrome connector and proves loaded bytes or returns unknown', async () => {
+  for (const instrumentation of [true, false]) {
+    const fixture = new Fixture(), root = await fixture.project(), compiled = 'compiled text';
+    const callbacks = new Map<string, (...args: any[]) => void>(); let attached = false, navigations = 0;
+    const debuggerApi: PreviewDebugger = { attach: () => { attached = true; }, detach: () => { attached = false; }, isAttached: () => attached,
+      on: (name, fn) => callbacks.set(name, fn), removeListener: name => callbacks.delete(name),
+      sendCommand: async method => method === 'Debugger.getScriptSource' ? { scriptSource: compiled } : { identifier: 'bootstrap' } };
+    const window: PreviewWindow = { loadURL: async url => {
+      navigations++;
+      callbacks.get('message')?.({}, 'Page.frameNavigated', { frame: { id: 'main', loaderId: 'navigation-' + navigations, url } });
+      callbacks.get('message')?.({}, 'Debugger.scriptParsed', { url: 'http://127.0.0.1:7456/compiled.js', scriptId: 'compiled', length: compiled.length, executionContextAuxData: { frameId: 'main' } });
+    }, isDestroyed: () => false, destroy: () => {}, once: () => {}, webContents: { ...(instrumentation ? { debugger: debuggerApi } : {}), isDestroyed: () => false, on: () => {},
+      session: { setPermissionRequestHandler: () => {} }, executeJavaScript: async () => ({ ready: true, sceneId: 'scene', sceneGeneration: 1 }),
+      capturePage: async () => ({ isEmpty: () => false, toDataURL: () => 'data:image/png;base64,dGVzdA==', getSize: () => ({ width: 800, height: 600 }) }) } };
+    const preview = new ManagedPreview({ create: () => window }, root, 2, { projectPath: root, importResource: async () => null,
+      compile: async batch => ({ status: 'completed', sourceRevision: batch.sourceRevision!, errors: [], artifacts: [{ url: '/compiled.js', sha256: createHash('sha256').update(compiled).digest('hex') }] }) });
+    await preview.execute('start', { url: 'http://127.0.0.1:7456', sceneId: 'scene' });
+    const operation = Json.object(await preview.execute('refresh', { urls: ['db://assets/source.js'], target: 'embedded' }));
+    const result = await fixture.finish(preview, String(operation.operationId));
+    assert.equal(navigations, 3, 'refresh navigates only the owned embedded window');
+    assert.equal(result.status, instrumentation ? 'completed' : 'unknown');
+    assert.equal(Json.object(result.binding).target, 'embedded'); preview.dispose();
+  }
+});
+
+test('source changes during compilation reject stale refresh without reloading', async () => {
+  const fixture = new Fixture(), root = await fixture.project(); let reloads = 0;
+  const refresh = new PreviewRefresh({ projectPath: root, importResource: async () => null,
+    compile: async batch => { await writeFile(join(root, 'assets/source.js'), 'changed during compile'); return { status: 'completed', sourceRevision: batch.sourceRevision!, errors: [], artifacts: [{ url: '/compiled.js', sha256: '1'.repeat(64) }] }; },
+    reload: async () => { reloads++; return {}; } });
+  const operation = Json.object(await refresh.execute('refresh', { urls: ['db://assets/source.js'] }));
+  const result = await fixture.finish(refresh, String(operation.operationId));
+  assert.equal(result.status, 'failed'); assert.equal(Json.object(result.error).code, 'STALE_REVISION'); assert.equal(reloads, 0);
 });
 test('external lifecycle reuses the page, closes only owned tabs, and rejects navigation drift', async () => {
   const fixture = new Fixture(), url = await fixture.start(), browser = new BrowserStub(), preview = new ExternalPreview(browser);
@@ -133,15 +202,21 @@ test('Creator 2 compiler refuses stale source maps and checks import errors befo
   await mkdir(join(project, '.codex-work/build'), { recursive: true });
   await mkdir(join(project, 'temp/quick-scripts/dst'), { recursive: true });
   await writeFile(imported + '.map', JSON.stringify({ sourcesContent: [source] }));
+  const module = join(project, 'temp/quick-scripts/dst/compiled.js');
+  const inline = Buffer.from(JSON.stringify({sourcesContent: [source]})).toString('base64');
+  await writeFile(module, source + '\n//# sourceMappingURL=data:application/json;base64,' + inline);
   for (const name of ['__qc_bundle__.js', '__quick_compile__.js']) await writeFile(join(project, 'temp/quick-scripts/dst', name), source);
   let compiled = 0;
-  const native: Creator2ProjectCompiler = { errorScripts: {}, compileScripts: async () => { compiled++; }, raw2import: () => imported, raw2dest: () => join(project, 'temp/quick-scripts/dst/compiled.js'), isPlugin: () => false };
+  const native: Creator2ProjectCompiler = { errorScripts: {}, compileScripts: async () => { compiled++; }, raw2import: () => imported, raw2dest: () => module, isPlugin: () => false };
   const compiler = new Creator2PreviewCompiler(project, '2.4.15', () => native, () => 'script-uuid', () => 'db://assets/source.js');
   const batch = { sourceRevision: 'source-revision', rows: [{ url: 'db://assets/source.js', sha256: createHash('sha256').update(source).digest('hex') }] };
   assert.equal((await compiler.compile(batch, () => false)).status, 'completed');
+  await writeFile(module, 'old code\n//# sourceMappingURL=data:application/json;base64,' + Buffer.from(JSON.stringify({sourcesContent: ['old text']})).toString('base64'));
+  const delayedWrite = new Promise<void>(resolve => setTimeout(() => { void writeFile(module, source + '\n//# sourceMappingURL=data:application/json;base64,' + inline).then(resolve); }, 100));
+  assert.equal((await compiler.compile(batch, () => false)).status, 'completed'); await delayedWrite;
   await writeFile(imported + '.map', JSON.stringify({ sourcesContent: ['old text'] }));
   assert.equal((await compiler.compile(batch, () => false)).status, 'unknown');
   native.errorScripts = { 'script-uuid': ['Unexpected token (3:12)'] };
-  const failure = await compiler.compile(batch, () => false); assert.equal(compiled, 2); assert.equal(failure.status, 'failed');
+  const failure = await compiler.compile(batch, () => false); assert.equal(compiled, 3); assert.equal(failure.status, 'failed');
   assert.equal((failure.errors as JsonObject[])[0]!.line, 3); assert.equal((failure.errors as JsonObject[])[0]!.column, 12);
 });
