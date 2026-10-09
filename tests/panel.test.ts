@@ -27,11 +27,7 @@ class PanelHarness {
   readonly root = this.window.document.querySelector('#root') as unknown as HTMLElement;
   get html(): string { return this.root.innerHTML; }
   private buttons(attribute: string): Map<string, { disabled: boolean; click: () => void }> {
-    return new Map(Array.from(this.root.querySelectorAll<HTMLButtonElement>(`[${attribute}]`)).map(button => [button.getAttribute(attribute)!, { get disabled() { return button.disabled; }, click: () => {
-      // linkedom 不提供浏览器的点击焦点转移，显式模拟离开原生下拉框。
-      for (const select of Array.from(this.root.querySelectorAll('select'))) select.dispatchEvent(new this.window.Event('blur'));
-      button.click();
-    } }]));
+    return new Map(Array.from(this.root.querySelectorAll<HTMLButtonElement>(`[${attribute}]`)).map(button => [button.getAttribute(attribute)!, { get disabled() { return button.disabled; }, click: () => button.click() }]));
   }
   get actions() { return this.buttons('data-action'); }
   get copies() { return this.buttons('data-copy-log'); }
@@ -41,24 +37,28 @@ class PanelHarness {
   get tabs() { return this.clicks('data-tab'); }
   get languages() { return this.clicks('data-locale'); }
   connection(mode: 'stdio' | 'http'): void {
-    const select = this.root.querySelector<HTMLSelectElement>('[data-connection-mode]')!;
-    for (const option of Array.from(select.options)) option.removeAttribute('selected');
-    select.querySelector(`option[value="${mode}"]`)!.setAttribute('selected', '');
-    select.dispatchEvent(new this.window.Event('change'));
+    this.dropdown('connection-mode').choose(mode);
   }
   get pages() { return this.clicks('data-log-page'); }
-  get selects() {
-    return new Map(Array.from(this.root.querySelectorAll<HTMLSelectElement>('[data-log-select]')).map(select => {
-      const dispatch = (name: string) => select.dispatchEvent(new this.window.Event(name));
-      return [select.dataset.logSelect!, {
-        get value() { return select.value; },
-        set value(value: string) { for (const option of Array.from(select.options)) option.removeAttribute('selected'); select.querySelector(`option[value="${value}"]`)?.setAttribute('selected', ''); },
-        change: () => dispatch('change'), focus: () => dispatch('focus'), blur: () => dispatch('blur'),
-      }];
-    }));
+  dropdown(id: string) {
+    const trigger = () => {
+      const button = this.root.querySelector<HTMLButtonElement>(`[data-dropdown-trigger="${id}"]`)!;
+      button.getBoundingClientRect = () => ({ left: 40, top: 80, right: 280, bottom: 116, width: 240, height: 36 }) as DOMRect;
+      return button;
+    };
+    const key = (value: string) => { const event = new this.window.Event('keydown', { bubbles: true, cancelable: true }); Object.defineProperty(event, 'key', { value }); trigger().dispatchEvent(event); };
+    const open = () => { if (trigger().getAttribute('aria-expanded') !== 'true') trigger().click(); };
+    return {
+      get value() { return trigger().dataset.value; },
+      get expanded() { return trigger().getAttribute('aria-expanded') === 'true'; },
+      get disabled() { return trigger().disabled; },
+      open, key,
+      choose: (value: string) => { open(); this.root.querySelector<HTMLButtonElement>(`[data-dropdown-popup="${id}"] [data-dropdown-value="${value}"]`)!.click(); },
+    };
   }
   constructor() {
     this.root.getClientRects = () => ({ length: 1 }) as DOMRectList;
+    this.root.getBoundingClientRect = () => ({ left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600 }) as DOMRect;
   }
   async load(major: 2 | 3, respond: () => Promise<PanelState>, legacy3 = false): Promise<Definition> {
     this.major = major;
@@ -108,7 +108,7 @@ test('Creator 2: native selector binding renders and close permits window dispos
 });
 
 for (const major of [2, 3] as const) {
-  test(`Creator ${major}: log controls filter, page, refresh and preserve an active native select`, async () => {
+  test(`Creator ${major}: custom log dropdowns filter, page and stay stable across polling`, async () => {
     const harness = new PanelHarness();
     const current = { ...snapshot, logs: Array.from({ length: 135 }, (_, index) => ({ sequence: index + 1, level: index % 2 ? 'info' : 'error', message: `event-${index + 1}` })) };
     const definition = await harness.load(major, async () => current);
@@ -119,26 +119,23 @@ for (const major of [2, 3] as const) {
       harness.pages.get('2')!();
       assert.match(harness.html, /21–40 \/ 共 135 条/);
       assert.match(harness.html, /历史快照/);
-      const filter = harness.selects.get('level')!;
-      filter.focus!();
+      const filter = harness.dropdown('log-level');
+      filter.open();
       const before = harness.html;
       current.logs.push({ sequence: 136, level: 'warn', message: 'new warning' });
       for (const poll of harness.polls) poll();
       await new Promise(resolve => setImmediate(resolve));
       assert.equal(harness.html, before);
-      filter.value = 'error'; filter.change!();
+      filter.choose('error');
       assert.match(harness.html, /1–20 \/ 共 68 条/);
       assert.doesNotMatch(harness.html, /class="log-level info"/);
-      const size = harness.selects.get('size')!;
-      size.value = '50'; size.change!();
+      harness.dropdown('log-size').choose('50');
       assert.match(harness.html, /1–50 \/ 共 68 条/);
       harness.pages.get('2')!();
       assert.match(harness.html, /51–68 \/ 共 68 条/);
-      const empty = harness.selects.get('level')!;
-      empty.value = 'warn'; empty.change!();
+      harness.dropdown('log-level').choose('warn');
       assert.match(harness.html, /共 1 条/);
-      const info = harness.selects.get('level')!;
-      info.value = 'all'; info.change!();
+      harness.dropdown('log-level').choose('all');
       harness.pages.get('2')!();
       harness.actions.get('refresh')!.click!();
       await new Promise(resolve => setImmediate(resolve));

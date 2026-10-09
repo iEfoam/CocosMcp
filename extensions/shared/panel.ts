@@ -1,4 +1,5 @@
 import { PanelDom } from './panel-dom.js';
+import { PanelDropdown } from './panel-dropdown.js';
 import { PanelLogCache } from './panel-log-cache.js';
 import { capabilityEnglish } from './panel-capabilities-en.js';
 import { PanelI18n } from './panel-i18n.js';
@@ -53,12 +54,12 @@ export function createPanelDefinition(major: 2 | 3) {
   let disposed = false;
   let composing = false;
   const logBrowser = new PanelLogs();
-  let logSelectFocused = false;
+  let dropdowns: PanelDropdown | undefined;
   let copyFeedback = '';
   let copying = false;
 
   const render = (): void => {
-    if (disposed || composing) return;
+    if (disposed || composing || dropdowns?.expanded) return;
     const previousSearch = root.querySelector<HTMLInputElement>('[data-search]');
     const focused = previousSearch && (root.getRootNode() as Document | ShadowRoot).activeElement === previousSearch;
     const selection = focused ? [previousSearch.selectionStart, previousSearch.selectionEnd] : null;
@@ -75,9 +76,9 @@ export function createPanelDefinition(major: 2 | 3) {
       <p>${externallyManaged ? i18n.text(service?.owner === 'client' ? '由 AI 客户端管理，请在客户端启停服务。' : '由其他编辑器实例管理，请使用已有连接。') : i18n.text('启动本工程的 MCP 服务及运行时网关。游戏预览仍需接入运行时桥接。')}</p>
       ${service?.endpoint ? i18n.html`<p>连接地址：<code>${esc(service.endpoint)}</code></p><p>客户端使用 Bearer token，凭证文件：<code>.codex-work/cache/cocos-mcp/mcp-http-token</code></p>` : ''}
       ${service?.transport === 'stdio' ? i18n.html`<p>stdio 已连接，无需配置 MCP 端口。</p>` : ''}
-      <div class="connection-fields"><label>接入方式<select data-key="connection-mode" data-connection-mode aria-label="接入方式"><option value="stdio" ${state.connectionMode === 'stdio' ? 'selected' : ''}>${i18n.text('本机 stdio（推荐）')}</option><option value="http" ${state.connectionMode === 'http' ? 'selected' : ''}>Streamable HTTP</option></select></label><button class="secondary" data-action="copy-connection">${i18n.text(state.connectionMode === 'stdio' ? '复制 stdio 配置' : '复制 HTTP 配置')}</button></div>
-      <p>通用 JSON 模板，请按客户端配置格式调整。HTTP 配置含认证凭证，请妥善保管。</p><p role="status" aria-live="polite">${esc(copyFeedback)}</p>
-      ${state.connectionMode === 'stdio' ? i18n.html`<p>由客户端启动离线 stdio 入口。切换前请停止已有 HTTP 服务，多个客户端可共享 HTTP 服务。</p>` : i18n.html`<div class="connection-fields"><label>HTTP 端口<input data-key="service-port" data-service-port type="number" min="0" max="65535" step="1" value="${esc(service?.configuredPort ?? 0)}" aria-label="HTTP 端口"></label><button class="secondary" data-action="service-port">保存端口</button></div><p>0 表示下次首次分配；启动成功后保存并复用端口。修改端口前需停止服务并更新客户端配置。</p>`}
+      <div class="connection-fields"><div class="connection-field"><span class="connection-label">接入方式</span>${dropdowns!.markup('connection-mode', i18n.text('接入方式'), state.connectionMode, [{ value: 'stdio', label: i18n.text('本机 stdio（推荐）') }, { value: 'http', label: 'Streamable HTTP' }], state.busy || !state.snapshot)}</div><button class="secondary connection-action" data-action="copy-connection">${copyIcon}<span>${i18n.text(state.connectionMode === 'stdio' ? '复制 stdio 配置' : '复制 HTTP 配置')}</span></button></div>
+      <p class="connection-help">通用 JSON 模板，请按客户端配置格式调整。HTTP 配置含认证凭证，请妥善保管。</p><p class="copy-feedback connection-feedback" role="status" aria-live="polite">${esc(copyFeedback)}</p>
+      ${state.connectionMode === 'stdio' ? i18n.html`<p class="connection-help">由客户端启动离线 stdio 入口。切换前请停止已有 HTTP 服务，多个客户端可共享 HTTP 服务。</p>` : i18n.html`<div class="connection-fields"><label class="connection-field"><span class="connection-label">HTTP 端口</span><input data-key="service-port" data-service-port type="number" min="0" max="65535" step="1" value="${esc(service?.configuredPort ?? 0)}" aria-label="HTTP 端口"></label><button class="secondary connection-action" data-action="service-port">保存端口</button></div><p class="connection-help">0 表示下次首次分配；启动成功后保存并复用端口。修改端口前需停止服务并更新客户端配置。</p>`}
       ${service?.error ? `<div class="notice error">${esc(service.error)}</div>` : ''}
       <div class="card-footer"><button class="primary" data-action="${service?.status === 'running' ? 'service-restart' : 'service-start'}">${service?.status === 'running' ? i18n.text('重启') : i18n.text('启动')} MCP 服务（HTTP）</button><button class="secondary" data-action="service-stop">停止 MCP 服务</button></div><p>由此处启动的服务随扩展卸载或编辑器退出而停止；关闭面板不停止服务。</p></section>`;
     const runtimeStatus = state.snapshot?.runtimeStatus;
@@ -108,9 +109,9 @@ export function createPanelDefinition(major: 2 | 3) {
         ${state.tab === 'updates' ? i18n.html`<section class="tab-page"><div class="page-heading"><h2>检查更新</h2></div><section class="panel-card info-card"><p>更新源：GitHub · iEfoam/CocosMcp</p><dl><dt>当前版本</dt><dd>${esc(extension?.version ?? '—')}</dd><dt>已安装版本</dt><dd>${esc(extension?.installedVersion ?? '—')}</dd><dt>最新版本</dt><dd>${esc(extension?.latestVersion ?? '—')}</dd></dl><p role="status" aria-live="polite">${extension?.checking ? i18n.text('正在检查 GitHub 版本…') : esc(extension?.message ?? (extension?.latestVersion ? i18n.text('版本信息已获取，可按需安装最新版本。') : i18n.text('点击检查更新获取最新版本。')))}</p>${extension?.reloadRequired ? i18n.html`<p>新版已安装，请重载扩展后重新启动 MCP 服务。</p>` : ''}<div class="info-actions"><button class="primary" data-action="extension-check">${extension?.checking ? i18n.text('检查中…') : i18n.text('检查更新')}</button><button class="secondary" data-action="extension-update">${extension?.updating ? i18n.text('更新中…') : i18n.text('安装最新版本')}</button></div><p>检查不会安装；安装前会备份当前扩展。</p></section></section>` : ''}
         ${state.tab === 'overview' ? i18n.html`<section class="overview">${serviceCard}<div class="metric-grid"><div class="metric-card accent"><span>编辑器</span><strong>${state.snapshot ? `Creator ${esc(state.snapshot.editorVersion)}` : i18n.text('等待连接')}</strong><small>${state.snapshot ? i18n.html`大版本 ${major}.x` : i18n.text('正在读取编辑器状态')}</small></div><div class="metric-card"><span>工程</span><strong>${state.snapshot ? i18n.text('已识别') : i18n.text('读取中')}</strong><small class="truncate" title="${esc(state.snapshot?.projectPath)}">${esc(state.snapshot?.projectPath)}</small></div><div class="metric-card"><span>实例</span><strong>${descriptor ? 1 : 0}</strong><small>当前窗口的桥接实例</small></div><div class="metric-card"><span>运行时</span><strong>${runtimeLabel}</strong><small>${runtimeStatus?.error ? esc(runtimeStatus.error) : i18n.text('开发游戏会话状态')}</small></div></div><div class="split-grid"><section class="panel-card"><div class="card-heading"><div><span class="section-kicker">EDITOR INSTANCES</span><h2>当前窗口实例</h2></div><button class="text-button" data-tab="capabilities">查看能力 →</button></div><div class="instance-list">${instances || i18n.text('<div class="empty"><span>◌</span><strong>尚未连接 Creator</strong><small>在此控制中心启动 CocosMCP 桥接</small></div>')}</div><div class="card-footer"><button class="primary" data-action="${descriptor ? 'restart' : 'start'}">${descriptor ? i18n.text('重启') : i18n.text('启动')}桥接</button><button class="secondary" data-action="stop">停止桥接</button></div></section><section class="panel-card insight"><div class="section-kicker">QUICK INSIGHT</div><h2>连接范围</h2><p>桥接已启动仅表示当前编辑器监听就绪。此面板尚未监测 MCP 客户端连接；游戏连接请查看运行时状态。</p><div class="check-list"><span><i>✓</i>路径限制在工程内</span><span><i>✓</i>操作支持幂等重试</span><span><i>✓</i>运行时默认开发模式</span></div></section></div></section>` : ''}
         ${state.tab === 'capabilities' ? i18n.html`<section class="tab-page"><div class="page-heading"><div><span class="section-kicker">CAPABILITY CATALOG</span><h2>能力目录</h2><p>当前适配器支持 ${supportedCount} 项 / 注册目录 ${operations.length} 项；支持不代表已通过实机验证</p></div><div class="search"><span>⌕</span><input data-search placeholder="搜索能力、模块或描述" value="${esc(state.query)}" aria-label="搜索能力" /></div></div><div class="capability-list">${capabilities || i18n.text('<div class="empty"><span>⌕</span><strong>没有匹配的能力</strong><small>尝试搜索 scene、asset 或 runtime</small></div>')}</div>${filtered.length > 120 ? i18n.html`<div class="list-hint">仅显示前 120 项，请缩小搜索范围</div>` : ''}</section>` : ''}
-        ${state.tab === 'logs' ? i18n.html`<section class="tab-page logs-page"><div class="page-heading log-header"><div class="log-heading-main"><h2>桥接日志</h2><div class="log-heading-actions"><label class="log-filter"><span class="select-shell"><i class="level-dot ${logBrowser.level}" aria-hidden="true"></i><select data-log-select="level" aria-label="日志级别">${logLevels.map(row => `<option value="${row.value}" ${logBrowser.level === row.value ? 'selected' : ''}>${i18n.text(row.label)}</option>`).join('')}</select><span class="select-chevron" aria-hidden="true"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m4 6 4 4 4-4"/></svg></span></span></label><span class="log-action-divider" aria-hidden="true"></span><button class="log-icon-button" data-copy-log="all" title="复制全部错误" aria-label="复制全部错误" ${copying || !state.logs.some(log => log.level === 'error') ? 'disabled' : ''}>${copyIcon}</button><button class="log-icon-button" data-action="refresh" title="刷新日志" aria-label="刷新日志">${refreshIcon}</button></div></div><div class="log-heading-foot"><p>保留最近 5,000 条桥接事件；不包含 Creator 控制台日志</p><span class="log-update-state"><i class="${logView.history ? 'paused' : ''}" aria-hidden="true"></i>${logView.history ? i18n.text('历史快照 · 翻页时保持稳定') : i18n.text('实时更新 · 每 5 秒')}${logView.history ? i18n.text('<button class="text-button" data-log-page="1">返回最新</button>') : ''}</span></div><div class="copy-feedback" role="status">${esc(copyFeedback)}</div></div>
+        ${state.tab === 'logs' ? i18n.html`<section class="tab-page logs-page"><div class="page-heading log-header"><div class="log-heading-main"><h2>桥接日志</h2><div class="log-heading-actions"><div class="log-filter">${dropdowns!.markup('log-level', i18n.text('日志级别'), logBrowser.level, logLevels.map(row => ({ value: row.value, label: i18n.text(row.label), tone: row.value })), state.busy)}</div><span class="log-action-divider" aria-hidden="true"></span><button class="log-icon-button" data-copy-log="all" title="复制全部错误" aria-label="复制全部错误" ${copying || !state.logs.some(log => log.level === 'error') ? 'disabled' : ''}>${copyIcon}</button><button class="log-icon-button" data-action="refresh" title="刷新日志" aria-label="刷新日志">${refreshIcon}</button></div></div><div class="log-heading-foot"><p>保留最近 5,000 条桥接事件；不包含 Creator 控制台日志</p><span class="log-update-state"><i class="${logView.history ? 'paused' : ''}" aria-hidden="true"></i>${logView.history ? i18n.text('历史快照 · 翻页时保持稳定') : i18n.text('实时更新 · 每 5 秒')}${logView.history ? i18n.text('<button class="text-button" data-log-page="1">返回最新</button>') : ''}</span></div><div class="copy-feedback" role="status">${esc(copyFeedback)}</div></div>
           <div class="log-list" aria-label="桥接日志列表">${logs || `<div class="empty"><span>◌</span><strong>${logBrowser.level === 'all' ? i18n.text('暂无日志') : i18n.text('暂无该级别日志')}</strong><small>${logBrowser.level === 'all' ? i18n.text('启动桥接后会显示连接和操作事件') : i18n.text('可以切换级别查看其他桥接事件')}</small></div>`}</div>
-          <div class="log-pagination"><span class="log-range" role="status">${logView.start}–${logView.end} / 共 ${logView.total} 条</span><div class="log-page-controls"><label class="page-size"><span>每页</span><span class="select-shell compact"><select data-log-select="size" aria-label="每页日志条数">${[20, 50, 100].map(size => i18n.html`<option value="${size}" ${logBrowser.pageSize === size ? 'selected' : ''}>${size} 条</option>`).join('')}</select><span class="select-chevron" aria-hidden="true"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m4 6 4 4 4-4"/></svg></span></span></label><nav class="page-navigation" aria-label="日志分页"><button class="page-button" data-log-page="${logBrowser.page - 1}" aria-label="上一页" ${logBrowser.page === 1 ? 'disabled' : ''}>‹</button><span class="page-position" aria-label="第 ${logBrowser.page} 页，共 ${logView.pages} 页"><strong>${logBrowser.page}</strong><span>/ ${logView.pages}</span></span><button class="page-button" data-log-page="${logBrowser.page + 1}" aria-label="下一页" ${logBrowser.page === logView.pages ? 'disabled' : ''}>›</button></nav></div></div></section>` : ''}
+          <div class="log-pagination"><span class="log-range" role="status">${logView.start}–${logView.end} / 共 ${logView.total} 条</span><div class="log-page-controls"><div class="page-size"><span>每页</span>${dropdowns!.markup('log-size', i18n.text('每页日志条数'), String(logBrowser.pageSize), [20, 50, 100].map(size => ({ value: String(size), label: i18n.html`${size} 条` })), state.busy)}</div><nav class="page-navigation" aria-label="日志分页"><button class="page-button" data-log-page="${logBrowser.page - 1}" aria-label="上一页" ${logBrowser.page === 1 ? 'disabled' : ''}>‹</button><span class="page-position" aria-label="第 ${logBrowser.page} 页，共 ${logView.pages} 页"><strong>${logBrowser.page}</strong><span>/ ${logView.pages}</span></span><button class="page-button" data-log-page="${logBrowser.page + 1}" aria-label="下一页" ${logBrowser.page === logView.pages ? 'disabled' : ''}>›</button></nav></div></div></section>` : ''}
         ${state.tab === 'runtime' ? i18n.html`<section class="tab-page runtime-page">${serviceCard}<div class="page-heading"><div><span class="section-kicker">DEVELOPMENT RUNTIME</span><h2>运行时状态</h2><p>开发预览连接和调试能力</p></div><span class="status-pill ${state.runtime ? 'online' : 'offline'}"><i></i>${runtimeLabel}</span></div><div class="runtime-card"><div class="runtime-orb ${state.runtime ? 'active' : ''}"><span>◎</span></div><div><h3>${runtimeLabel}</h3><p>${runtimeStatus?.error ? esc(runtimeStatus.error) : runtimeStatus?.connected ? i18n.text('已从开发网关读取游戏会话，超过 30 秒没有心跳的会话不计入连接数。') : i18n.text('启动 MCP 服务并在开发预览中接入运行时桥接。')}</p></div></div><div class="runtime-features"><span>对象检查</span><span>属性读写</span><span>事件订阅</span><span>截图</span><span>性能指标</span></div></section>` : ''}
       </main><footer class="footer"><span>CocosMCP ${esc(state.snapshot?.extension?.version ?? i18n.text('读取中'))} <code>${esc(state.snapshot?.extension?.buildId)}</code> <button class="text-button" data-action="extension-update">${state.snapshot?.extension?.updating ? i18n.text('更新中…') : i18n.text('更新版本')}</button><small style="display:block">${state.snapshot?.extension?.reloadRequired ? i18n.html`已安装 ${esc(state.snapshot.extension.installedVersion)} · ${esc(state.snapshot.extension.installedBuildId)}，待重载。` : ''}${esc(state.snapshot?.extension?.message ?? (state.snapshot?.extension?.latestVersion ? i18n.html`GitHub 最新：${state.snapshot.extension.latestVersion}` : state.snapshot?.extension?.checking ? i18n.text('正在检查 GitHub 版本…') : i18n.text('更新源：GitHub · iEfoam/CocosMcp')))}</small></span><span>日志时区：${esc(timeZone)}</span></footer>
     </div>`);
@@ -140,8 +141,8 @@ export function createPanelDefinition(major: 2 | 3) {
       state.error = errorMessage(error);
     }).finally(() => {
       pending = undefined;
-      // 原生下拉框展开或键盘选择时，轮询不能替换其 DOM 并打断选择。
-      if (!logSelectFocused) render();
+      // 自定义弹层展开时先更新数据，关闭后再渲染，保持键盘高亮与点击目标稳定。
+      render();
     });
     return pending;
   };
@@ -168,8 +169,7 @@ export function createPanelDefinition(major: 2 | 3) {
   const logViewRows = () => logBrowser.view(state.logs).rows;
   const serviceRunning = (): boolean => ['running', 'starting'].includes(state.snapshot?.service?.status ?? '');
   const bind = (): void => {
-    const connectionMode = root.querySelector<HTMLSelectElement>('[data-connection-mode]');
-    dom.on(connectionMode, 'change', () => { if (connectionMode?.value === 'stdio' || connectionMode?.value === 'http') { state.connectionMode = connectionMode.value; copyFeedback = ''; render(); } });
+    dropdowns?.bind();
     root.querySelectorAll<HTMLButtonElement>('[data-locale]').forEach(button => {
       button.disabled = state.busy;
       dom.on(button, 'click', () => {
@@ -224,17 +224,6 @@ export function createPanelDefinition(major: 2 | 3) {
         else root.querySelector<HTMLButtonElement>('[data-log-page][aria-label]:not(:disabled)')?.focus();
       });
     });
-    root.querySelectorAll<HTMLSelectElement>('[data-log-select]').forEach(select => {
-      dom.on(select, 'focus', () => { logSelectFocused = true; });
-      dom.on(select, 'blur', () => { logSelectFocused = false; });
-      dom.on(select, 'change', () => {
-        if (select.dataset.logSelect === 'level') logBrowser.filter(select.value);
-        else logBrowser.resize(Number(select.value));
-        logSelectFocused = false;
-        render();
-        root.querySelector<HTMLSelectElement>(`[data-log-select="${select.dataset.logSelect}"]`)?.focus();
-      });
-    });
     const search = root.querySelector<HTMLInputElement>('[data-search]');
     dom.on(search, 'compositionstart', () => { composing = true; });
     dom.on(search, 'compositionend', () => { composing = false; state.query = search?.value ?? ''; render(); });
@@ -245,7 +234,7 @@ export function createPanelDefinition(major: 2 | 3) {
     template: '<div id="cocos-mcp-control-center"></div>',
     $: { root: '#cocos-mcp-control-center' },
     style: `
-      .connection-fields { display:flex; align-items:end; gap:12px; flex-wrap:wrap; margin:12px 0; } .connection-fields label { display:flex; flex-direction:column; gap:6px; flex:1; min-width:150px; } .connection-fields select, .connection-fields input { width:100%; min-height:32px; padding:6px 8px; border:1px solid var(--color-normal-border, #3b4252); border-radius:6px; background:var(--color-normal-fill, #171a21); color:inherit; } .service-card code { overflow-wrap:anywhere; }
+      ${PanelDropdown.style}
       :host { color: var(--color-normal-contrast, #e6e9f0); background: var(--color-normal-fill, #171a21); font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif; font-size: 12px; }
       * { box-sizing: border-box; } #cocos-mcp-control-center { height: 100%; } .shell { height: 100%; display:flex; flex-direction:column; background: radial-gradient(circle at 0% 0%, rgba(79,125,255,.16), transparent 34%), var(--color-normal-fill, #171a21); }
       .hero { padding: 16px 18px 14px; display:flex; align-items:flex-start; justify-content:space-between; border-bottom:1px solid rgba(255,255,255,.07); } .brand { display:flex; gap:14px; align-items:center; } .brand-icon { width:42px; height:42px; border-radius:13px; display:grid; place-items:center; font-size:22px; color:#fff; background:linear-gradient(145deg,#6c8cff,#8366e8); box-shadow:0 8px 24px rgba(89,105,255,.32); } .eyebrow,.section-kicker { letter-spacing:.14em; font-size:9px; color:#8c9ac5; font-weight:700; } h1,h2,h3,p { margin:0; } h1 { margin-top:4px; font-size:20px; letter-spacing:-.03em; } .brand p { margin-top:5px; color:#8790a5; } .hero-actions { display:flex; gap:9px; align-items:center; } .status-pill { display:inline-flex; align-items:center; gap:7px; border-radius:999px; padding:6px 10px; color:#aeb6c8; background:rgba(255,255,255,.06); font-size:11px; } .status-pill i { width:7px; height:7px; border-radius:50%; background:#798297; } .status-pill.online { color:#79ddb4; background:rgba(70,194,139,.11); } .status-pill.online i { background:#52d99c; box-shadow:0 0 0 3px rgba(82,217,156,.13); } .icon-button,.secondary,.primary,.text-button { border:0; cursor:pointer; font:inherit; } .icon-button { width:29px; height:29px; border-radius:9px; color:#b3bdd4; background:rgba(255,255,255,.07); font-size:18px; } .icon-button:hover,.secondary:hover { background:rgba(255,255,255,.12); color:#fff; }
@@ -254,23 +243,29 @@ export function createPanelDefinition(major: 2 | 3) {
       .tab-page { min-height:300px; } .page-heading p { margin-top:5px; color:#80899e; } .search { display:flex; align-items:center; gap:7px; width:220px; height:31px; padding:0 10px; border:1px solid rgba(255,255,255,.1); border-radius:9px; background:rgba(0,0,0,.14); color:#8995b3; } .search input { width:100%; border:0; outline:0; color:#e7eaf3; background:transparent; font:inherit; } .search input::placeholder { color:#727b90; } .capability-list { margin-top:17px; border-top:1px solid rgba(255,255,255,.07); } .capability-row { display:flex; align-items:center; gap:10px; min-height:54px; border-bottom:1px solid rgba(255,255,255,.055); } .capability-mark { width:7px; height:7px; margin-left:3px; border-radius:50%; background:#6f7a8e; } .capability-mark.active { background:#56d79e; box-shadow:0 0 0 3px rgba(86,215,158,.12); } .capability-mark.planned { background:#d6a75b; } .capability-main { display:flex; flex-direction:column; gap:4px; flex:1; min-width:0; } .capability-main strong { color:#dfe4f1; font:600 11px ui-monospace,SFMono-Regular,Menlo,monospace; } .capability-main span { color:#818ba0; font-size:10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; } .capability-meta { display:flex; align-items:center; gap:6px; } .tag { border-radius:5px; padding:3px 5px; color:#909bb5; background:rgba(255,255,255,.06); font-size:9px; } .list-hint { padding:13px; text-align:center; color:#7d879c; } .log-list { margin-top:17px; border-top:1px solid rgba(255,255,255,.07); } .log-row { display:flex; align-items:center; gap:9px; min-height:38px; border-bottom:1px solid rgba(255,255,255,.05); font-size:10px; } .log-sequence { width:28px; color:#606b80; text-align:right; } .log-level { width:36px; text-transform:uppercase; font-size:9px; font-weight:700; } .log-level.info { color:#76a5ff; } .log-level.warn { color:#e3b86e; } .log-level.error { color:#f17f8b; } .log-message { flex:1; color:#b5bdce; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .log-row time { color:#697489; } .runtime-card { display:flex; align-items:center; gap:18px; margin-top:18px; padding:24px; } .runtime-orb { width:58px; height:58px; display:grid; place-items:center; border-radius:50%; color:#788398; background:rgba(255,255,255,.06); font-size:27px; } .runtime-orb.active { color:#6be0ad; background:rgba(74,207,148,.11); box-shadow:0 0 0 8px rgba(74,207,148,.05); } .runtime-card h3 { font-size:14px; } .runtime-card p { margin-top:6px; color:#828da3; } .runtime-features { display:flex; flex-wrap:wrap; gap:7px; margin-top:13px; } .runtime-features span { padding:7px 10px; border-radius:7px; color:#a9b2c6; background:rgba(255,255,255,.05); } .notice { margin-bottom:14px; padding:10px 12px; border-radius:9px; font-size:11px; } .notice.error { color:#ffabb4; background:rgba(231,91,111,.12); border:1px solid rgba(231,91,111,.2); } .notice span { display:inline-grid; place-items:center; width:16px; height:16px; margin-right:7px; border-radius:50%; background:#d85f73; color:#fff; } .empty { display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:145px; text-align:center; color:#818ba1; } .empty > span { margin-bottom:8px; color:#68758f; font-size:26px; } .empty strong { color:#bdc5d5; font-size:12px; } .empty small { margin-top:5px; color:#727e96; } .footer { display:flex; justify-content:space-between; padding:11px 28px 14px; color:#626d83; font-size:10px; } @media (max-width: 620px) { .hero,.content { padding-left:18px; padding-right:18px; } .tabs { padding-left:18px; } .metric-grid { grid-template-columns:repeat(2,1fr); } .split-grid { grid-template-columns:1fr; } .capability-meta .tag { display:none; } }
       /* 固定区域不参与纵向压缩，只有内容区滚动，避免卡片滑到标签栏下方。 */
       .info-card { margin-top:18px; padding:24px; } .info-card p { margin:14px 0; line-height:1.65; color:#a9b2c6; } .info-card dl { display:grid; grid-template-columns:100px minmax(0,1fr); gap:12px; margin:20px 0; } .info-card dt { color:#8995ad; } .info-card dd { margin:0; overflow-wrap:anywhere; user-select:text; } .info-actions { display:flex; gap:10px; flex-wrap:wrap; }
-      .connection-fields { display:flex; align-items:end; gap:12px; flex-wrap:wrap; margin:12px 0; } .connection-fields label { display:flex; flex-direction:column; gap:6px; flex:1; min-width:150px; } .connection-fields select, .connection-fields input { width:100%; min-height:32px; padding:6px 8px; border:1px solid var(--color-normal-border, #3b4252); border-radius:6px; background:var(--color-normal-fill, #171a21); color:inherit; } .service-card code { overflow-wrap:anywhere; }
       :host { display:block; height:100%; min-height:0; overflow:hidden; }
       .shell { min-height:0; overflow:hidden; }
       .hero,.tabs,.footer { flex-shrink:0; }
       .content { scroll-padding-top:22px; }
       .service-card { min-height:0; margin-bottom:18px; } .service-card p { margin-top:10px; line-height:1.6; overflow-wrap:anywhere; } .service-card code { user-select:text; }
+      .connection-fields { display:flex; align-items:flex-end; margin:16px 0 10px; }
+      .connection-field { display:flex; flex-direction:column; flex:1; min-width:0; }
+      .connection-label { margin-bottom:7px; color:#aeb8ce; font-size:11px; font-weight:500; line-height:16px; }
+      .connection-field input { display:block; width:100%; height:36px; padding:0 12px; border:1px solid #3b4252; border-radius:8px; background:#1b1e26; color:#e4e9f6; font:inherit; }
+      .connection-field input:focus { outline:2px solid rgba(146,166,255,.65); outline-offset:2px; }
+      .connection-action { display:flex; align-items:center; justify-content:center; flex:0 0 148px; height:36px; margin-left:12px; padding:0 12px; line-height:1.3; }
+      .connection-action svg { flex-shrink:0; margin-right:7px; }
+      .service-card .connection-help { color:#a3aec5; font-size:11px; }
+      .service-card .connection-feedback { margin-top:8px; }
+      .log-filter .dropdown-trigger { width:132px; height:28px; padding:0 10px; font-size:11px; border-radius:7px; }
+      .page-size .dropdown-trigger { min-width:82px; height:28px; padding:0 10px; font-size:11px; }
+      @media (max-width:480px) { .connection-fields { flex-direction:column; align-items:stretch; } .connection-field,.connection-action { flex:none; width:100%; } .connection-action { margin:8px 0 0; } .service-card .card-footer { flex-wrap:wrap; } }
       .metric-grid,.split-grid { align-items:stretch; }
       .log-filter,.page-size { display:flex; align-items:center; gap:10px; } .control-label { color:#b4bed3; font-size:11px; }
-      .select-shell { position:relative; display:inline-flex; align-items:center; border:1px solid rgba(156,173,219,.22); border-radius:9px; background:#262c3a; box-shadow:0 2px 6px rgba(0,0,0,.12),inset 0 1px 0 rgba(255,255,255,.04); transition:border-color 140ms ease,background 140ms ease; }
-      .select-shell:hover { border-color:#7387ba; background:#30384a; } .select-shell:focus-within { border-color:#92a6ff; outline:2px solid rgba(146,166,255,.35); outline-offset:2px; }
-      .select-shell select { appearance:none; -webkit-appearance:none; color:#e4e9f6; background:transparent; border:0; border-radius:inherit; font:500 11px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; padding:0 30px 0 26px; height:28px; min-width:132px; line-height:normal; cursor:pointer; outline:none; color-scheme:dark; }
-      .select-shell option { color:#e4e9f6; background:#262c3a; } .select-chevron { position:absolute; top:0; bottom:0; right:4px; width:22px; display:flex; align-items:center; justify-content:center; color:#9caac5; pointer-events:none; } .select-chevron svg { display:block; flex-shrink:0; }
-      .level-dot { position:absolute; left:10px; top:50%; transform:translateY(-50%); width:6px; height:6px; border-radius:50%; background:#a5b4d6; pointer-events:none; } .level-dot.error { background:#ff95a2; } .level-dot.warn { background:#efc77c; } .level-dot.info { background:#8eb6ff; }
       .log-update-state { display:flex; align-items:center; flex-wrap:wrap; gap:7px; color:#a3aec5; font-size:10px; } .log-update-state > i { width:5px; height:5px; border-radius:50%; background:#71d4a8; } .log-update-state > i.paused { background:#e3b86e; } .log-update-state button { margin-left:4px; }
       .logs-page .log-list { margin-top:0; border-top:0; } .logs-page .log-row { min-height:32px; } .logs-page .log-sequence { width:42px; flex-shrink:0; font-variant-numeric:tabular-nums; }
       .log-pagination { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; padding:10px 0; } .log-range { color:#a3aec5; font-size:11px; font-variant-numeric:tabular-nums; }
-      .log-page-controls { display:flex; align-items:center; flex-wrap:wrap; gap:16px; } .page-size { color:#a3aec5; font-size:11px; gap:8px; } .compact select { min-width:82px; padding-left:12px; }
+      .log-page-controls { display:flex; align-items:center; flex-wrap:wrap; gap:16px; } .page-size { color:#a3aec5; font-size:11px; gap:8px; }
       .page-navigation { display:flex; align-items:center; gap:5px; } .page-button { width:30px; height:30px; border:1px solid rgba(156,173,219,.18); border-radius:9px; background:rgba(255,255,255,.045); color:#d7dff2; font:22px -apple-system,sans-serif; cursor:pointer; }
       .page-button:hover:not(:disabled) { background:rgba(113,136,255,.16); border-color:#7387ba; } .page-button:active:not(:disabled) { background:rgba(113,136,255,.28); } .page-button:disabled { opacity:.32; cursor:default; } .page-button:focus-visible,.logs-page button:focus-visible { outline:2px solid #92a6ff; outline-offset:3px; }
       .page-position { display:flex; gap:6px; justify-content:center; min-width:64px; font-size:11px; font-variant-numeric:tabular-nums; } .page-position strong { color:#e3e9ff; } .page-position > span { color:#a3aec5; }
@@ -285,8 +280,6 @@ export function createPanelDefinition(major: 2 | 3) {
       .log-heading-main { display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; flex-wrap:wrap; }
       .log-heading-main h2 { margin:0; font-size:15px; }
       .log-heading-actions { display:flex; align-items:center; gap:4px; }
-      .log-heading-actions .select-shell { background:rgba(255,255,255,.025); border-color:rgba(156,173,219,.16); border-radius:7px; }
-      .log-heading-actions select { width:132px; min-width:132px; height:28px; font-size:11px; }
       .log-action-divider { height:16px; width:1px; margin:0 4px; background:rgba(156,173,219,.16); }
       .log-icon-button { display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; padding:0; flex-shrink:0; border:1px solid transparent; border-radius:6px; background:transparent; color:#9daecb; cursor:pointer; }
       .log-icon-button:hover:not(:disabled) { color:#e2eaff; background:rgba(135,157,226,.13); border-color:rgba(156,173,219,.15); }
@@ -305,13 +298,19 @@ export function createPanelDefinition(major: 2 | 3) {
       const element = major === 2 ? this.$root : this.$?.root;
       if (!element) throw new Error(`Creator ${major} control center root element is unavailable`);
       root = element;
+      dropdowns = new PanelDropdown(root, dom, (id, value) => {
+        if (id === 'connection-mode' && (value === 'stdio' || value === 'http')) { state.connectionMode = value; copyFeedback = ''; }
+        else if (id === 'log-level') logBrowser.filter(value);
+        else if (id === 'log-size') logBrowser.resize(Number(value));
+        render();
+      }, render);
       render();
       await refresh();
       // ready 等待 IPC 时用户可能已关闭面板，不能再创建轮询或写入已卸载的 DOM。
       if (!disposed) timer = setInterval(() => { if (!state.busy && !root.ownerDocument.hidden && root.getClientRects().length > 0) void refresh(); }, 5000);
     },
     // Creator 2 的 close 返回 true 才允许关闭；Creator 3 忽略该返回值。
-    close(): boolean { disposed = true; if (timer) clearInterval(timer); timer = undefined; return true; },
+    close(): boolean { disposed = true; dropdowns?.dispose(); if (timer) clearInterval(timer); timer = undefined; return true; },
   };
   return definition;
 }
