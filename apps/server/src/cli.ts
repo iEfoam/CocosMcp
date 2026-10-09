@@ -2,23 +2,19 @@
 import { parseArgs } from 'node:util';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readFile, writeFile } from 'node:fs/promises';
-import { randomBytes } from 'node:crypto';
+import { writeFile } from 'node:fs/promises';
 import { CocosApplication, ProjectRegistry, ProjectPaths } from '../../../packages/application/src/index.js';
-import { RuntimeGateway } from '../../../packages/application/src/runtime-gateway.js';
 import { CatalogGenerator } from '../../../packages/catalog-generator/src/index.js';
 import { CreatorLocator } from '../../../packages/native-adapters/src/creator.js';
 import { ExtensionInstaller } from '../../../packages/native-adapters/src/installer.js';
-import { BuildJobs } from '../../../packages/native-adapters/src/build.js';
 import { CocosError, Json } from '../../../packages/contracts/src/index.js';
-import { CocosMcpServer } from './mcp.js';
-import { McpTransport } from './transport.js';
+import { ServiceHost } from './service-host.js';
 
 class CommandLine {
   async run(): Promise<void> {
     const parsed = parseArgs({ allowPositionals: true, options: {
       project: { type: 'string', multiple: true }, creator: { type: 'string' }, engine: { type: 'string' },
-      major: { type: 'string' }, transport: { type: 'string', default: 'stdio' }, port: { type: 'string', default: '0' },
+      major: { type: 'string' }, transport: { type: 'string', default: 'stdio' }, port: { type: 'string' },
       'token-file': { type: 'string' }, 'allow-project-code': { type: 'boolean', default: false },
       'all-tools': { type: 'boolean', default: false }, 'no-runtime': { type: 'boolean', default: false },
       capability: { type: 'string' }, params: { type: 'string' }, instance: { type: 'string' },
@@ -68,30 +64,18 @@ class CommandLine {
     }
     if (command !== 'serve') throw new CocosError('INVALID_ARGUMENT', `Unknown command: ${command}`);
     if (!['stdio', 'http'].includes(values.transport)) throw new CocosError('INVALID_ARGUMENT', 'transport must be stdio or http');
-    const port = Number(values.port);
-    if (!Number.isInteger(port) || port < 0 || port > 65535) throw new CocosError('INVALID_ARGUMENT', 'Invalid port');
-    const gateway = values['no-runtime'] ? undefined : new RuntimeGateway(projects);
-    const builds = new BuildJobs();
-    if (gateway) console.error(`[CocosMCP] Development runtime gateway: 127.0.0.1:${await gateway.start()}`);
-    const application = new CocosApplication(projects, undefined, undefined, values['allow-project-code'], gateway);
-    const factory = new CocosMcpServer(application, gateway, builds, values['all-tools']); const transport = new McpTransport();
-    let closing = false;
-    const close = async (): Promise<void> => { if (closing) return; closing = true; await transport.close(); await gateway?.close(); await builds.close(); };
-    for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => { void close().catch(error => { console.error(error); process.exitCode = 1; }); });
-    if (values.transport === 'stdio') { transport.startStdio(factory); process.stdin.once('end', () => { void close(); }); }
-    else {
-      const paths = projects.paths(first.projectId); const directory = await paths.work('cache', 'cocos-mcp');
-      const tokenPath = values['token-file'] ? await paths.resolve(values['token-file']) : join(directory, 'mcp-http-token');
-      let token: string;
-      try { token = (await readFile(tokenPath, 'utf8')).trim(); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; token = randomBytes(32).toString('hex'); await writeFile(tokenPath, token, { mode: 0o600, flag: 'wx' }); }
-      if (token.length < 32) throw new CocosError('INVALID_ARGUMENT', 'HTTP token must be at least 32 characters');
-      console.error(`[CocosMCP] HTTP MCP: http://127.0.0.1:${await transport.startHttp(factory, port, token)}/mcp; token file: ${tokenPath}`);
-    }
+    const port = values.port === undefined ? undefined : Number(values.port);
+    if (port !== undefined && (!Number.isInteger(port) || port < 0 || port > 65535)) throw new CocosError('INVALID_ARGUMENT', 'Invalid port');
+    const host = new ServiceHost(projects);
+    for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => { void host.close().catch(error => { console.error(error); process.exitCode = 1; }); });
+    const endpoint = await host.start({ transport: values.transport as 'http' | 'stdio', owner: 'client',
+      ...(port === undefined ? {} : { port }), ...(values['token-file'] ? { tokenFile: values['token-file'] } : {}),
+      runtime: !values['no-runtime'], allowProjectCode: values['allow-project-code'], allTools: values['all-tools'] });
+    if (endpoint) console.error(`[CocosMCP] HTTP MCP: ${endpoint}; token file: ${values['token-file'] ?? join(first.projectPath, '.codex-work/cache/cocos-mcp/mcp-http-token')}`);
   }
 
   private help(): void {
-    console.log(`CocosMCP — MIT, free, no account or usage quotas\n\nCommands:\n  serve   --project <path> [--transport stdio|http] [--port 0] [--allow-project-code]\n  install --project <path> --creator <Creator installation>\n  doctor  --project <path> [--creator <installation>]\n  catalog --project <path> [--creator <installation>] [--engine <source path>]\n  call    --project <path> --capability <id> [--params '{...}']\n\nBuild first with pnpm build. Artifacts and caches stay under .codex-work/.`);
+    console.log(`CocosMCP — MIT, free, no account or usage quotas\n\nCommands:\n  serve   --project <path> [--transport stdio|http] [--port <port>] [--allow-project-code]\n  install --project <path> --creator <Creator installation>\n  doctor  --project <path> [--creator <installation>]\n  catalog --project <path> [--creator <installation>] [--engine <source path>]\n  call    --project <path> --capability <id> [--params '{...}']\n\nBuild first with pnpm build. Artifacts and caches stay under .codex-work/.`);
   }
 }
 

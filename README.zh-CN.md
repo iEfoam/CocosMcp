@@ -180,9 +180,12 @@ Creator 2 场景加载字节证明仍可为 unknown；外部 Chrome MCP 端到�
 发布 ZIP 特意不携带这份机器相关配置；这里需要独立安装的 Node.js 24+，不能直接使用 Creator 内置的 Node。离线 ZIP 方式不需要填写源码 `buildRoot`。
 
 5. 打开工程，在扩展管理器确认扩展已加载，然后选择 **CocosMCP → 打开控制中心 → 启动 MCP 服务**。启动会同时连接编辑器桥接；游戏预览和运行时接入仍需另行开启。
-6. 在 AI 客户端中添加 **Streamable HTTP MCP** 连接，地址使用面板实际显示的 `http://127.0.0.1:<端口>/mcp`，认证使用工程 `.codex-work/cache/cocos-mcp/mcp-http-token` 文件中的 Bearer token。端口可能随重启变化，不要照抄固定端口；不同客户端的配置格式不同，按其 HTTP MCP 设置填写。连接后调用 `cocos_projects` 和 `cocos_instances` 验证工程与编辑器实例。
+6. 在控制中心选择接入方式并复制配置（通用 JSON 模板，按客户端格式调整）：
+   - **本机 stdio（推荐）**：客户端通过 Node.js 启动扩展内的 `dist/stdio.mjs`，无需配置 MCP 端口，也无需源码仓库或 pnpm。先停止同工程已有 HTTP 服务。
+   - **Streamable HTTP**：先从面板启动服务。首次分配端口后保存并在重启时复用；端口被占用会明确报错，不会自动切换。配置中的 Bearer token 来自工程 `.codex-work/cache/cocos-mcp/mcp-http-token`，含凭证的配置请妥善保管。
+   面板识别客户端管理的服务，只显示状态；多个客户端可共享 HTTP 服务。连接后调用 `cocos_projects` 和 `cocos_instances` 验证工程与编辑器实例。
 
-此处“离线”指插件安装不需要联网下载依赖，不代表 AI 模型一定能离线运行。断网时可忽略在线更新检查失败；如果客户端仅支持 stdio，请使用下方源码安装方式。恢复旧版时先停止服务、关闭 Creator，再用备份替换本次扩展目录。
+此处“离线”指插件安装不需要联网下载依赖，不代表 AI 模型一定能离线运行。断网时可忽略在线更新检查失败；离线包也包含 stdio 入口；客户端是否在 HTTP 服务恢复后自动重连需单独验证。恢复旧版时先停止服务、关闭 Creator，再用备份替换本次扩展目录。
 
 ## 快速开始
 
@@ -223,8 +226,8 @@ pnpm start doctor --project /path/to/my-cocos-project
 # 为 MCP 客户端启动 stdio 传输。
 pnpm start serve --project /path/to/my-cocos-project
 
-# 或启动本地 Streamable HTTP，自动分配端口。
-pnpm start serve --project /path/to/my-cocos-project --transport http --port 0
+# 或启动本地 Streamable HTTP，首次分配端口，后续复用。
+pnpm start serve --project /path/to/my-cocos-project --transport http
 ```
 
 HTTP 仅绑定 `127.0.0.1`，要求 Bearer token，并拒绝非本地 Host/Origin。token 保存在目标工程的 `.codex-work/cache/cocos-mcp/mcp-http-token`。

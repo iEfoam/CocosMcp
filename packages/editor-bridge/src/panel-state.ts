@@ -12,7 +12,7 @@ export interface PanelState {
   supportedCapabilities: string[];
   logs: JsonObject[];
   logWindow?: { epoch: string; cursor: number; droppedBefore: number; reset: boolean };
-  service?: { status: 'stopped' | 'starting' | 'running' | 'error'; endpoint: string | null; error: string | null };
+  service?: { status: 'stopped' | 'starting' | 'running' | 'error'; endpoint: string | null; error: string | null; owner?: 'client' | 'extension'; transport?: 'stdio' | 'http'; managed?: boolean; configuredPort?: number };
   runtimeConfigured: boolean;
   runtimeStatus?: { connected: number; error: string | null };
 

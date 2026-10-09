@@ -154,6 +154,8 @@ class ExtensionLifecycle {
   private getService(): McpService { return this.service ??= new McpService(Editor.Project.path, dirname(__dirname)); }
   async startService(): Promise<void> { await this.start(); await this.getService().start(); }
   async stopService(): Promise<void> { await this.service?.stop(); }
+  async configurePort(value: unknown): Promise<void> { await this.getService().configurePort(value); }
+  async copyConnection(mode: unknown): Promise<void> { preferences.copy(await this.getService().configuration(mode)); }
   async unload(): Promise<void> { try { await this.stopService(); await this.stop(); } finally { preferences.restoreMenu(); } }
   private bridge: EditorBridge | undefined;
   private starting: Promise<void> | undefined;
@@ -161,7 +163,7 @@ class ExtensionLifecycle {
     if (!this.bridge) { const host = new CreatorHost(); this.bridge = new EditorBridge(new Creator2Adapter(host), host.projectPath, host.version); }
     return this.bridge;
   }
-  async panelState(cursor?: string): Promise<PanelState> { const state = await this.getBridge().panelStateWithRuntime(cursor); state.service = this.getService().snapshot(); state.navigation = this.navigation; state.extension = this.getUpdater().snapshot(); state.locale = preferences.read(); preferences.applyMenu(); return state; }
+  async panelState(cursor?: string): Promise<PanelState> { const state = await this.getBridge().panelStateWithRuntime(cursor); state.service = await this.getService().inspect(); state.navigation = this.navigation; state.extension = this.getUpdater().snapshot(); state.locale = preferences.read(); preferences.applyMenu(); return state; }
   async start(): Promise<void> {
     this.getUpdater();
     // 菜单与面板可同时请求启动，必须复用同一次初始化以免留下重复监听器。
@@ -190,6 +192,8 @@ export = {
     'extension-update'(event?: ReplyEvent): void { lifecycle.reply(event, () => lifecycle.updateExtension()); },
     'service-start'(event?: ReplyEvent): void { lifecycle.reply(event, () => lifecycle.startService()); },
     'service-stop'(event?: ReplyEvent): void { lifecycle.reply(event, () => lifecycle.stopService()); },
+    'service-port'(event: ReplyEvent, value: unknown): void { lifecycle.reply(event, () => lifecycle.configurePort(value)); },
+    'copy-connection'(event: ReplyEvent, mode: unknown): void { lifecycle.reply(event, () => lifecycle.copyConnection(mode)); },
     start(event?: ReplyEvent): void { lifecycle.reply(event, () => lifecycle.start()); },
     stop(event?: ReplyEvent): void { lifecycle.reply(event, () => lifecycle.stop()); },
     'panel-state'(event?: ReplyEvent, cursor?: string): void { lifecycle.reply(event, () => lifecycle.panelState(cursor)); },

@@ -67,6 +67,15 @@ const english: Record<string, string> = {
   '对象检查': 'Inspect objects', '属性读写': 'Read / write properties', '事件订阅': 'Subscribe to events',
   '截图': 'Screenshots', '性能指标': 'Performance', '更新中…': 'Updating…', '更新版本': 'Update',
   '已安装 ': 'Installed ', '，待重载。': '; reload required. ', 'GitHub 最新：': 'Latest on GitHub: ', '日志时区：': 'Log timezone: ',
+  '由 AI 客户端管理，请在客户端启停服务。': 'Managed by the AI client. Start or stop it in the client.',
+  '由其他编辑器实例管理，请使用已有连接。': 'Managed by another editor instance. Use the existing connection.',
+  'stdio 已连接，无需配置 MCP 端口。': 'stdio is connected; no MCP port is required.',
+  '接入方式': 'Connection mode', '本机 stdio（推荐）': 'Local stdio (recommended)',
+  '复制 stdio 配置': 'Copy stdio configuration', '复制 HTTP 配置': 'Copy HTTP configuration',
+  'HTTP 端口': 'HTTP port', '保存端口': 'Save port',
+  '通用 JSON 模板，请按客户端配置格式调整。HTTP 配置含认证凭证，请妥善保管。': 'Generic JSON template; adapt it to your client. HTTP configuration contains credentials; keep it private.',
+  '由客户端启动离线 stdio 入口。切换前请停止已有 HTTP 服务，多个客户端可共享 HTTP 服务。': 'The client launches the bundled stdio entry. Stop the existing HTTP service before switching. Multiple clients can share HTTP.',
+  '0 表示下次首次分配；启动成功后保存并复用端口。修改端口前需停止服务并更新客户端配置。': '0 allocates a port on the next start, then saves and reuses it. Stop the service before changing the port and update your client configuration.',
 };
 const keys = Object.keys(english).sort((a, b) => b.length - a.length);
 const pattern = new RegExp(keys.map(key => key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g');

@@ -40,6 +40,12 @@ class PanelHarness {
   }
   get tabs() { return this.clicks('data-tab'); }
   get languages() { return this.clicks('data-locale'); }
+  connection(mode: 'stdio' | 'http'): void {
+    const select = this.root.querySelector<HTMLSelectElement>('[data-connection-mode]')!;
+    for (const option of Array.from(select.options)) option.removeAttribute('selected');
+    select.querySelector(`option[value="${mode}"]`)!.setAttribute('selected', '');
+    select.dispatchEvent(new this.window.Event('change'));
+  }
   get pages() { return this.clicks('data-log-page'); }
   get selects() {
     return new Map(Array.from(this.root.querySelectorAll<HTMLSelectElement>('[data-log-select]')).map(select => {
@@ -66,7 +72,7 @@ class PanelHarness {
       Editor: {
         Panel: major === 2 ? { extend: register } : legacy3 ? {} : { define: register },
         Message: { request: (name: string, message: string, value?: unknown) => {
-          assert.equal(major, 3); assert.equal(name, 'cocos-mcp-creator3'); assert.ok(['panel-state', 'extension-check', 'extension-update', 'start', 'stop', 'service-start', 'service-stop', 'set-language', 'copy-log'].includes(message));
+          assert.equal(major, 3); assert.equal(name, 'cocos-mcp-creator3'); assert.ok(['panel-state', 'extension-check', 'extension-update', 'start', 'stop', 'service-start', 'service-stop', 'set-language', 'copy-log', 'copy-connection', 'service-port'].includes(message));
           return message === 'panel-state' ? respond() : this.command(message, value);
         } },
         Ipc: { sendToMain: (message: string, ...args: unknown[]) => {
@@ -329,13 +335,18 @@ test('managed MCP service starts once, serves HTTP, detects external gateway and
     assert.equal(initialized.status, 200);
     assert.match(await initialized.text(), /serverInfo/);
 
-    await assert.rejects(other.start(), /已有运行时网关/);
+    await other.start();
+    assert.equal((await other.inspect()).managed, false);
+    assert.equal(other.snapshot().endpoint, endpoint);
+    await other.stop();
+    assert.equal((await service.inspect()).status, 'running');
     await service.stop();
     assert.equal(service.snapshot().status, 'stopped');
     const files = await (await import('node:fs/promises')).readdir(join(project, '.codex-work/cache/cocos-mcp'));
     assert.equal(files.some(name => /^runtime-\d+\.json$/.test(name)), false);
     await service.start();
     assert.equal(service.snapshot().status, 'running');
+    assert.equal(service.snapshot().endpoint, endpoint, 'HTTP URL must survive restart');
   } finally { await service.stop(); }
 });
 
@@ -437,3 +448,32 @@ test('hidden panel polling pauses and visible polling resumes without duplicate 
     assert.equal(calls, 3);
   } finally { definition.close(); }
 });
+
+for (const major of [2, 3] as const) {
+  test(`Creator ${major}: connection configuration stays in main IPC and external owners cannot be stopped`, async () => {
+    const harness = new PanelHarness(), calls: Array<{ message: string; value?: unknown }> = [];
+    const current: PanelState = { ...snapshot, creatorMajor: major, service: { status: 'running', endpoint: null, error: null, owner: 'client', managed: false, transport: 'stdio', configuredPort: 12345 } };
+    harness.command = async (message, value) => { calls.push({ message, value }); };
+    const definition = await harness.load(major, async () => current); await harness.ready(definition);
+    try {
+      assert.match(harness.html, /AI 客户端管理/);
+      assert.equal(harness.actions.get('service-restart')?.disabled, true);
+      assert.equal(harness.actions.get('service-stop')?.disabled, true);
+      harness.actions.get('copy-connection')!.click(); await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(calls.pop(), { message: 'copy-connection', value: 'stdio' });
+      assert.ok(!harness.html.includes('Authorization'));
+      harness.connection('http');
+      assert.equal(harness.actions.get('copy-connection')?.disabled, true);
+      assert.equal(harness.actions.get('service-port')?.disabled, true);
+      current.service = { status: 'running', endpoint: 'http://127.0.0.1:12345/mcp', error: null, owner: 'client', managed: false, transport: 'http', configuredPort: 12345 };
+      for (const poll of harness.polls) poll(); await new Promise(resolve => setImmediate(resolve));
+      harness.actions.get('copy-connection')!.click(); await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(calls.pop(), { message: 'copy-connection', value: 'http' });
+      current.service = { status: 'stopped', endpoint: null, error: null, configuredPort: 12345 };
+      for (const poll of harness.polls) poll(); await new Promise(resolve => setImmediate(resolve));
+      harness.root.querySelector<HTMLInputElement>('[data-service-port]')!.value = '23456';
+      harness.actions.get('service-port')!.click(); await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(calls.pop(), { message: 'service-port', value: '23456' });
+    } finally { definition.close(); }
+  });
+}

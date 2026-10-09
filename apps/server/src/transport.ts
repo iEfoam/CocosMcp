@@ -14,7 +14,7 @@ export class McpTransport {
     this.stdio = serveStdio(() => factory.create(), { onerror: error => console.error('[MCP]', error.message) });
   }
 
-  async startHttp(factory: CocosMcpServer, port: number, token: string): Promise<number> {
+  async startHttp(factory: CocosMcpServer, port: number, token: string | string[]): Promise<number> {
     this.handler = createMcpHandler(() => factory.create(), { legacy: 'stateless', onerror: error => console.error('[MCP]', error.message) });
     const handler = toNodeHandler(this.handler);
     this.http = createServer((request, response) => {
@@ -31,8 +31,9 @@ export class McpTransport {
         if (!contentType.toLowerCase().startsWith('application/json')) { deny(415, 'Content-Type must be application/json'); return; }
         const contentLength = request.headers['content-length'];
         if (contentLength !== undefined && (!/^\d+$/.test(contentLength) || Number(contentLength) > 8 * 1024 * 1024)) { deny(413, 'MCP request body exceeds 8 MB'); return; }
-        const actual = Buffer.from(request.headers.authorization ?? ''); const expected = Buffer.from(`Bearer ${token}`);
-        if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) { deny(401, 'Bearer token required'); return; }
+        const actual = Buffer.from(request.headers.authorization ?? '');
+        const authenticated = (typeof token === 'string' ? [token] : token).some(value => { const expected = Buffer.from(`Bearer ${value}`); return actual.length === expected.length && timingSafeEqual(actual, expected); });
+        if (!authenticated) { deny(401, 'Bearer token required'); return; }
         if (request.url !== '/mcp') { deny(404, 'Use /mcp'); return; }
         void handler(request as Parameters<typeof handler>[0], response).catch(error => { if (!response.headersSent) deny(500, String(error)); else response.destroy(); });
       } catch { deny(400, 'Invalid request'); }
@@ -46,7 +47,7 @@ export class McpTransport {
 
   async close(): Promise<void> {
     await this.stdio?.close();
-    if (this.http) { this.http.closeAllConnections(); await new Promise<void>((accept, reject) => this.http!.close(error => error ? reject(error) : accept())); }
+    if (this.http?.listening) { this.http.closeAllConnections(); await new Promise<void>((accept, reject) => this.http!.close(error => error ? reject(error) : accept())); }
     await this.handler?.close();
   }
 }

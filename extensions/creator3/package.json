@@ -99,6 +99,16 @@
         "methods": [
           "checkExtension"
         ]
+      },
+      "service-port": {
+        "methods": [
+          "configurePort"
+        ]
+      },
+      "copy-connection": {
+        "methods": [
+          "copyConnection"
+        ]
       }
     },
     "scene": {

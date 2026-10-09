@@ -93,7 +93,11 @@ doctor 会显示 Node 版本、操作系统架构、工程 ID、已发现的编�
 
 ### 5.1 stdio 模式
 
-stdio 适合桌面 MCP 客户端。客户端配置的启动命令应等价于：
+本机客户端优先使用 stdio。在控制中心选择「本机 stdio（推荐）」并点击「复制 stdio 配置」，客户端会通过记录的 Node.js 绝对路径启动已安装扩展内的 `dist/stdio.mjs --project <工程绝对路径>`。离线包包含完整依赖，无需源码仓库、pnpm 或 MCP HTTP 端口。复制操作在扩展主进程内完成。
+
+同工程只能有一个服务及运行时网关；切换前先停止已有 HTTP 服务。客户端管理的 stdio 服务由客户端启停，面板只展示状态。多个客户端同时使用时，共享 HTTP 服务。
+
+源码安装也可使用已有 CLI。stdio 适合桌面 MCP 客户端。客户端配置的启动命令应等价于：
 
 ```bash
 pnpm start serve --project /path/to/my-cocos-project
@@ -126,8 +130,14 @@ HTTP 模式只监听 `127.0.0.1`：
 ```bash
 pnpm start serve \
   --project /path/to/my-cocos-project \
-  --transport http --port 0
+  --transport http
 ```
+
+首次启动分配可用端口并保存到工程 `.codex-work/cache/cocos-mcp/connection.json`，以后省略 `--port` 会复用该端口。显式 `--port 0` 表示重新分配并保存，`--port <端口>` 表示指定端口。端口被占用时启动失败，不会自动切换。
+
+面板的 HTTP 接入方式可在停止服务后保存端口（0 表示下次重新分配）。修改后需更新客户端 URL。端口配置丢失或工程迁移后也需重新确认连接。Bearer token 不随重启或端口修改而轮换。
+
+运行状态保存到 `service.json`，通过认证身份入口核对工程、进程与服务实例；启动租约防止并发创建重复服务。活进程无法完成身份核验时报告冲突，不接管或终止它。PID 已退出的有效租约可以回收，不完整的启动锁保留并报告，需先核查拥有者；不要盲目删除缓存。
 
 服务启动后会在终端输出 MCP URL 和 token 文件路径。token 位于：
 
@@ -143,7 +153,9 @@ Content-Type: application/json
 Authorization: Bearer <token>
 ```
 
-服务会拒绝非本机 Host/Origin、非 JSON 请求、非 POST 请求和超过 8 MiB 的请求体。不要把 token 放入 Git、聊天记录或测试报告。
+服务会拒绝非本机 Host/Origin、非 JSON 请求、非 POST 请求和超过 8 MiB 的请求体。不要把 token 放入 Git、聊天记录或测试报告。面板的「复制 HTTP 配置」会将含 token 的通用 JSON 模板交给系统剪贴板，凭证不进入面板状态或渲染进程；请按客户端实际格式调整并妥善保管。
+
+地址稳定只解决配置失效；HTTP 自动重连由客户端负责，需要单独验收。中断时可重新建立连接和读取状态；写操作结果未知时先使用原 `operationId` 查询记录并读回，不自动重放创建、删除等操作。
 
 ### 5.3 注册全部独立工具
 

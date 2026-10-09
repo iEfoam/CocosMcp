@@ -38,7 +38,7 @@ test('GitHub update validates release and installs while retaining running versi
   const updater = new ExtensionUpdate(project, root, 3);
   const manifest = JSON.parse(await readFile('.codex-work/build/extensions/creator3/package.json', 'utf8'));
   const rows = [];
-  for (const path of ['package.json','LICENSE','dist/main.cjs','dist/scene.cjs','dist/panel.cjs','dist/service.mjs','dist/update.mjs','dist/runtime.js']) rows.push({path, content: (await readFile(join('.codex-work/build/extensions/creator3',path))).toString('base64')});
+  for (const path of files[3]) rows.push({path, content: (await readFile(join('.codex-work/build/extensions/creator3',path))).toString('base64')});
   const data = Buffer.from(JSON.stringify({version: manifest.version, buildId: `v${manifest.version}`, major: 3, rows: rows.map(row => row.path === 'package.json' ? {path: row.path, content: Buffer.from(JSON.stringify({...manifest,buildId: `v${manifest.version}`})).toString('base64')} : row)}));
   const digest = createHash('sha256').update(data).digest('hex');
   const request: typeof fetch = async input => String(input).includes('api.github.com') ? new Response(JSON.stringify({tag_name: `v${manifest.version}`,assets:[{name:'cocos-mcp-creator3.json',browser_download_url:'https://github.com/iEfoam/CocosMcp/releases/download/test/cocos-mcp-creator3.json',digest:`sha256:${digest}`}]})) : new Response(data);

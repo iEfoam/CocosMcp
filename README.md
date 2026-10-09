@@ -184,9 +184,12 @@ Prebuilt packages require no source checkout, pnpm installation, or compilation.
 Release ZIPs intentionally omit this machine-specific file. Use a separately installed Node.js 24+, not Creator's embedded Node. The offline ZIP installation does not need a source `buildRoot`.
 
 5. Open the project, confirm the extension is loaded in the extension manager, and choose **CocosMCP → Open Control Center → Start MCP Service**. This also starts the editor bridge. Game preview and runtime integration remain separate steps.
-6. Add a **Streamable HTTP MCP** connection in your AI client using the actual `http://127.0.0.1:<port>/mcp` address shown in the panel and the Bearer token from `<project>/.codex-work/cache/cocos-mcp/mcp-http-token`. Ports may change after restart. Client configuration formats differ; use your client's HTTP MCP settings. Call `cocos_projects` and `cocos_instances` to verify the target project and editor instance.
+6. Select a connection mode in the control center and copy its configuration (a generic JSON template; adapt it to your client):
+   - **Local stdio (recommended)**: the client launches the extension's bundled `dist/stdio.mjs` with Node.js. No MCP port, source checkout or pnpm installation is needed. Stop any HTTP service for the same project before switching.
+   - **Streamable HTTP**: start the service from the panel. The first assigned port is saved and reused after restart; an occupied port produces an error instead of a silent port change. The configuration includes the Bearer token from `<project>/.codex-work/cache/cocos-mcp/mcp-http-token`; keep it private.
+   The panel recognizes client-owned services and leaves their lifecycle to the client. Multiple clients can share HTTP. Call `cocos_projects` and `cocos_instances` to verify the project and editor instance.
 
-“Offline” means plugin installation needs no dependency downloads; it does not guarantee that your AI model runs offline. Online update checks may fail without a network connection. For stdio-only clients, use the source installation below. To roll back, stop the service, close Creator, and replace the extension directory with its backup.
+“Offline” means plugin installation needs no dependency downloads; it does not guarantee that your AI model runs offline. Online update checks may fail without a network connection. The offline package also includes stdio. HTTP reconnection behavior must be verified for your actual client. To roll back, stop the service, close Creator, and replace the extension directory with its backup.
 
 ## Quick start
 
@@ -227,8 +230,8 @@ pnpm start doctor --project /path/to/my-cocos-project
 # Start stdio transport for an MCP client.
 pnpm start serve --project /path/to/my-cocos-project
 
-# Or start local Streamable HTTP on an automatically assigned port.
-pnpm start serve --project /path/to/my-cocos-project --transport http --port 0
+# Or start local Streamable HTTP: allocate once and reuse the saved port.
+pnpm start serve --project /path/to/my-cocos-project --transport http
 ```
 
 HTTP binds only to `127.0.0.1`, requires a Bearer token, and rejects non-local Host/Origin values. The token is stored in the target project's `.codex-work/cache/cocos-mcp/mcp-http-token`.

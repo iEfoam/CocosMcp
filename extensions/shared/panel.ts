@@ -20,7 +20,7 @@ function esc(value: unknown): string {
 
 function request(major: 2 | 3, message: 'panel-state', cursor?: string): Promise<PanelState>;
 function request(major: 2 | 3, message: 'extension-check' | 'extension-update' | 'start' | 'stop' | 'service-start' | 'service-stop'): Promise<unknown>;
-function request(major: 2 | 3, message: 'set-language' | 'copy-log', value: string): Promise<unknown>;
+function request(major: 2 | 3, message: 'set-language' | 'copy-log' | 'copy-connection' | 'service-port', value: string): Promise<unknown>;
 function request(major: 2 | 3, message: string, ...args: (string | undefined)[]): Promise<unknown> {
   // 面板只通过编辑器 IPC 读取脱敏状态；浏览器请求会带 Origin，不能使用外部 MCP 的认证通道。
   return new Promise((accept, reject) => {
@@ -45,7 +45,7 @@ function errorMessage(error: unknown): string {
 export function createPanelDefinition(major: 2 | 3) {
   const i18n = new PanelI18n();
   const dom = new PanelDom(), logCache = new PanelLogCache();
-  const state = { tab: 'overview', query: '', snapshot: null as PanelState | null, selected: null as PanelState['instance'], supported: [] as string[], logs: [] as PanelState['logs'], runtime: false, error: '', busy: false };
+  const state = { tab: 'overview', query: '', snapshot: null as PanelState | null, selected: null as PanelState['instance'], supported: [] as string[], logs: [] as PanelState['logs'], runtime: false, error: '', busy: false, connectionMode: 'stdio' as 'stdio' | 'http' };
   let navigationRevision = -1;
   let root: HTMLElement;
   let timer: ReturnType<typeof setInterval> | undefined;
@@ -70,7 +70,16 @@ export function createPanelDefinition(major: 2 | 3) {
     const statusClass = !state.error && descriptor ? 'online' : 'offline';
     const service = state.snapshot?.service;
     const serviceLabel = service?.status === 'running' ? i18n.text('已启动') : service?.status === 'starting' ? i18n.text('启动中') : service?.status === 'error' ? i18n.text('启动失败') : i18n.text('未启动');
-    const serviceCard = i18n.html`<section class="panel-card service-card"><h2>MCP 服务 · ${serviceLabel}</h2><p>启动本工程的 MCP 服务及运行时网关。游戏预览仍需接入运行时桥接。</p>${service?.endpoint ? i18n.html`<p>连接地址：<code>${esc(service.endpoint)}</code></p><p>客户端使用 Bearer token，凭证文件：<code>.codex-work/cache/cocos-mcp/mcp-http-token</code></p>` : ''}${service?.error ? `<div class="notice error">${esc(service.error)}</div>` : ''}<div class="card-footer"><button class="primary" data-action="${service?.status === 'running' ? 'service-restart' : 'service-start'}">${service?.status === 'running' ? i18n.text('重启') : i18n.text('启动')} MCP 服务</button><button class="secondary" data-action="service-stop">停止 MCP 服务</button></div><p>由此处启动的服务随扩展卸载或编辑器退出而停止；关闭面板不停止服务。</p></section>`;
+    const externallyManaged = service?.managed === false && ['running', 'starting'].includes(service.status);
+    const serviceCard = i18n.html`<section class="panel-card service-card"><h2>MCP 服务 · ${serviceLabel}</h2>
+      <p>${externallyManaged ? i18n.text(service?.owner === 'client' ? '由 AI 客户端管理，请在客户端启停服务。' : '由其他编辑器实例管理，请使用已有连接。') : i18n.text('启动本工程的 MCP 服务及运行时网关。游戏预览仍需接入运行时桥接。')}</p>
+      ${service?.endpoint ? i18n.html`<p>连接地址：<code>${esc(service.endpoint)}</code></p><p>客户端使用 Bearer token，凭证文件：<code>.codex-work/cache/cocos-mcp/mcp-http-token</code></p>` : ''}
+      ${service?.transport === 'stdio' ? i18n.html`<p>stdio 已连接，无需配置 MCP 端口。</p>` : ''}
+      <div class="connection-fields"><label>接入方式<select data-key="connection-mode" data-connection-mode aria-label="接入方式"><option value="stdio" ${state.connectionMode === 'stdio' ? 'selected' : ''}>${i18n.text('本机 stdio（推荐）')}</option><option value="http" ${state.connectionMode === 'http' ? 'selected' : ''}>Streamable HTTP</option></select></label><button class="secondary" data-action="copy-connection">${i18n.text(state.connectionMode === 'stdio' ? '复制 stdio 配置' : '复制 HTTP 配置')}</button></div>
+      <p>通用 JSON 模板，请按客户端配置格式调整。HTTP 配置含认证凭证，请妥善保管。</p><p role="status" aria-live="polite">${esc(copyFeedback)}</p>
+      ${state.connectionMode === 'stdio' ? i18n.html`<p>由客户端启动离线 stdio 入口。切换前请停止已有 HTTP 服务，多个客户端可共享 HTTP 服务。</p>` : i18n.html`<div class="connection-fields"><label>HTTP 端口<input data-key="service-port" data-service-port type="number" min="0" max="65535" step="1" value="${esc(service?.configuredPort ?? 0)}" aria-label="HTTP 端口"></label><button class="secondary" data-action="service-port">保存端口</button></div><p>0 表示下次首次分配；启动成功后保存并复用端口。修改端口前需停止服务并更新客户端配置。</p>`}
+      ${service?.error ? `<div class="notice error">${esc(service.error)}</div>` : ''}
+      <div class="card-footer"><button class="primary" data-action="${service?.status === 'running' ? 'service-restart' : 'service-start'}">${service?.status === 'running' ? i18n.text('重启') : i18n.text('启动')} MCP 服务（HTTP）</button><button class="secondary" data-action="service-stop">停止 MCP 服务</button></div><p>由此处启动的服务随扩展卸载或编辑器退出而停止；关闭面板不停止服务。</p></section>`;
     const runtimeStatus = state.snapshot?.runtimeStatus;
     const runtimeLabel = runtimeStatus?.error ? i18n.text('查询异常') : runtimeStatus?.connected ? i18n.html`已连接 ${runtimeStatus.connected}` : state.runtime ? i18n.text('等待游戏连接') : i18n.text('网关未启动');
     const supportedCount = operations.filter(row => state.supported.includes(row.id)).length;
@@ -137,8 +146,9 @@ export function createPanelDefinition(major: 2 | 3) {
     return pending;
   };
 
-  const command = async (action: 'extension-check' | 'extension-update' | 'start' | 'stop' | 'restart' | 'service-start' | 'service-stop' | 'service-restart'): Promise<void> => {
+  const command = async (action: 'extension-check' | 'extension-update' | 'start' | 'stop' | 'restart' | 'service-start' | 'service-stop' | 'service-restart' | 'copy-connection' | 'service-port'): Promise<void> => {
     if (state.busy || disposed) return;
+    const parameter = action === 'copy-connection' ? state.connectionMode : root.querySelector<HTMLInputElement>('[data-service-port]')?.value ?? '';
     state.busy = true; render();
     try {
       // 先等待已有查询，避免停止后的界面被旧的在线状态覆盖。
@@ -148,7 +158,8 @@ export function createPanelDefinition(major: 2 | 3) {
       if (action === 'restart' || action === 'service-restart') {
         await request(major, action === 'restart' ? 'stop' : 'service-stop');
         await request(major, action === 'restart' ? 'start' : 'service-start');
-      } else await request(major, action);
+      } else if (action === 'copy-connection' || action === 'service-port') { await request(major, action, parameter); if (action === 'copy-connection') copyFeedback = i18n.text('复制成功'); }
+      else await request(major, action);
       await refresh();
     } catch (error) { await refresh(); state.error = errorMessage(error); }
     finally { state.busy = false; render(); }
@@ -157,6 +168,8 @@ export function createPanelDefinition(major: 2 | 3) {
   const logViewRows = () => logBrowser.view(state.logs).rows;
   const serviceRunning = (): boolean => ['running', 'starting'].includes(state.snapshot?.service?.status ?? '');
   const bind = (): void => {
+    const connectionMode = root.querySelector<HTMLSelectElement>('[data-connection-mode]');
+    dom.on(connectionMode, 'change', () => { if (connectionMode?.value === 'stdio' || connectionMode?.value === 'http') { state.connectionMode = connectionMode.value; copyFeedback = ''; render(); } });
     root.querySelectorAll<HTMLButtonElement>('[data-locale]').forEach(button => {
       button.disabled = state.busy;
       dom.on(button, 'click', () => {
@@ -192,12 +205,13 @@ export function createPanelDefinition(major: 2 | 3) {
     root.querySelectorAll<HTMLButtonElement>('[data-action]').forEach(button => {
       const action = button.dataset.action;
       const serviceStarting = state.snapshot?.service?.status === 'starting' && action?.startsWith('service-') === true;
+      const connectionUnavailable = (action === 'service-port' && serviceRunning()) || (action === 'copy-connection' && state.connectionMode === 'http' && (!state.snapshot?.service?.endpoint || state.snapshot.service.status !== 'running')) || (action?.startsWith('service-') === true && state.snapshot?.service?.managed === false && serviceRunning());
       const stopUnavailable = (action === 'service-stop' && !serviceRunning()) || (action === 'stop' && !state.selected);
-      button.disabled = state.busy || ((action === 'extension-check' || action === 'extension-update') && state.snapshot?.extension?.checking === true) || (action === 'extension-update' && state.snapshot?.extension?.updating === true) || serviceStarting || stopUnavailable || (!state.snapshot && action !== 'refresh');
+      button.disabled = state.busy || ((action === 'extension-check' || action === 'extension-update') && state.snapshot?.extension?.checking === true) || (action === 'extension-update' && state.snapshot?.extension?.updating === true) || serviceStarting || connectionUnavailable || stopUnavailable || (!state.snapshot && action !== 'refresh');
       dom.on(button, 'click', () => {
         const action = button.dataset.action;
         if (action === 'refresh') { if (state.tab === 'logs') logBrowser.latest(); void refresh(); }
-        else if (action === 'extension-check' || action === 'extension-update' || action === 'start' || action === 'stop' || action === 'service-start' || action === 'service-stop' || action === 'restart' || action === 'service-restart') void command(action);
+        else if (action === 'extension-check' || action === 'extension-update' || action === 'start' || action === 'stop' || action === 'service-start' || action === 'service-stop' || action === 'restart' || action === 'service-restart' || action === 'copy-connection' || action === 'service-port') void command(action);
       });
     });
     root.querySelectorAll<HTMLButtonElement>('[data-log-page]').forEach(button => {
@@ -231,6 +245,7 @@ export function createPanelDefinition(major: 2 | 3) {
     template: '<div id="cocos-mcp-control-center"></div>',
     $: { root: '#cocos-mcp-control-center' },
     style: `
+      .connection-fields { display:flex; align-items:end; gap:12px; flex-wrap:wrap; margin:12px 0; } .connection-fields label { display:flex; flex-direction:column; gap:6px; flex:1; min-width:150px; } .connection-fields select, .connection-fields input { width:100%; min-height:32px; padding:6px 8px; border:1px solid var(--color-normal-border, #3b4252); border-radius:6px; background:var(--color-normal-fill, #171a21); color:inherit; } .service-card code { overflow-wrap:anywhere; }
       :host { color: var(--color-normal-contrast, #e6e9f0); background: var(--color-normal-fill, #171a21); font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif; font-size: 12px; }
       * { box-sizing: border-box; } #cocos-mcp-control-center { height: 100%; } .shell { height: 100%; display:flex; flex-direction:column; background: radial-gradient(circle at 0% 0%, rgba(79,125,255,.16), transparent 34%), var(--color-normal-fill, #171a21); }
       .hero { padding: 16px 18px 14px; display:flex; align-items:flex-start; justify-content:space-between; border-bottom:1px solid rgba(255,255,255,.07); } .brand { display:flex; gap:14px; align-items:center; } .brand-icon { width:42px; height:42px; border-radius:13px; display:grid; place-items:center; font-size:22px; color:#fff; background:linear-gradient(145deg,#6c8cff,#8366e8); box-shadow:0 8px 24px rgba(89,105,255,.32); } .eyebrow,.section-kicker { letter-spacing:.14em; font-size:9px; color:#8c9ac5; font-weight:700; } h1,h2,h3,p { margin:0; } h1 { margin-top:4px; font-size:20px; letter-spacing:-.03em; } .brand p { margin-top:5px; color:#8790a5; } .hero-actions { display:flex; gap:9px; align-items:center; } .status-pill { display:inline-flex; align-items:center; gap:7px; border-radius:999px; padding:6px 10px; color:#aeb6c8; background:rgba(255,255,255,.06); font-size:11px; } .status-pill i { width:7px; height:7px; border-radius:50%; background:#798297; } .status-pill.online { color:#79ddb4; background:rgba(70,194,139,.11); } .status-pill.online i { background:#52d99c; box-shadow:0 0 0 3px rgba(82,217,156,.13); } .icon-button,.secondary,.primary,.text-button { border:0; cursor:pointer; font:inherit; } .icon-button { width:29px; height:29px; border-radius:9px; color:#b3bdd4; background:rgba(255,255,255,.07); font-size:18px; } .icon-button:hover,.secondary:hover { background:rgba(255,255,255,.12); color:#fff; }
@@ -239,6 +254,7 @@ export function createPanelDefinition(major: 2 | 3) {
       .tab-page { min-height:300px; } .page-heading p { margin-top:5px; color:#80899e; } .search { display:flex; align-items:center; gap:7px; width:220px; height:31px; padding:0 10px; border:1px solid rgba(255,255,255,.1); border-radius:9px; background:rgba(0,0,0,.14); color:#8995b3; } .search input { width:100%; border:0; outline:0; color:#e7eaf3; background:transparent; font:inherit; } .search input::placeholder { color:#727b90; } .capability-list { margin-top:17px; border-top:1px solid rgba(255,255,255,.07); } .capability-row { display:flex; align-items:center; gap:10px; min-height:54px; border-bottom:1px solid rgba(255,255,255,.055); } .capability-mark { width:7px; height:7px; margin-left:3px; border-radius:50%; background:#6f7a8e; } .capability-mark.active { background:#56d79e; box-shadow:0 0 0 3px rgba(86,215,158,.12); } .capability-mark.planned { background:#d6a75b; } .capability-main { display:flex; flex-direction:column; gap:4px; flex:1; min-width:0; } .capability-main strong { color:#dfe4f1; font:600 11px ui-monospace,SFMono-Regular,Menlo,monospace; } .capability-main span { color:#818ba0; font-size:10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; } .capability-meta { display:flex; align-items:center; gap:6px; } .tag { border-radius:5px; padding:3px 5px; color:#909bb5; background:rgba(255,255,255,.06); font-size:9px; } .list-hint { padding:13px; text-align:center; color:#7d879c; } .log-list { margin-top:17px; border-top:1px solid rgba(255,255,255,.07); } .log-row { display:flex; align-items:center; gap:9px; min-height:38px; border-bottom:1px solid rgba(255,255,255,.05); font-size:10px; } .log-sequence { width:28px; color:#606b80; text-align:right; } .log-level { width:36px; text-transform:uppercase; font-size:9px; font-weight:700; } .log-level.info { color:#76a5ff; } .log-level.warn { color:#e3b86e; } .log-level.error { color:#f17f8b; } .log-message { flex:1; color:#b5bdce; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .log-row time { color:#697489; } .runtime-card { display:flex; align-items:center; gap:18px; margin-top:18px; padding:24px; } .runtime-orb { width:58px; height:58px; display:grid; place-items:center; border-radius:50%; color:#788398; background:rgba(255,255,255,.06); font-size:27px; } .runtime-orb.active { color:#6be0ad; background:rgba(74,207,148,.11); box-shadow:0 0 0 8px rgba(74,207,148,.05); } .runtime-card h3 { font-size:14px; } .runtime-card p { margin-top:6px; color:#828da3; } .runtime-features { display:flex; flex-wrap:wrap; gap:7px; margin-top:13px; } .runtime-features span { padding:7px 10px; border-radius:7px; color:#a9b2c6; background:rgba(255,255,255,.05); } .notice { margin-bottom:14px; padding:10px 12px; border-radius:9px; font-size:11px; } .notice.error { color:#ffabb4; background:rgba(231,91,111,.12); border:1px solid rgba(231,91,111,.2); } .notice span { display:inline-grid; place-items:center; width:16px; height:16px; margin-right:7px; border-radius:50%; background:#d85f73; color:#fff; } .empty { display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:145px; text-align:center; color:#818ba1; } .empty > span { margin-bottom:8px; color:#68758f; font-size:26px; } .empty strong { color:#bdc5d5; font-size:12px; } .empty small { margin-top:5px; color:#727e96; } .footer { display:flex; justify-content:space-between; padding:11px 28px 14px; color:#626d83; font-size:10px; } @media (max-width: 620px) { .hero,.content { padding-left:18px; padding-right:18px; } .tabs { padding-left:18px; } .metric-grid { grid-template-columns:repeat(2,1fr); } .split-grid { grid-template-columns:1fr; } .capability-meta .tag { display:none; } }
       /* 固定区域不参与纵向压缩，只有内容区滚动，避免卡片滑到标签栏下方。 */
       .info-card { margin-top:18px; padding:24px; } .info-card p { margin:14px 0; line-height:1.65; color:#a9b2c6; } .info-card dl { display:grid; grid-template-columns:100px minmax(0,1fr); gap:12px; margin:20px 0; } .info-card dt { color:#8995ad; } .info-card dd { margin:0; overflow-wrap:anywhere; user-select:text; } .info-actions { display:flex; gap:10px; flex-wrap:wrap; }
+      .connection-fields { display:flex; align-items:end; gap:12px; flex-wrap:wrap; margin:12px 0; } .connection-fields label { display:flex; flex-direction:column; gap:6px; flex:1; min-width:150px; } .connection-fields select, .connection-fields input { width:100%; min-height:32px; padding:6px 8px; border:1px solid var(--color-normal-border, #3b4252); border-radius:6px; background:var(--color-normal-fill, #171a21); color:inherit; } .service-card code { overflow-wrap:anywhere; }
       :host { display:block; height:100%; min-height:0; overflow:hidden; }
       .shell { min-height:0; overflow:hidden; }
       .hero,.tabs,.footer { flex-shrink:0; }

@@ -35,7 +35,7 @@ Native acceptance is fixture-specific. The 2.4.15 line has up to 112 editor and 
 1. Install the extension into your Creator project and enable it in Extension Manager.
 2. Open **CocosMCP → 打开控制中心 (Open Control Center)**. Menu order: **About CocosMCP → Open Control Center → Check for Updates**, with dedicated about/update views. Bridge start/stop controls are inside the control center. English and Simplified Chinese are supported.
 3. Make Node.js 24 or later available. When installing from source, use the CocosMCP installer to record the Node.js executable path.
-4. Start the bridge and MCP service, then configure your MCP client using the connection settings shown in the control center.
+4. Select a connection mode and copy the generic JSON template. Prefer bundled stdio for local clients: no MCP port or pnpm is needed. HTTP saves and reuses its first port and reports conflicts. Stop the existing service before switching; client-owned services are managed by the client. HTTP configuration includes credentials; keep it private and adapt it to your client.
 5. Inspect available capabilities before requesting changes. Reload the extension after an update and restart the MCP service.
 
 ## Compatibility and platforms
