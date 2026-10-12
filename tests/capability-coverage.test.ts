@@ -28,13 +28,13 @@ test('module completeness is not inferred from registered implemented operations
   const rows = new CapabilityCatalog().coverage().rows;
   assert.equal(rows.find(row => row.id === 'F04')!.status, 'partial');
   assert.equal(rows.find(row => row.id === 'F20')!.status, 'partial');
-  assert.equal(rows.find(row => row.id === 'F47')!.registeredServiceTools, 6);
+  assert.equal(rows.find(row => row.id === 'F47')!.registeredServiceTools, 7);
   assert.equal(rows.find(row => row.id === 'F47')!.status, 'partial');
   assert.equal(rows.find(row => row.id === 'F52')!.registeredServiceTools, 3);
   assert.equal(rows.find(row => row.id === 'F52')!.status, 'partial');
   assert.equal(rows.find(row => row.id === 'F13')!.registeredServiceTools, 0);
   assert.equal(new CapabilityCatalog().coverage().counting.aliasServiceTools, 3);
-  assert.equal(new CapabilityCatalog().search('build').serviceTools.rows.length, 6);
+  assert.equal(new CapabilityCatalog().search('build').serviceTools.rows.length, 7);
   assert.equal(new CapabilityCatalog().search('workflow').serviceTools.rows.length, 3);
 });
 

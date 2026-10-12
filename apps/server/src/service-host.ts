@@ -1,5 +1,5 @@
 import { CocosApplication, ProjectRegistry } from '../../../packages/application/src/index.js';
-import { ServiceConnections, type ServiceLease } from '../../../packages/application/src/service-connections.js';
+import { ServiceConnections, type ServiceLease, type ServiceClientControl } from '../../../packages/application/src/service-connections.js';
 import { RuntimeGateway } from '../../../packages/application/src/runtime-gateway.js';
 import { BuildJobs } from '../../../packages/native-adapters/src/build.js';
 import { CocosError } from '../../../packages/contracts/src/index.js';
@@ -9,6 +9,7 @@ import { McpTransport } from './transport.js';
 interface ServiceOptions {
   transport: 'stdio' | 'http'; owner: 'client' | 'extension'; port?: number; tokenFile?: string;
   runtime?: boolean; allowProjectCode?: boolean; allTools?: boolean;
+  sharedControl?: ServiceClientControl;
 }
 
 /** CLI、离线 stdio 和面板共享同一启动/退出流程，服务归属不随面板打开关闭变化。 */
@@ -20,6 +21,7 @@ export class ServiceHost {
   private closing: Promise<void> | undefined;
   private starting: Promise<string | null> | undefined;
   private cleaning: Promise<void> | undefined;
+  private factory: CocosMcpServer | undefined;
   constructor(private readonly projects: ProjectRegistry) {}
   start(options: ServiceOptions): Promise<string | null> {
     if (this.starting) return this.starting;
@@ -31,26 +33,31 @@ export class ServiceHost {
     if (Number(process.versions.node.split('.')[0]) < 24) throw new Error('MCP 服务需要 Node.js 24 或更高版本');
     const connections = this.projects.list().rows.map(row => new ServiceConnections(this.projects.paths(row.projectId)));
     if (!connections.length) throw new CocosError('INVALID_ARGUMENT', 'Missing project');
+    if (options.sharedControl && (connections.length !== 1 || options.transport !== 'http' || options.owner !== 'client' || options.port !== undefined)) throw new CocosError('INVALID_ARGUMENT', 'Shared workers require exactly one project and a dynamically allocated HTTP endpoint');
     try {
       for (const connection of [...connections].sort((a, b) => a.projectId.localeCompare(b.projectId))) {
-        this.leases.push(await connection.claim(options.transport, options.owner, connection === connections[0] ? options.tokenFile : undefined));
+        this.leases.push(await connection.claim(options.transport, options.owner, connection === connections[0] ? options.tokenFile : undefined, options.sharedControl));
       }
+      // 启动即恢复构建占用，不能等第一次 build 工具才发现仍存活的遗留进程。
+      for (const row of this.projects.list().rows) await this.builds.list(row.projectId, row.projectPath);
       if (options.runtime !== false) { this.gateway = new RuntimeGateway(this.projects); console.error(`[CocosMCP] Development runtime gateway: 127.0.0.1:${await this.gateway.start()}`); }
       const application = new CocosApplication(this.projects, undefined, undefined, options.allowProjectCode ?? false, this.gateway);
       const factory = new CocosMcpServer(application, this.gateway, this.builds, options.allTools ?? false);
+      this.factory = factory;
       let endpoint: string | null = null;
       if (options.transport === 'http') {
-        const saved = [...new Set((await Promise.all(connections.map(connection => connection.port()))).filter(port => port > 0))];
+        // 共享后端地址由身份描述发现，不能覆盖用户为独立 HTTP 接入保存的端口。
+        const saved = options.sharedControl ? [] : [...new Set((await Promise.all(connections.map(connection => connection.port()))).filter(port => port > 0))];
         if (options.port === undefined && saved.length > 1) throw new CocosError('OPERATION_CONFLICT', 'Projects have different saved HTTP ports; start them separately or choose --port explicitly');
         const requested = options.port ?? saved[0] ?? 0;
         let port: number;
-        try { port = await this.transport.startHttp(factory, requested, this.leases.map(lease => lease.token())); }
+        try { port = await this.transport.startHttp(factory, requested, this.leases.map(lease => lease.token()), options.sharedControl); }
         catch (error) {
           if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') throw new CocosError('RESOURCE_BUSY', `MCP 端口 ${requested} 已被占用；请释放端口或显式修改连接配置，不会自动切换端口`);
           throw error;
         }
         endpoint = `http://127.0.0.1:${port}/mcp`;
-        for (const connection of connections) await connection.savePort(port);
+        if (!options.sharedControl) for (const connection of connections) await connection.savePort(port);
       }
       for (const lease of this.leases) await lease.publish(endpoint);
       if (options.transport === 'stdio') { this.transport.startStdio(factory); process.stdin.once('end', () => { void this.close().catch(error => console.error(error)); }); }
@@ -66,6 +73,7 @@ export class ServiceHost {
     })();
     return this.closing;
   }
+  busy(): boolean { return Boolean(this.factory?.active() || this.builds.active() || this.gateway?.active()); }
   private cleanup(): Promise<void> {
     return this.cleaning ??= this.releaseResources();
   }

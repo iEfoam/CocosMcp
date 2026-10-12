@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 import { writeFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { CocosError, Json, type JsonObject, type JsonValue } from '../../contracts/src/index.js';
@@ -8,7 +9,7 @@ import type { ProjectRegistry } from './registry.js';
 
 interface Command { id: string; capabilityId: string; params: JsonObject }
 interface Pending { sessionId: string; resolve(value: JsonValue): void; reject(error: Error): void; timer: NodeJS.Timeout }
-interface RuntimeSession { id: string; projectId: string; version: string; platform: string; lastSeen: string; commands: Command[]; wake?: () => void }
+interface RuntimeSession { id: string; projectId: string; version: string; platform: string; lastSeen: string; seen: number; commands: Command[]; wake?: () => void }
 
 export class RuntimeGateway implements RuntimeExecutor {
   private server: Server | undefined;
@@ -17,7 +18,7 @@ export class RuntimeGateway implements RuntimeExecutor {
   private readonly pending = new Map<string, Pending>();
   private readonly configPaths: string[] = [];
 
-  constructor(private readonly projects: ProjectRegistry, private readonly timeoutMs = 30_000, private readonly sessionTtlMs = 30_000, private readonly now = Date.now) {}
+  constructor(private readonly projects: ProjectRegistry, private readonly timeoutMs = 30_000, private readonly sessionTtlMs = 30_000, private readonly now = Date.now, private readonly elapsed = now === Date.now ? () => performance.now() : now) {}
 
   private removeSession(session: RuntimeSession): void {
     session.wake?.(); this.sessions.delete(session.id);
@@ -26,7 +27,7 @@ export class RuntimeGateway implements RuntimeExecutor {
   }
 
   private liveSessions(): RuntimeSession[] {
-    for (const session of this.sessions.values()) if (this.now() - Date.parse(session.lastSeen) >= this.sessionTtlMs) this.removeSession(session);
+    for (const session of this.sessions.values()) if (this.elapsed() - session.seen >= this.sessionTtlMs) this.removeSession(session);
     return [...this.sessions.values()];
   }
 
@@ -49,6 +50,8 @@ export class RuntimeGateway implements RuntimeExecutor {
     this.projects.paths(projectId);
     return { rows: this.liveSessions().filter(session => session.projectId === projectId).map(session => ({ runtimeInstanceId: session.id, version: session.version, platform: session.platform, lastSeen: session.lastSeen })) };
   }
+
+  active(): boolean { return this.liveSessions().length > 0 || this.pending.size > 0; }
 
   async execute(projectId: string, runtimeInstanceId: string | undefined, capabilityId: string, params: JsonObject, signal?: AbortSignal): Promise<JsonValue> {
     const rows = this.liveSessions().filter(session => session.projectId === projectId && (!runtimeInstanceId || session.id === runtimeInstanceId));
@@ -109,12 +112,13 @@ export class RuntimeGateway implements RuntimeExecutor {
       if (request.url === '/runtime/sessions') { reply(200, this.list(projectId)); return; }
       if (request.url === '/runtime/register') {
         this.liveSessions();
-        const session: RuntimeSession = { id: randomUUID(), projectId, version: String(body.version ?? 'unknown'), platform: String(body.platform ?? 'unknown'), lastSeen: new Date(this.now()).toISOString(), commands: [] };
+        const session: RuntimeSession = { id: randomUUID(), projectId, version: String(body.version ?? 'unknown'), platform: String(body.platform ?? 'unknown'), lastSeen: new Date(this.now()).toISOString(), seen: this.elapsed(), commands: [] };
         this.sessions.set(session.id, session); reply(200, { runtimeInstanceId: session.id }); return;
       }
       const session = this.sessions.get(Json.string(body.runtimeInstanceId, 'runtimeInstanceId'));
       if (!session || session.projectId !== projectId) throw new CocosError('UNAUTHORIZED', 'Runtime session is unavailable');
       session.lastSeen = new Date(this.now()).toISOString();
+      session.seen = this.elapsed();
       if (request.url === '/runtime/poll') {
         if (!session.commands.length) await new Promise<void>(accept => {
           const timer = setTimeout(() => { delete session.wake; accept(); }, 5000);

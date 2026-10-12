@@ -12,7 +12,8 @@ export interface PanelState {
   supportedCapabilities: string[];
   logs: JsonObject[];
   logWindow?: { epoch: string; cursor: number; droppedBefore: number; reset: boolean };
-  service?: { status: 'stopped' | 'starting' | 'running' | 'error'; endpoint: string | null; error: string | null; owner?: 'client' | 'extension'; transport?: 'stdio' | 'http'; managed?: boolean; configuredPort?: number };
+  service?: { status: 'stopped' | 'starting' | 'running' | 'error'; endpoint: string | null; error: string | null; owner?: 'client' | 'extension'; transport?: 'stdio' | 'http'; managed?: boolean; configuredPort?: number;
+    shared?: boolean; clientCount?: number; clientStatusError?: string; unifiedClient?: { installed: boolean; version?: string; buildId?: string; error?: string } };
   runtimeConfigured: boolean;
   runtimeStatus?: { connected: number; error: string | null };
 

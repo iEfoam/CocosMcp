@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { zipSync } from 'fflate';
 import { VerificationBuild } from './verification.mjs';
 import files from '../packages/native-adapters/src/extension-files.json' with { type: 'json' };
+import clientFiles from '../packages/native-adapters/src/client-files.json' with { type: 'json' };
 
 const output = '.codex-work/build/releases';
 const verification = new VerificationBuild();
@@ -40,6 +41,14 @@ for (const major of [2, 3]) {
   // 升级必须使用整包本地安装/ZIP；禁止为旧白名单继续发布缺运行文件的包。
   await save(`cocos-mcp-creator${major}.json`, JSON.stringify({ ...bundle, rows: rows.filter(row => files[major].includes(row.path)) }));
 }
-await save('release-manifest.json', JSON.stringify({ sourceFingerprint: fingerprint, packages, artifacts: artifacts.slice() }, null, 2));
+const clientRoot = '.codex-work/build/client', clientManifest = JSON.parse(await readFile(join(clientRoot, 'manifest.json'), 'utf8')), clientArchive = {};
+if (clientManifest.sourceFingerprint !== fingerprint || clientManifest.verificationReportSha256 !== reportHash) throw new Error('Unified client build is stale; run pnpm check');
+for (const name of [...clientFiles, 'manifest.json']) {
+  const bytes = await readFile(join(clientRoot, name));
+  if (!bytes.length || (name !== 'manifest.json' && createHash('sha256').update(bytes).digest('hex') !== clientManifest.fileHashes[name])) throw new Error(`Invalid client release file: ${name}`);
+  clientArchive[name] = [bytes, { mtime: new Date('2000-01-01T00:00:00Z') }];
+}
+await save('cocos-mcp-client.zip', zipSync(clientArchive));
+await save('release-manifest.json', JSON.stringify({ sourceFingerprint: fingerprint, packages, client: { version: clientManifest.version, buildId: clientManifest.buildId }, artifacts: artifacts.slice() }, null, 2));
 await writeFile(join(output, 'SHA256SUMS'), artifacts.map(row => `${row.sha256}  ${row.name}\n`).join(''));
 console.log(`Packaged ${packages.length} Creator versions from verified source ${fingerprint.slice(0, 12)} in ${output}`);

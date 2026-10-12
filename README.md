@@ -193,6 +193,8 @@ Release ZIPs intentionally omit this machine-specific file. Use a separately ins
 
 ## Quick start
 
+For multiple game projects, use the [unified stdio client](docs/unified-client.md). Configure Codex once, then connect projects through `cocos_project_connect`. Independent sessions share one backend per project. After `pnpm check`, run `pnpm client:install`, or install the standalone offline client ZIP.
+
 ### 1. Install and build
 
 Use **Node.js 24+**, **pnpm 11** (the repository pins the exact version in `package.json`), and an existing Cocos Creator project.

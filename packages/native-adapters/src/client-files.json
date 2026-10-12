@@ -1,0 +1,7 @@
+[
+  "launcher.mjs",
+  "router.mjs",
+  "worker.mjs",
+  "install.mjs",
+  "LICENSE"
+]

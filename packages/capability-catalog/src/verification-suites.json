@@ -1,5 +1,15 @@
 [
   {
+    "source": "tests/unified-client.test.ts",
+    "level": "adapter-tested",
+    "entryIds": ["cocos_project_connect", "cocos_project_disconnect", "cocos_connection_status"]
+  },
+  {
+    "source": "tests/shared-build.test.ts",
+    "level": "adapter-tested",
+    "entryIds": ["cocos_build_start", "cocos_build_recover"]
+  },
+  {
     "source": "tests/roadmap-services.test.ts",
     "level": "adapter-tested",
     "entryIds": [

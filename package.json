@@ -14,7 +14,9 @@
     "test": "node scripts/project-env.mjs node scripts/test.mjs",
     "start": "node scripts/project-env.mjs node .codex-work/build/server/cli.mjs",
     "catalog": "node scripts/project-env.mjs node .codex-work/build/server/cli.mjs catalog",
-    "check": "pnpm typecheck && pnpm build && pnpm test && pnpm build"
+    "check": "pnpm typecheck && pnpm build && pnpm test && pnpm build",
+    "client:install": "node scripts/project-env.mjs node .codex-work/build/client/install.mjs --workspace . --allowed-root ..",
+    "client:rollback": "node scripts/project-env.mjs node .codex-work/build/client/install.mjs --workspace . --rollback"
   },
   "dependencies": {
     "@modelcontextprotocol/node": "2.0.0",
@@ -22,10 +24,10 @@
     "@modelcontextprotocol/server": "2.0.0",
     "ajv": "8.20.0",
     "hono": "4.11.4",
-    "zod": "4.6.5"
+    "zod": "4.6.5",
+    "@modelcontextprotocol/client": "2.0.0"
   },
   "devDependencies": {
-    "@modelcontextprotocol/client": "2.0.0",
     "@types/node": "24.10.1",
     "esbuild": "0.28.2",
     "fflate": "0.8.2",

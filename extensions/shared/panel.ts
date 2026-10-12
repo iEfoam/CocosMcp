@@ -46,7 +46,8 @@ function errorMessage(error: unknown): string {
 export function createPanelDefinition(major: 2 | 3) {
   const i18n = new PanelI18n();
   const dom = new PanelDom(), logCache = new PanelLogCache();
-  const state = { tab: 'overview', query: '', snapshot: null as PanelState | null, selected: null as PanelState['instance'], supported: [] as string[], logs: [] as PanelState['logs'], runtime: false, error: '', busy: false, connectionMode: 'stdio' as 'stdio' | 'http' };
+  const state = { tab: 'overview', query: '', snapshot: null as PanelState | null, selected: null as PanelState['instance'], supported: [] as string[], logs: [] as PanelState['logs'], runtime: false, error: '', busy: false, connectionMode: 'stdio' as 'unified' | 'stdio' | 'http' };
+  let connectionChosen = false;
   let navigationRevision = -1;
   let root: HTMLElement;
   let timer: ReturnType<typeof setInterval> | undefined;
@@ -73,12 +74,13 @@ export function createPanelDefinition(major: 2 | 3) {
     const serviceLabel = service?.status === 'running' ? i18n.text('已启动') : service?.status === 'starting' ? i18n.text('启动中') : service?.status === 'error' ? i18n.text('启动失败') : i18n.text('未启动');
     const externallyManaged = service?.managed === false && ['running', 'starting'].includes(service.status);
     const serviceCard = i18n.html`<section class="panel-card service-card"><h2>MCP 服务 · ${serviceLabel}</h2>
-      <p>${externallyManaged ? i18n.text(service?.owner === 'client' ? '由 AI 客户端管理，请在客户端启停服务。' : '由其他编辑器实例管理，请使用已有连接。') : i18n.text('启动本工程的 MCP 服务及运行时网关。游戏预览仍需接入运行时桥接。')}</p>
-      ${service?.endpoint ? i18n.html`<p>连接地址：<code>${esc(service.endpoint)}</code></p><p>客户端使用 Bearer token，凭证文件：<code>.codex-work/cache/cocos-mcp/mcp-http-token</code></p>` : ''}
+      <p>${service?.shared ? i18n.text('共享后端由统一客户端自动发现，多个会话可同时连接。') : externallyManaged ? i18n.text(service?.owner === 'client' ? '由 AI 客户端管理，请在客户端启停服务。' : '由其他编辑器实例管理，请使用已有连接。') : i18n.text('启动本工程的 MCP 服务及运行时网关。游戏预览仍需接入运行时桥接。')}</p>
+      ${service?.endpoint && !service.shared ? i18n.html`<p>连接地址：<code>${esc(service.endpoint)}</code></p><p>客户端使用 Bearer token，凭证文件：<code>.codex-work/cache/cocos-mcp/mcp-http-token</code></p>` : ''}
       ${service?.transport === 'stdio' ? i18n.html`<p>stdio 已连接，无需配置 MCP 端口。</p>` : ''}
-      <div class="connection-fields"><div class="connection-field"><span class="connection-label">接入方式</span>${dropdowns!.markup('connection-mode', i18n.text('接入方式'), state.connectionMode, [{ value: 'stdio', label: i18n.text('本机 stdio（推荐）') }, { value: 'http', label: 'Streamable HTTP' }], state.busy || !state.snapshot)}</div><button class="secondary connection-action" data-action="copy-connection">${copyIcon}<span>${i18n.text(state.connectionMode === 'stdio' ? '复制 stdio 配置' : '复制 HTTP 配置')}</span></button></div>
-      <p class="connection-help">通用 JSON 模板，请按客户端配置格式调整。HTTP 配置含认证凭证，请妥善保管。</p><p class="copy-feedback connection-feedback" role="status" aria-live="polite">${esc(copyFeedback)}</p>
-      ${state.connectionMode === 'stdio' ? i18n.html`<p class="connection-help">由客户端启动离线 stdio 入口。切换前请停止已有 HTTP 服务，多个客户端可共享 HTTP 服务。</p>` : i18n.html`<div class="connection-fields"><label class="connection-field"><span class="connection-label">HTTP 端口</span><input data-key="service-port" data-service-port type="number" min="0" max="65535" step="1" value="${esc(service?.configuredPort ?? 0)}" aria-label="HTTP 端口"></label><button class="secondary connection-action" data-action="service-port">保存端口</button></div><p class="connection-help">0 表示下次首次分配；启动成功后保存并复用端口。修改端口前需停止服务并更新客户端配置。</p>`}
+      ${service?.shared ? i18n.html`<p>已连接会话：${service.clientCount ?? '—'}${service.clientStatusError ? ` · ${esc(service.clientStatusError)}` : ''}</p>` : ''}
+      <div class="connection-fields"><div class="connection-field"><span class="connection-label">接入方式</span>${dropdowns!.markup('connection-mode', i18n.text('接入方式'), state.connectionMode, [{ value: 'unified', label: i18n.text('统一 stdio（多工程）') }, { value: 'stdio', label: i18n.text('本机 stdio（单工程）') }, { value: 'http', label: 'Streamable HTTP' }], state.busy || !state.snapshot)}</div><button class="secondary connection-action" data-action="copy-connection">${copyIcon}<span>${i18n.text(state.connectionMode === 'unified' ? '复制 Codex 配置' : state.connectionMode === 'stdio' ? '复制 stdio 配置' : '复制 HTTP 配置')}</span></button></div>
+      <p class="connection-help">${i18n.text(state.connectionMode === 'unified' ? '全局配置一次，AI 按当前任务连接工程，无需填写端口。' : '通用 JSON 模板，请按客户端配置格式调整。HTTP 配置含认证凭证，请妥善保管。')}</p><p class="copy-feedback connection-feedback" role="status" aria-live="polite">${esc(copyFeedback)}</p>
+      ${state.connectionMode === 'unified' ? i18n.html`<p class="connection-help">${service?.unifiedClient?.installed ? i18n.html`统一客户端版本：${esc(service.unifiedClient.version)} · ${esc(service.unifiedClient.buildId)}` : i18n.text('统一客户端未安装，请运行 pnpm client:install 并更新扩展')}</p>` : state.connectionMode === 'stdio' ? i18n.html`<p class="connection-help">由客户端启动离线 stdio 入口。切换前请停止已有 HTTP 服务，多个客户端可共享 HTTP 服务。</p>` : i18n.html`<div class="connection-fields"><label class="connection-field"><span class="connection-label">HTTP 端口</span><input data-key="service-port" data-service-port type="number" min="0" max="65535" step="1" value="${esc(service?.configuredPort ?? 0)}" aria-label="HTTP 端口"></label><button class="secondary connection-action" data-action="service-port">保存端口</button></div><p class="connection-help">0 表示下次首次分配；启动成功后保存并复用端口。修改端口前需停止服务并更新客户端配置。</p>`}
       ${service?.error ? `<div class="notice error">${esc(service.error)}</div>` : ''}
       <div class="card-footer"><button class="primary" data-action="${service?.status === 'running' ? 'service-restart' : 'service-start'}">${service?.status === 'running' ? i18n.text('重启') : i18n.text('启动')} MCP 服务（HTTP）</button><button class="secondary" data-action="service-stop">停止 MCP 服务</button></div><p>由此处启动的服务随扩展卸载或编辑器退出而停止；关闭面板不停止服务。</p></section>`;
     const runtimeStatus = state.snapshot?.runtimeStatus;
@@ -133,6 +135,7 @@ export function createPanelDefinition(major: 2 | 3) {
       if (disposed) return;
       if (snapshot.navigation && snapshot.navigation.revision !== navigationRevision) { state.tab = snapshot.navigation.page; navigationRevision = snapshot.navigation.revision; }
       state.snapshot = snapshot; i18n.locale = snapshot.locale === 'en' ? 'en' : 'zh'; state.selected = snapshot.instance;
+      if (!connectionChosen && snapshot.service?.unifiedClient?.installed) { state.connectionMode = 'unified'; connectionChosen = true; }
       state.supported = snapshot.supportedCapabilities; state.logs = logCache.accept(snapshot);
       state.runtime = snapshot.runtimeConfigured; state.error = '';
     }).catch(error => {
@@ -205,7 +208,7 @@ export function createPanelDefinition(major: 2 | 3) {
     root.querySelectorAll<HTMLButtonElement>('[data-action]').forEach(button => {
       const action = button.dataset.action;
       const serviceStarting = state.snapshot?.service?.status === 'starting' && action?.startsWith('service-') === true;
-      const connectionUnavailable = (action === 'service-port' && serviceRunning()) || (action === 'copy-connection' && state.connectionMode === 'http' && (!state.snapshot?.service?.endpoint || state.snapshot.service.status !== 'running')) || (action?.startsWith('service-') === true && state.snapshot?.service?.managed === false && serviceRunning());
+      const connectionUnavailable = (action === 'service-port' && serviceRunning()) || (action === 'copy-connection' && (state.connectionMode === 'unified' && !state.snapshot?.service?.unifiedClient?.installed || state.connectionMode === 'http' && (!state.snapshot?.service?.endpoint || state.snapshot.service.status !== 'running' || state.snapshot.service.shared === true))) || (action?.startsWith('service-') === true && state.snapshot?.service?.managed === false && serviceRunning());
       const stopUnavailable = (action === 'service-stop' && !serviceRunning()) || (action === 'stop' && !state.selected);
       button.disabled = state.busy || ((action === 'extension-check' || action === 'extension-update') && state.snapshot?.extension?.checking === true) || (action === 'extension-update' && state.snapshot?.extension?.updating === true) || serviceStarting || connectionUnavailable || stopUnavailable || (!state.snapshot && action !== 'refresh');
       dom.on(button, 'click', () => {
@@ -299,7 +302,7 @@ export function createPanelDefinition(major: 2 | 3) {
       if (!element) throw new Error(`Creator ${major} control center root element is unavailable`);
       root = element;
       dropdowns = new PanelDropdown(root, dom, (id, value) => {
-        if (id === 'connection-mode' && (value === 'stdio' || value === 'http')) { state.connectionMode = value; copyFeedback = ''; }
+        if (id === 'connection-mode' && (value === 'unified' || value === 'stdio' || value === 'http')) { state.connectionMode = value; connectionChosen = true; copyFeedback = ''; }
         else if (id === 'log-level') logBrowser.filter(value);
         else if (id === 'log-size') logBrowser.resize(Number(value));
         render();

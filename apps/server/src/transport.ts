@@ -1,20 +1,23 @@
 import { createServer, type Server } from 'node:http';
-import { createMcpHandler } from '@modelcontextprotocol/server';
+import { createMcpHandler, type McpServer } from '@modelcontextprotocol/server';
 import { serveStdio, type StdioServerHandle } from '@modelcontextprotocol/server/stdio';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { timingSafeEqual } from 'node:crypto';
-import type { CocosMcpServer } from './mcp.js';
+import type { ServiceClientControl } from '../../../packages/application/src/service-connections.js';
+import { CocosError } from '../../../packages/contracts/src/index.js';
+
+export interface McpServerFactory { create(): McpServer }
 
 export class McpTransport {
   private stdio: StdioServerHandle | undefined;
   private http: Server | undefined;
   private handler: ReturnType<typeof createMcpHandler> | undefined;
 
-  startStdio(factory: CocosMcpServer): void {
+  startStdio(factory: McpServerFactory): void {
     this.stdio = serveStdio(() => factory.create(), { onerror: error => console.error('[MCP]', error.message) });
   }
 
-  async startHttp(factory: CocosMcpServer, port: number, token: string | string[]): Promise<number> {
+  async startHttp(factory: McpServerFactory, port: number, token: string | string[], control?: ServiceClientControl): Promise<number> {
     this.handler = createMcpHandler(() => factory.create(), { legacy: 'stateless', onerror: error => console.error('[MCP]', error.message) });
     const handler = toNodeHandler(this.handler);
     this.http = createServer((request, response) => {
@@ -35,8 +38,9 @@ export class McpTransport {
         const authenticated = (typeof token === 'string' ? [token] : token).some(value => { const expected = Buffer.from(`Bearer ${value}`); return actual.length === expected.length && timingSafeEqual(actual, expected); });
         if (!authenticated) { deny(401, 'Bearer token required'); return; }
         if (request.url !== '/mcp') { deny(404, 'Use /mcp'); return; }
-        void handler(request as Parameters<typeof handler>[0], response).catch(error => { if (!response.headersSent) deny(500, String(error)); else response.destroy(); });
-      } catch { deny(400, 'Invalid request'); }
+        const release = control?.acquire(request);
+        void handler(request as Parameters<typeof handler>[0], response).catch(() => { if (!response.headersSent) deny(500, 'MCP request failed'); else response.destroy(); }).finally(() => release?.());
+      } catch (error) { deny(error instanceof CocosError && error.code === 'UNAUTHORIZED' ? 401 : error instanceof CocosError && error.code === 'RESOURCE_BUSY' ? 409 : 400, 'Invalid or expired client connection'); }
     });
     const server = this.http;
     await new Promise<void>((accept, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', () => { server.off('error', reject); accept(); }); });

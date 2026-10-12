@@ -4,6 +4,7 @@ import { build } from 'esbuild';
 import { mkdir, readFile, writeFile, copyFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import files from '../packages/native-adapters/src/extension-files.json' with { type: 'json' };
+import clientFiles from '../packages/native-adapters/src/client-files.json' with { type: 'json' };
 
 const root = process.cwd();
 const define = await new VerificationBuild().definitions();
@@ -12,6 +13,21 @@ const builtAt = new Date().toISOString();
 await mkdir(join(output, 'server'), { recursive: true });
 await build({ define, entryPoints: ['apps/server/src/cli.ts'], outfile: join(output, 'server/cli.mjs'), bundle: true, platform: 'node', target: 'node24', format: 'esm',
   packages: 'external', sourcemap: true });
+const clientRoot = join(output, 'client');
+await mkdir(clientRoot, { recursive: true });
+for (const [entry, name] of [['router-service', 'router'], ['shared-service', 'worker'], ['install-client', 'install']]) {
+  await build({ define, entryPoints: [`apps/server/src/${entry}.ts`], outfile: join(clientRoot, `${name}.mjs`), bundle: true, platform: 'node', target: 'node24', format: 'esm',
+    banner: { js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);" } });
+}
+await copyFile('scripts/client-launcher.mjs', join(clientRoot, 'launcher.mjs'));
+await copyFile('LICENSE', join(clientRoot, 'LICENSE'));
+const clientHashes = {}, clientDigest = createHash('sha256');
+for (const name of clientFiles) { const bytes = await readFile(join(clientRoot, name)); clientHashes[name] = createHash('sha256').update(bytes).digest('hex'); clientDigest.update(name).update(bytes); }
+const clientEvidence = JSON.parse(define.__COCOS_VERIFICATION_EVIDENCE__), clientFingerprint = JSON.parse(define.__COCOS_SOURCE_FINGERPRINT__);
+await writeFile(join(clientRoot, 'manifest.json'), JSON.stringify({ schemaVersion: 1, kind: 'cocos-unified-client', apiVersion: 1,
+  version: process.env.COCOS_RELEASE_TAG?.replace(/^v/, '') || '0.1.0', buildId: clientDigest.digest('hex').slice(0, 16), builtAt,
+  sourceFingerprint: clientFingerprint, verificationReportSha256: clientEvidence.length && clientEvidence.every(row => row.sourceFingerprint === clientFingerprint) ? clientEvidence[0].reportSha256 : null,
+  fileHashes: clientHashes }, null, 2) + '\n');
 for (const major of [2, 3]) {
   const extensionRoot = join(output, `extensions/creator${major}`);
   const extension = major === 2 ? 'js' : 'cjs';
@@ -24,7 +40,7 @@ for (const major of [2, 3]) {
   await build({ define, entryPoints: ['apps/server/src/update-extension.ts'], outfile: join(extensionRoot, 'dist/update.mjs'), bundle: true, platform: 'node', target: 'node24', format: 'esm' });
   await build({ define, entryPoints: ['packages/runtime3-bridge/src/bootstrap.ts'], outfile: join(extensionRoot, 'dist/runtime.js'), bundle: true,
     platform: 'browser', target: 'es2018', format: 'iife', globalName: 'CocosMCPRuntime' });
-  await writeFile(join(extensionRoot, 'service-config.json'), JSON.stringify({ nodeExecutable: process.execPath }));
+  await writeFile(join(extensionRoot, 'service-config.json'), JSON.stringify({ nodeExecutable: process.execPath, clientInstallation: join(root, '.codex-work/artifacts/cocos-client') }));
   const manifest = JSON.parse(await readFile(`extensions/creator${major}/package.json`, 'utf8'));
   const hash = createHash('sha256');
   // 展示资料变化也必须更新构建身份，否则更新器会把新包误认为已经安装。

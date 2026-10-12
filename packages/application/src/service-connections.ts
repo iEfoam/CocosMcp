@@ -3,13 +3,19 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import { readFile, writeFile, mkdir, rename, unlink, rmdir, lstat, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { URL } from 'node:url';
-import { CocosError } from '../../contracts/src/index.js';
+import { CocosError, Json, type JsonObject, type JsonValue } from '../../contracts/src/index.js';
 import { ProjectPaths } from './paths.js';
 
 export interface ServiceDescriptor {
   schemaVersion: 1; projectId: string; projectPath: string; serviceId: string; pid: number;
   startedAt: string; transport: 'stdio' | 'http'; owner: 'client' | 'extension';
   status: 'starting' | 'running'; endpoint: string | null; identityEndpoint: string; tokenFile: string;
+  apiVersion?: number; mode?: 'shared'; clientControlEndpoint?: string;
+}
+
+export interface ServiceClientControl {
+  handle(route: string, body: JsonObject): JsonValue;
+  acquire(request: import('node:http').IncomingMessage): () => void;
 }
 
 /** 工程接入配置与服务租约共用一个边界，不能用面板内存或 PID 代替服务身份。 */
@@ -77,6 +83,10 @@ export class ServiceConnections {
       !['http', 'stdio'].includes(row.transport) || !['client', 'extension'].includes(row.owner) || !['starting', 'running'].includes(row.status) ||
       typeof row.tokenFile !== 'string' || typeof row.startedAt !== 'string' || !row.startedAt.endsWith('Z') || !Number.isFinite(Date.parse(row.startedAt)) || !this.local(row.identityEndpoint, '/identity') ||
       (row.transport === 'http' && row.status === 'running' ? !this.local(row.endpoint, '/mcp') : row.endpoint !== null)) throw new CocosError('VERIFICATION_FAILED', 'MCP service descriptor does not match this project');
+    if ((row.apiVersion !== undefined && (!Number.isInteger(row.apiVersion) || row.apiVersion < 1)) ||
+      (row.mode !== undefined && row.mode !== 'shared') ||
+      (row.mode === 'shared' && (row.transport !== 'http' || row.owner !== 'client' || !this.local(row.clientControlEndpoint, '/clients') || new URL(row.clientControlEndpoint!).origin !== new URL(row.identityEndpoint).origin)) ||
+      (row.mode === undefined && row.clientControlEndpoint !== undefined)) throw new CocosError('VERIFICATION_FAILED', 'Invalid shared service descriptor');
     return row;
   }
   private local(value: unknown, path: string): boolean {
@@ -102,13 +112,27 @@ export class ServiceConnections {
         call.once('close', () => clearTimeout(timeout)); call.once('error', reject); call.end('{}');
       });
       const actual = this.descriptor(value);
-      if (actual.serviceId === row.serviceId && actual.pid === row.pid && actual.identityEndpoint === row.identityEndpoint && actual.transport === row.transport && actual.owner === row.owner && actual.endpoint === row.endpoint && actual.status === row.status) return actual;
+      if (actual.serviceId === row.serviceId && actual.pid === row.pid && actual.identityEndpoint === row.identityEndpoint && actual.transport === row.transport && actual.owner === row.owner && actual.endpoint === row.endpoint && actual.status === row.status && actual.startedAt === row.startedAt && actual.tokenFile === row.tokenFile && actual.apiVersion === row.apiVersion && actual.mode === row.mode && actual.clientControlEndpoint === row.clientControlEndpoint) return actual;
     } catch { /* 存活但身份无法核实的进程不能被接管或停止。 */ }
     throw new CocosError('RESOURCE_BUSY', 'MCP service PID is alive but its authenticated identity is unavailable; retry after the owner recovers');
   }
-  async claim(transport: 'http' | 'stdio', owner: 'client' | 'extension', tokenFile?: string): Promise<ServiceLease> {
+  async clientStatus(descriptor: ServiceDescriptor): Promise<JsonObject> {
+    if (descriptor.mode !== 'shared' || (await this.active())?.serviceId !== descriptor.serviceId) throw new CocosError('CONTEXT_UNAVAILABLE', 'Authenticated shared backend required');
+    const token = await this.token(descriptor.tokenFile, false);
+    return new Promise((accept, reject) => {
+      const call = request(descriptor.clientControlEndpoint + '/status', { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` } }, response => {
+        const chunks: Buffer[] = []; let size = 0;
+        response.on('data', (chunk: Buffer) => { size += chunk.length; if (size > 16384) call.destroy(new Error('Client status response too large')); else chunks.push(chunk); });
+        response.on('error', reject);
+        response.on('end', () => { try { if (response.statusCode !== 200) throw new Error('Client status denied'); accept(Json.object(JSON.parse(Buffer.concat(chunks).toString('utf8')))); } catch (error) { reject(error); } });
+      });
+      const timeout = setTimeout(() => call.destroy(new Error('Client status timed out')), 1500);
+      call.once('close', () => clearTimeout(timeout)); call.once('error', reject); call.end('{}');
+    });
+  }
+  async claim(transport: 'http' | 'stdio', owner: 'client' | 'extension', tokenFile?: string, control?: ServiceClientControl): Promise<ServiceLease> {
     await this.paths.work('cache', 'cocos-mcp');
-    const lease = new ServiceLease(this, transport, owner, tokenFile);
+    const lease = new ServiceLease(this, transport, owner, tokenFile, control);
     const lock = await this.path('service.lock');
     try {
       await lease.startIdentity();
@@ -176,10 +200,10 @@ export class ServiceLease {
   private readonly descriptor: ServiceDescriptor;
   private tokenValue = '';
   private closed = false;
-  constructor(private readonly connections: ServiceConnections, transport: 'http' | 'stdio', owner: 'client' | 'extension', tokenFile = '.codex-work/cache/cocos-mcp/mcp-http-token') {
+  constructor(private readonly connections: ServiceConnections, transport: 'http' | 'stdio', owner: 'client' | 'extension', tokenFile = '.codex-work/cache/cocos-mcp/mcp-http-token', private readonly control?: ServiceClientControl) {
     this.tokenFile = tokenFile;
     this.descriptor = { schemaVersion: 1, projectId: connections.projectId, projectPath: connections.paths.root, serviceId: randomUUID(), pid: process.pid,
-      startedAt: new Date().toISOString(), transport, owner, status: 'starting', endpoint: null, identityEndpoint: '', tokenFile };
+      startedAt: new Date().toISOString(), transport, owner, status: 'starting', endpoint: null, identityEndpoint: '', tokenFile, apiVersion: 1, ...(control ? { mode: 'shared' as const } : {}) };
   }
   snapshot(): ServiceDescriptor { return { ...this.descriptor }; }
   token(): string { return this.tokenValue; }
@@ -191,12 +215,29 @@ export class ServiceLease {
         const host = new URL(`http://${request.headers.host ?? ''}`).hostname;
         const origin = request.headers.origin ? new URL(request.headers.origin) : null;
         if (!['127.0.0.1', 'localhost', '[::1]'].includes(host) || (origin && (!['http:', 'https:'].includes(origin.protocol) || !['127.0.0.1', 'localhost', '[::1]'].includes(origin.hostname)))) { reply(403, { error: 'Local connection required' }); return; }
-        if (request.method !== 'POST' || request.url !== '/identity') { reply(405, { error: 'Use POST /identity' }); return; }
+        if (request.method !== 'POST') { reply(405, { error: 'Use POST' }); return; }
         const actual = Buffer.from(request.headers.authorization ?? ''), expected = Buffer.from(`Bearer ${this.tokenValue}`);
         if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) { reply(401, { error: 'Bearer token required' }); return; }
-        reply(200, this.snapshot());
+        if (request.url === '/identity') { reply(200, this.snapshot()); request.resume(); return; }
+        if (this.control && ['/clients/register', '/clients/heartbeat', '/clients/release', '/clients/status'].includes(request.url ?? '')) {
+          request.setTimeout(3000, () => request.destroy());
+          const type = request.headers['content-type'];
+          if (!type?.toLowerCase().startsWith('application/json')) { reply(415, { error: 'Use application/json' }); request.resume(); return; }
+          void (async () => {
+            const chunks: Buffer[] = []; let size = 0;
+            for await (const chunk of request) {
+              const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array); size += bytes.length;
+              if (size > 16 * 1024) throw new CocosError('INVALID_ARGUMENT', 'Client control body exceeds 16 KB');
+              chunks.push(bytes);
+            }
+            const body = Json.object(Json.value(JSON.parse(Buffer.concat(chunks).toString('utf8'))));
+            reply(200, this.control!.handle(request.url!, body));
+          })().catch(error => { const failure = CocosError.from(error); if (!response.destroyed) reply(failure.code === 'UNAUTHORIZED' ? 401 : failure.code === 'RESOURCE_BUSY' ? 409 : 400, { error: failure.toJSON() }); });
+          return;
+        }
+        reply(404, { error: 'Unknown service control route' });
       } catch { reply(400, { error: 'Invalid identity request' }); }
-      // 身份入口不消费请求体，也不执行任何工程操作。
+      // 只有经过认证的客户端控制入口读取有界 JSON；普通身份探测不执行工程操作。
       request.resume();
     });
     const server = this.server;
@@ -204,6 +245,7 @@ export class ServiceLease {
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('Service identity listener unavailable');
     this.descriptor.identityEndpoint = `http://127.0.0.1:${address.port}/identity`;
+    if (this.control) this.descriptor.clientControlEndpoint = `http://127.0.0.1:${address.port}/clients`;
   }
   async publish(endpoint: string | null, status: 'starting' | 'running' = 'running'): Promise<void> {
     this.descriptor.endpoint = endpoint; this.descriptor.status = status;

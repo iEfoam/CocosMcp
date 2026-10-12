@@ -3,8 +3,10 @@ import { existsSync, readFileSync } from 'fs';
 import { join, isAbsolute } from 'path';
 import { ProjectPaths } from '../../packages/application/src/paths.js';
 import { ServiceConnections } from '../../packages/application/src/service-connections.js';
+import { ClientPackage } from '../../packages/native-adapters/src/client-installation.js';
+import type { PanelState } from '../../packages/editor-bridge/src/panel-state.js';
 
-export interface McpServiceState { status: 'stopped' | 'starting' | 'running' | 'error'; endpoint: string | null; error: string | null; owner?: 'client' | 'extension'; transport?: 'stdio' | 'http'; managed?: boolean; configuredPort?: number }
+export type McpServiceState = NonNullable<PanelState['service']>;
 
 /** 只管理本扩展启动的子进程，不能停止终端或其他客户端拥有的服务。 */
 export class McpService {
@@ -18,10 +20,21 @@ export class McpService {
     try {
       const connections = await this.connections(), configuredPort = await connections.port(), active = await connections.active();
       if (active) this.state = { status: active.status, endpoint: active.endpoint, error: null, owner: active.owner,
-        transport: active.transport, managed: Boolean(this.child && this.child.pid === active.pid), configuredPort };
+        transport: active.transport, managed: Boolean(this.child && this.child.pid === active.pid), configuredPort, shared: active.mode === 'shared' };
       else this.state = { ...(this.child || this.state.status === 'error' ? this.state : { status: 'stopped' as const, endpoint: null, error: null }), configuredPort };
+      if (active?.mode === 'shared') {
+        try { const status = await connections.clientStatus(active); if (typeof status.clients !== 'number' || !Number.isInteger(status.clients) || status.clients < 0) throw new Error('共享连接状态无效'); this.state.clientCount = status.clients; }
+        catch (error) { this.state.clientStatusError = error instanceof Error ? error.message : String(error); }
+      }
     } catch (error) { this.state = { status: 'error', endpoint: null, error: error instanceof Error ? error.message : String(error) }; }
+    try { const root = this.clientRoot(); const { manifest } = await new ClientPackage().installed(root, false); this.state.unifiedClient = { installed: true, version: manifest.version, buildId: manifest.buildId }; }
+    catch (error) { this.state.unifiedClient = { installed: false, error: error instanceof Error ? error.message : String(error) }; }
     return this.snapshot();
+  }
+  private clientRoot(): string {
+    const config = JSON.parse(readFileSync(join(this.extension, 'service-config.json'), 'utf8')) as { clientInstallation?: string };
+    if (!config.clientInstallation || !isAbsolute(config.clientInstallation)) throw new Error('统一客户端未安装，请运行 pnpm client:install 并更新扩展');
+    return config.clientInstallation;
   }
   private executable(): string {
     const config = JSON.parse(readFileSync(join(this.extension, 'service-config.json'), 'utf8')) as { nodeExecutable?: string };
@@ -47,6 +60,7 @@ export class McpService {
     });
   }
   async configuration(mode: unknown): Promise<string> {
+    if (mode === 'unified') return new ClientPackage().configuration(this.clientRoot(), this.executable());
     if (mode === 'stdio') {
       const entry = join(this.extension, 'dist/stdio.mjs');
       if (!existsSync(entry)) throw new Error('离线 stdio 入口未安装，请更新扩展');
@@ -58,6 +72,7 @@ export class McpService {
     if (mode !== 'http') throw new Error('不支持的接入方式');
     const connections = await this.connections(), service = await connections.active();
     if (!service || service.status !== 'running' || service.transport !== 'http' || !service.endpoint) throw new Error('请先启动 HTTP MCP 服务');
+    if (service.mode === 'shared') throw new Error('共享后端由统一客户端自动发现，请复制统一 stdio 配置');
     // 凭证只交给主进程剪贴板，不通过面板状态、日志或 IPC 返回给渲染进程。
     return JSON.stringify({ mcpServers: { cocos: { url: service.endpoint, headers: { Authorization: `Bearer ${await connections.token(service.tokenFile, false)}` } } } }, null, 2);
   }

@@ -93,7 +93,7 @@ Creator 2 场景加载字节证明仍可为 unknown；外部 Chrome MCP 端到�
 - **本地 MCP 传输**：支持 stdio 与带认证的 Streamable HTTP。
 - **可停靠控制中心**：展示工程与编辑器实例、能力、桥接日志和运行时状态，支持桥接启停。面板支持简体中文 / English，默认中文，按工程保存偏好；日志保留原文并支持复制错误。
 - **可检查的变更**：`scene.snapshot` 和 `scene.diff` 提供场景基线及递归的 `added`、`removed`、`changed` 路径记录，覆盖节点、组件、属性和数组。
-- **可恢复查询的状态**：工作流状态和构建任务索引保存在目标工程 `.codex-work/cache/cocos-mcp/`。服务重启时仍在执行的构建会标记为状态未知失败，避免永久占用工程。
+- **可恢复查询的状态**：工作流状态和构建任务索引保存在目标工程 `.codex-work/cache/cocos-mcp/`。重启时正在执行的构建保留未知结果和原进程保护；确认停止后才解除占用，避免重复使用构建账号。
 - **操作追踪**：显式 `operationId` 支持进程内幂等复用，通过 `cocos_operation_query` 查询已完成结果；审计日志仅记录操作元信息。
 - **源码能力发现**：从 Creator 源码或 ASAR 生成编辑器消息与类型候选目录，或从引擎源码生成 `engine-capabilities.json`。候选能力在单独验证前保持 `source-only`。
 
@@ -188,6 +188,8 @@ Creator 2 场景加载字节证明仍可为 unknown；外部 Chrome MCP 端到�
 此处“离线”指插件安装不需要联网下载依赖，不代表 AI 模型一定能离线运行。断网时可忽略在线更新检查失败；离线包也包含 stdio 入口；客户端是否在 HTTP 服务恢复后自动重连需单独验证。恢复旧版时先停止服务、关闭 Creator，再用备份替换本次扩展目录。
 
 ## 快速开始
+
+多游戏工程建议使用[统一 stdio 客户端](docs/unified-client.md)：全局配置一次，AI 按任务动态连接工程，多个会话共享每工程后端。完成 `pnpm check` 后执行 `pnpm client:install`，也支持独立离线客户端 ZIP。
 
 ### 1. 安装与构建
 

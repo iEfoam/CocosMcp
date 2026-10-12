@@ -18,7 +18,13 @@ export class ExtensionInstaller {
     const staging = join(await paths.work('tmp'), `extension-${randomUUID()}`);
     await cp(source, staging, { recursive: true, force: false, errorOnExist: true });
     new ExtensionHealth().require(staging, major);
-    await writeFile(join(staging, 'service-config.json'), JSON.stringify({ nodeExecutable: process.execPath, buildRoot }), { mode: 0o600 });
+    let config: { clientInstallation?: string } = {};
+    // 离线/在线发行包不包含本机配置，升级先保留目标工程已有的客户端位置。
+    for (const directory of [target, source]) {
+      try { config = JSON.parse(await readFile(directory === target ? await paths.resolve(join(target, 'service-config.json')) : join(source, 'service-config.json'), 'utf8')) as typeof config; if (config.clientInstallation) break; }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    }
+    await writeFile(join(staging, 'service-config.json'), JSON.stringify({ nodeExecutable: process.execPath, buildRoot, clientInstallation: config.clientInstallation }), { mode: 0o600 });
     let backupPath: string | null = null;
     if (await stat(target).then(() => true, () => false)) {
       const previous = JSON.parse(await readFile(join(target, 'package.json'), 'utf8')) as { name?: string };

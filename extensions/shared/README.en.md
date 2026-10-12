@@ -35,7 +35,7 @@ Native acceptance is fixture-specific. The 2.4.15 line has up to 112 editor and 
 1. Install the extension into your Creator project and enable it in Extension Manager.
 2. Open **CocosMCP → 打开控制中心 (Open Control Center)**. Menu order: **About CocosMCP → Open Control Center → Check for Updates**, with dedicated about/update views. Bridge start/stop controls are inside the control center. English and Simplified Chinese are supported.
 3. Make Node.js 24 or later available. When installing from source, use the CocosMCP installer to record the Node.js executable path.
-4. Select a connection mode and copy the generic JSON template. Prefer bundled stdio for local clients: no MCP port or pnpm is needed. HTTP saves and reuses its first port and reports conflicts. Stop the existing service before switching; client-owned services are managed by the client. HTTP configuration includes credentials; keep it private and adapt it to your client.
+4. For multiple projects, install the standalone `cocos-mcp-client.zip`, set clientInstallation in the local service-config.json, then choose “Unified stdio (multiple projects) → Copy Codex configuration”. Configure once globally; AI calls cocos_project_connect for each task and independent sessions share a backend. Bundled stdio remains available for one project. Standalone HTTP saves its port and its configuration contains credentials. Shared backend addresses are discovered by the unified client and cannot be copied as standalone HTTP settings. Client-owned services remain under the original client's control.
 5. Inspect available capabilities before requesting changes. Reload the extension after an update and restart the MCP service.
 
 ## Compatibility and platforms

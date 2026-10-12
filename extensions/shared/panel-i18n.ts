@@ -2,6 +2,14 @@ export type PanelLocale = 'zh' | 'en';
 
 /** 仅翻译界面文案；日志、路径、用户输入等插值始终保留原文。 */
 const english: Record<string, string> = {
+  '统一 stdio（多工程）': 'Unified stdio (multiple projects)',
+  '本机 stdio（单工程）': 'Local stdio (one project)',
+  '复制 Codex 配置': 'Copy Codex configuration',
+  '全局配置一次，AI 按当前任务连接工程，无需填写端口。': 'Configure once globally. AI connects the project for the task; no port is needed.',
+  '统一客户端未安装，请运行 pnpm client:install 并更新扩展': 'Unified client is not installed. Run pnpm client:install and update the extension.',
+  '共享后端由统一客户端自动发现，多个会话可同时连接。': 'The unified client discovers the shared backend automatically. Multiple sessions can connect.',
+  '统一客户端版本：': 'Unified client version: ',
+  '已连接会话：': 'Connected sessions: ',
   "关于 CocosMCP": "About CocosMCP",
   "检查更新": "Check for Updates",
   "当前版本": "Running Version",

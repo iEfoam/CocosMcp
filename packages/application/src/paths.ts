@@ -35,7 +35,7 @@ export class ProjectPaths {
     }
   }
 
-  async work(directory: 'tmp' | 'cache' | 'build' | 'logs' | 'downloads', child = ''): Promise<string> {
+  async work(directory: 'tmp' | 'cache' | 'build' | 'logs' | 'downloads' | 'artifacts', child = ''): Promise<string> {
     const target = await this.resolve(join('.codex-work', directory, child));
     await mkdir(target, { recursive: true });
     return target;

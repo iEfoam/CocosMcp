@@ -26,6 +26,8 @@ export class ProjectRegistry {
     return { rows: [...this.projects].map(([projectId, paths]) => ({ projectId, projectPath: paths.root })) };
   }
 
+  remove(projectId: string): void { this.projects.delete(projectId); }
+
   async instances(projectId: string): Promise<BridgeDescriptor[]> {
     const paths = this.paths(projectId);
     const directory = await paths.resolve('.codex-work/cache/cocos-mcp/instances');
