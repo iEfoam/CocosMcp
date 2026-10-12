@@ -2,7 +2,7 @@ import { parseArgs } from 'node:util';
 import { ProjectRegistry } from '../../../packages/application/src/registry.js';
 import { ProjectPaths } from '../../../packages/application/src/paths.js';
 import { ClientPolicies } from '../../../packages/application/src/client-policy.js';
-import { ProjectLocator } from '../../../packages/application/src/project-locator.js';
+import { ProjectAuthorizations } from '../../../packages/native-adapters/src/project-authorization.js';
 import { ServiceHost } from './service-host.js';
 import { SharedWorkerLifecycle } from './shared-worker-lifecycle.js';
 
@@ -12,7 +12,7 @@ class SharedService {
     const { values } = parseArgs({ options: { project: { type: 'string' }, installation: { type: 'string' } } });
     if (!values.project || !values.installation) throw new Error('Missing --project / --installation');
     const policy = await new ClientPolicies().load(await ProjectPaths.open(values.installation));
-    const paths = await new ProjectLocator(policy.allowedRoots).locate(values.project);
+    const paths = await new ProjectAuthorizations(values.installation).locate(values.project, policy.allowedRoots);
     for (const directory of ['tmp', 'cache', 'logs'] as const) await paths.work(directory);
     Object.assign(process.env, paths.environment());
     const projects = new ProjectRegistry(); await projects.add(paths.root);

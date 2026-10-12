@@ -2,6 +2,12 @@ export type PanelLocale = 'zh' | 'en';
 
 /** 仅翻译界面文案；日志、路径、用户输入等插值始终保留原文。 */
 const english: Record<string, string> = {
+  '当前工程已授权': 'This project is authorized',
+  '当前工程未授权': 'This project is not authorized',
+  '当前工程授权已撤销': 'This project authorization was revoked',
+  '授权当前工程': 'Authorize this project',
+  '取消工程授权': 'Revoke project authorization',
+  '安装插件时自动授权当前工程；手动安装 ZIP 可在此授权。': 'Installing the extension authorizes this project. Authorize manual ZIP installations here.',
   '统一 stdio（多工程）': 'Unified stdio (multiple projects)',
   '本机 stdio（单工程）': 'Local stdio (one project)',
   '复制 Codex 配置': 'Copy Codex configuration',

@@ -25,7 +25,12 @@ export class CocosMcpServer {
       catch (error) { return this.result(() => { throw error; }); }
       finally { this.activeTools--; }
     };
-    server.registerTool(name, config, handler as ToolCallback<S>);
+    // 仅统一路由接受工作区自动连接；旧单工程后端继续要求 projectId，回调类型和后端契约保持原样。
+    if (this.routing && config.inputSchema instanceof z.ZodObject && config.inputSchema.shape.projectId && !['cocos_project_disconnect', 'cocos_connection_status', 'cocos_capability_search', 'cocos_capability_describe', 'cocos_coverage'].includes(name)) {
+      const schema = config.inputSchema.extend({ projectId: z.string().min(1).optional(),
+        workspacePath: z.string().min(1).max(4096).optional(), projectPath: z.string().min(1).max(4096).optional() });
+      server.registerTool(name, { ...config, inputSchema: schema, description: config.description + ' 可传 workspacePath 自动连接已授权工程；显式 projectId/projectPath 优先，多候选返回选择列表。' }, handler as ToolCallback<typeof schema>);
+    } else server.registerTool(name, config, handler as ToolCallback<S>);
   }
 
   private async result(task: () => Promise<unknown> | unknown): Promise<CallToolResult> {
@@ -45,7 +50,7 @@ export class CocosMcpServer {
       operationId: z.string().min(1).max(128).optional(), expectedRevision: z.string().optional() };
     const read = { readOnlyHint: true, destructiveHint: false, openWorldHint: false };
     const unavailable = () => this.result(() => { throw new CocosError('CONTEXT_UNAVAILABLE', 'Dynamic project connections require the unified stdio client'); });
-    this.tool(server, 'cocos_project_connect', { title: '连接 Creator 工程', description: '处理 Cocos 工程任务前，使用会话工作区的绝对工程路径连接。复用或启动工程后端，不启动编辑器或登录。返回工程与实例标识；无需更改全局配置。', inputSchema: z.object({ projectPath: z.string().min(1).max(4096), instanceId: z.string().min(1).optional() }), annotations: { ...read, readOnlyHint: false } }, unavailable);
+    this.tool(server, 'cocos_project_connect', { title: '连接 Creator 工程', description: '兼容显式连接入口；普通工程工具可直接传 workspacePath 或 projectPath 自动连接。此入口使用绝对工程路径，复用或启动工程后端，不启动编辑器或登录，返回工程与实例标识。', inputSchema: z.object({ projectPath: z.string().min(1).max(4096), instanceId: z.string().min(1).optional() }), annotations: { ...read, readOnlyHint: false } }, unavailable);
     this.tool(server, 'cocos_project_disconnect', { title: '断开工程连接', description: '仅释放当前客户端连接，不停止其他会话或运行中的构建', inputSchema: z.object(project), annotations: { ...read, readOnlyHint: false } }, unavailable);
     this.tool(server, 'cocos_connection_status', { title: '工程连接状态', description: '查看统一客户端已连接工程的后端身份、兼容性和编辑器状态，不返回凭据', inputSchema: z.object({ projectId: z.string().min(1).optional() }), annotations: read }, unavailable);
     this.tool(server, 'cocos_projects', { title: '工程列表', description: '统一客户端列出当前已连接工程；单工程服务列出启动时注册的工程', inputSchema: z.object({}), annotations: read },
@@ -132,7 +137,7 @@ export class CocosMcpServer {
         return { contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(this.application.catalog.search('', undefined, 0, Number.MAX_SAFE_INTEGER)) }] };
       });
     server.registerPrompt('cocos-edit-workflow', { title: '可靠场景编辑流程', description: '定位工程、读取场景、修改、保存并读回验证', argsSchema: z.object({ task: z.string() }) },
-      ({ task }) => ({ messages: [{ role: 'user', content: { type: 'text', text: `任务：${task}\n${this.routing ? "先用会话工作区绝对路径调用 cocos_project_connect，随后使用 cocos_projects 和 cocos_instances" : "先使用 cocos_projects 和 cocos_instances"}明确目标，查询所需能力 Schema，读取场景 revision。修改使用唯一 operationId 和 expectedRevision。查询实际结果，保存后检查场景状态。未知或未验证的能力必须如实报告；超时先查询操作结果。` } }] }));
+      ({ task }) => ({ messages: [{ role: 'user', content: { type: 'text', text: `任务：${task}\n${this.routing ? "直接传 workspacePath 自动连接，或显式传 projectPath/projectId；歧义时按 rows 选择，使用 cocos_projects 和 cocos_instances" : "先使用 cocos_projects 和 cocos_instances"}明确目标，查询所需能力 Schema，读取场景 revision。修改使用唯一 operationId 和 expectedRevision。查询实际结果，保存后检查场景状态。未知或未验证的能力必须如实报告；超时先查询操作结果。` } }] }));
     return server;
   }
 

@@ -54,9 +54,11 @@ class UnifiedFixture {
     this.bridges.push(bridge); this.games.push(root);
     return { root, editor, instance, connections: new ServiceConnections(await ProjectPaths.open(root)) };
   }
-  async client(): Promise<Client> {
+  async client(workspacePath?: string): Promise<Client> {
     const paths = await ProjectPaths.open(this.root), env: Record<string, string> = {};
     for (const [key, value] of Object.entries(paths.environment())) if (value !== undefined) env[key] = value;
+    delete env.COCOS_WORKSPACE_PATH;
+    if (workspacePath) env.COCOS_WORKSPACE_PATH = workspacePath;
     const client = new Client({ name: 'unified-tests', version: '1' }), transport = new StdioClientTransport({ command: process.execPath, args: [join(this.installation, 'launcher.mjs')], cwd: this.root, env, stderr: 'pipe' });
     transport.stderr?.on('data', () => {}); this.clients.push(client); await client.connect(transport, { timeout: 10000 }); return client;
   }
@@ -150,7 +152,7 @@ test('one client routes two projects and resources explicitly, rejects cross-pro
       assert.ok((await client.readResource({ uri: `cocos://projects/${game.instance.projectId}/capabilities` })).contents.length);
     }
     await f.error(client, 'cocos_scene_query', { projectId: first.instance.projectId, instanceId: second.instance.instanceId, params: {} }, 'CONTEXT_UNAVAILABLE');
-    await f.error(client, 'cocos_scene_query', { projectId: first.instance.projectId, params: {} }, 'AMBIGUOUS_TARGET');
+    assert.equal(Json.object((await f.call(client, 'cocos_scene_query', { projectId: first.instance.projectId, params: {} })).result!).marker, 'game-a');
     await f.error(client, 'cocos_scene_save', { projectId: first.instance.projectId, instanceId: first.instance.instanceId, params: {}, expectedRevision: '0' }, 'INVALID_ARGUMENT');
     await f.error(client, 'cocos_scene_save', { projectId: first.instance.projectId, instanceId: first.instance.instanceId, params: {}, operationId: 'save-a' }, 'INVALID_ARGUMENT');
     await f.call(client, 'cocos_project_disconnect', { projectId: first.instance.projectId });
@@ -163,8 +165,8 @@ test('one client routes two projects and resources explicitly, rejects cross-pro
 test('unknown write outcome is reconciled by original operation and is never replayed by reconnecting clients', async () => {
   const f = new UnifiedFixture(); await f.setup(); const game = await f.game('write-game');
   try {
-    const client = await f.client(); await f.call(client, 'cocos_project_connect', { projectPath: game.root });
-    const args = { projectId: game.instance.projectId, instanceId: game.instance.instanceId, params: {}, operationId: 'save-once', expectedRevision: '0' };
+    const client = await f.client();
+    const args = { workspacePath: game.root, params: {}, operationId: 'save-once', expectedRevision: '0' };
     const controller = new AbortController();
     const pending = client.callTool({ name: 'cocos_scene_save', arguments: args }, { signal: controller.signal }).catch(error => error);
     await game.editor.started.promise; controller.abort(); await pending; await game.editor.finished.promise; await delay(100);
@@ -231,4 +233,51 @@ test('client upgrades preserve immutable versions and policy; verified rollback 
   assert.equal((await packages.verify(join(f.installation, first.current.versionPath))).buildId, first.manifest.buildId);
   await installer.rollback(f.root); assert.equal((await packages.installed(f.installation)).current.buildId, first.current.buildId);
   assert.equal(await readFile(join(f.installation, 'policy.json'), 'utf8'), policy);
+});
+
+
+test('automatic stdio target resolution isolates canonical workspaces, explicit targets and host-provided defaults', async () => {
+  const f = new UnifiedFixture(); await f.setup(); const first = await f.game('overlap'), second = await f.game('overlap-copy');
+  try {
+    const client = await f.client();
+    const tool = (await client.listTools()).tools.find(row => row.name === 'cocos_scene_query')!;
+    assert.ok(tool.inputSchema.properties?.workspacePath); assert.ok(tool.inputSchema.properties?.projectPath);
+    assert.ok(!tool.inputSchema.required?.includes('projectId'));
+    await f.error(client, 'cocos_scene_query', { params: {} }, 'INVALID_ARGUMENT');
+    await symlink(first.root, join(f.root, 'alias'));
+    const requests = [first.root, second.root, join(f.root, 'alias/assets')];
+    const values = await Promise.all(requests.map(workspacePath => f.call(client, 'cocos_scene_query', { workspacePath, params: {} })));
+    assert.deepEqual(values.map(value => Json.object(value.result!).marker), ['overlap', 'overlap-copy', 'overlap']);
+    assert.equal(((await f.call(client, 'cocos_projects')).rows as JsonObject[]).length, 2);
+    const explicit = await f.call(client, 'cocos_scene_query', { projectPath: second.root, workspacePath: first.root, params: {} });
+    assert.equal(Json.object(explicit.result!).marker, 'overlap-copy');
+    const explicitId = await f.call(client, 'cocos_scene_query', { projectId: first.instance.projectId, projectPath: second.root, workspacePath: '/not/a/workspace', params: {} });
+    assert.equal(Json.object(explicitId.result!).marker, 'overlap');
+    const separate = await f.client(second.root);
+    assert.equal(Json.object((await f.call(separate, 'cocos_scene_query', { params: {} })).result!).marker, 'overlap-copy');
+    assert.equal(((await f.call(separate, 'cocos_projects')).rows as JsonObject[]).length, 1);
+  } finally { await f.close(); }
+});
+
+test('parent workspaces reject multiple known projects, support exact mappings and preserve editor instance ambiguity', async () => {
+  const f = new UnifiedFixture(); await f.setup(); const first = await f.game('parent-a'), second = await f.game('parent-b');
+  try {
+    const policy = JSON.parse(await readFile(join(f.installation, 'policy.json'), 'utf8'));
+    await writeFile(join(f.installation, 'policy.json'), JSON.stringify({ ...policy, allowedRoots: [first.root, second.root] }));
+    const client = await f.client();
+    const ambiguous = await client.callTool({ name: 'cocos_scene_query', arguments: { workspacePath: f.root, params: {} } });
+    assert.equal(Json.object(Json.object(ambiguous.structuredContent).error!).code, 'AMBIGUOUS_TARGET');
+    assert.ok(JSON.stringify(ambiguous).includes(first.root)); assert.ok(JSON.stringify(ambiguous).includes(second.root));
+    assert.deepEqual((await f.call(client, 'cocos_projects')).rows, []);
+    await writeFile(join(f.installation, 'policy.json'), JSON.stringify({ ...policy, allowedRoots: [first.root, second.root], workspaceMappings: [{ workspacePath: f.root, projectPath: first.root }] }));
+    const mapped = await f.client();
+    assert.equal(Json.object((await f.call(mapped, 'cocos_scene_query', { workspacePath: f.root, params: {} })).result!).marker, 'parent-a');
+    assert.equal(Json.object((await f.call(mapped, 'cocos_scene_query', { workspacePath: second.root, params: {} })).result!).marker, 'parent-b');
+    const duplicate = new EditorBridge(new RoutedEditor('another-instance'), first.root, '3.8.8'); await duplicate.start(); f.bridges.push(duplicate);
+    const error = await mapped.callTool({ name: 'cocos_scene_query', arguments: { workspacePath: f.root, params: {} } });
+    assert.equal(Json.object(Json.object(error.structuredContent).error!).code, 'AMBIGUOUS_TARGET');
+    assert.ok(!JSON.stringify(error).includes('"token"'));
+    assert.equal(Json.object((await f.call(mapped, 'cocos_scene_query', { workspacePath: f.root, instanceId: first.instance.instanceId, params: {} })).result!).marker, 'parent-a');
+    await f.error(mapped, 'cocos_scene_query', { workspacePath: f.root, instanceId: second.instance.instanceId, params: {} }, 'CONTEXT_UNAVAILABLE');
+  } finally { await f.close(); }
 });

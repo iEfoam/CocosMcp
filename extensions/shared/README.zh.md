@@ -35,7 +35,7 @@
 1. 将扩展安装到 Creator 工程，并在「扩展管理器」启用。
 2. 打开 **CocosMCP → 打开控制中心**。菜单依次为 **关于 CocosMCP → 打开控制中心 → 检查更新**，有对应关于/更新页；桥接启停在控制中心内。支持简体中文和 English。
 3. 准备 Node.js 24 或更高版本。源码安装时使用 CocosMCP 安装器记录 Node.js 可执行文件路径。
-4. 多工程优先安装独立的 `cocos-mcp-client.zip`，在本机 service-config.json 填写 clientInstallation，然后选择“统一 stdio（多工程）→ 复制 Codex 配置”。全局配置一次，AI 按任务调用 cocos_project_connect，无需固定游戏路径或端口；多个会话共享后端。本机单工程也可用扩展内的 stdio 入口。独立 HTTP 保存并复用端口，配置含凭证；共享后端地址由统一客户端发现，不能直接复制使用。客户端管理的服务由原客户端管理。
+4. 多工程先安装独立的 `cocos-mcp-client.zip`，在本机 service-config.json 填写 clientInstallation，然后选择“统一 stdio（多工程）→ 复制 Codex 配置”。全局配置一次，AI 直接向工程工具传会话 workspacePath 自动连接；显式 projectPath/projectId 和 cocos_project_connect 保持兼容。真实路径多候选须选择，宿主未传可靠工作区时不能假定 stdio cwd。无需固定游戏路径或端口。通过安装器安装插件会自动授权当前工程；手动复制/ZIP 安装在控制中心点击“授权当前工程”一次，之后新授权即时生效，可随时取消。多个会话共享后端。本机单工程也可用扩展内的 stdio 入口。独立 HTTP 保存并复用端口，配置含凭证；共享后端地址由统一客户端发现，不能直接复制使用。客户端管理的服务由原客户端管理。
 5. 操作前检查可用能力。更新安装后，重新加载扩展并重启 MCP 服务。
 
 ## 版本与平台说明

@@ -20,7 +20,7 @@ class RoutedClient extends Client {
 }
 class BoundConnector extends ProjectConnector {
   binding!: ProjectBinding;
-  override get(_id: string) { return this.binding; }
+  override async get(_id: string) { return this.binding; }
 }
 class RouterFixture {
   client = new RoutedClient({ name: 'router-fixture', version: '1' });

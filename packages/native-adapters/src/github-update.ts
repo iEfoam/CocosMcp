@@ -60,7 +60,10 @@ export class GithubUpdate {
     const installed = JSON.parse(await readFile(join(target, 'package.json'), 'utf8'));
     if (installed.version === release.version && installed.buildId === release.buildId) {
       // 版本号相同不能证明运行文件同源；缺文件、混入旧 bundle 或无摘要都重新核对整包。
-      if (new ExtensionHealth().inspect(target, major, release.url.endsWith('.full.json')).health === 'healthy') return release;
+      if (new ExtensionHealth().inspect(target, major, release.url.endsWith('.full.json')).health === 'healthy') {
+        await new ExtensionInstaller().authorizeInstalled(project, major);
+        return release;
+      }
     }
     const data = await this.download(release.url, 40 * 1024 * 1024);
     const bundle = this.validate(data, release, major);

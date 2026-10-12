@@ -20,7 +20,7 @@ function esc(value: unknown): string {
 }
 
 function request(major: 2 | 3, message: 'panel-state', cursor?: string): Promise<PanelState>;
-function request(major: 2 | 3, message: 'extension-check' | 'extension-update' | 'start' | 'stop' | 'service-start' | 'service-stop'): Promise<unknown>;
+function request(major: 2 | 3, message: 'extension-check' | 'extension-update' | 'start' | 'stop' | 'service-start' | 'service-stop' | 'authorize-project' | 'revoke-project'): Promise<unknown>;
 function request(major: 2 | 3, message: 'set-language' | 'copy-log' | 'copy-connection' | 'service-port', value: string): Promise<unknown>;
 function request(major: 2 | 3, message: string, ...args: (string | undefined)[]): Promise<unknown> {
   // 面板只通过编辑器 IPC 读取脱敏状态；浏览器请求会带 Origin，不能使用外部 MCP 的认证通道。
@@ -81,6 +81,7 @@ export function createPanelDefinition(major: 2 | 3) {
       <div class="connection-fields"><div class="connection-field"><span class="connection-label">接入方式</span>${dropdowns!.markup('connection-mode', i18n.text('接入方式'), state.connectionMode, [{ value: 'unified', label: i18n.text('统一 stdio（多工程）') }, { value: 'stdio', label: i18n.text('本机 stdio（单工程）') }, { value: 'http', label: 'Streamable HTTP' }], state.busy || !state.snapshot)}</div><button class="secondary connection-action" data-action="copy-connection">${copyIcon}<span>${i18n.text(state.connectionMode === 'unified' ? '复制 Codex 配置' : state.connectionMode === 'stdio' ? '复制 stdio 配置' : '复制 HTTP 配置')}</span></button></div>
       <p class="connection-help">${i18n.text(state.connectionMode === 'unified' ? '全局配置一次，AI 按当前任务连接工程，无需填写端口。' : '通用 JSON 模板，请按客户端配置格式调整。HTTP 配置含认证凭证，请妥善保管。')}</p><p class="copy-feedback connection-feedback" role="status" aria-live="polite">${esc(copyFeedback)}</p>
       ${state.connectionMode === 'unified' ? i18n.html`<p class="connection-help">${service?.unifiedClient?.installed ? i18n.html`统一客户端版本：${esc(service.unifiedClient.version)} · ${esc(service.unifiedClient.buildId)}` : i18n.text('统一客户端未安装，请运行 pnpm client:install 并更新扩展')}</p>` : state.connectionMode === 'stdio' ? i18n.html`<p class="connection-help">由客户端启动离线 stdio 入口。切换前请停止已有 HTTP 服务，多个客户端可共享 HTTP 服务。</p>` : i18n.html`<div class="connection-fields"><label class="connection-field"><span class="connection-label">HTTP 端口</span><input data-key="service-port" data-service-port type="number" min="0" max="65535" step="1" value="${esc(service?.configuredPort ?? 0)}" aria-label="HTTP 端口"></label><button class="secondary connection-action" data-action="service-port">保存端口</button></div><p class="connection-help">0 表示下次首次分配；启动成功后保存并复用端口。修改端口前需停止服务并更新客户端配置。</p>`}
+      ${state.connectionMode === 'unified' && service?.unifiedClient?.installed ? i18n.html`<div class="connection-fields"><p class="connection-help" role="status">${esc(service.unifiedClient.authorizationError ?? i18n.text(service.unifiedClient.authorization === 'authorized' ? '当前工程已授权' : service.unifiedClient.authorization === 'revoked' ? '当前工程授权已撤销' : '当前工程未授权'))}</p><button class="secondary connection-action" data-action="${service.unifiedClient.authorization === 'authorized' ? 'revoke-project' : 'authorize-project'}">${i18n.text(service.unifiedClient.authorization === 'authorized' ? '取消工程授权' : '授权当前工程')}</button></div><p class="connection-help">安装插件时自动授权当前工程；手动安装 ZIP 可在此授权。</p>` : ''}
       ${service?.error ? `<div class="notice error">${esc(service.error)}</div>` : ''}
       <div class="card-footer"><button class="primary" data-action="${service?.status === 'running' ? 'service-restart' : 'service-start'}">${service?.status === 'running' ? i18n.text('重启') : i18n.text('启动')} MCP 服务（HTTP）</button><button class="secondary" data-action="service-stop">停止 MCP 服务</button></div><p>由此处启动的服务随扩展卸载或编辑器退出而停止；关闭面板不停止服务。</p></section>`;
     const runtimeStatus = state.snapshot?.runtimeStatus;
@@ -150,7 +151,7 @@ export function createPanelDefinition(major: 2 | 3) {
     return pending;
   };
 
-  const command = async (action: 'extension-check' | 'extension-update' | 'start' | 'stop' | 'restart' | 'service-start' | 'service-stop' | 'service-restart' | 'copy-connection' | 'service-port'): Promise<void> => {
+  const command = async (action: 'extension-check' | 'extension-update' | 'start' | 'stop' | 'restart' | 'service-start' | 'service-stop' | 'service-restart' | 'copy-connection' | 'service-port' | 'authorize-project' | 'revoke-project'): Promise<void> => {
     if (state.busy || disposed) return;
     const parameter = action === 'copy-connection' ? state.connectionMode : root.querySelector<HTMLInputElement>('[data-service-port]')?.value ?? '';
     state.busy = true; render();
@@ -214,7 +215,7 @@ export function createPanelDefinition(major: 2 | 3) {
       dom.on(button, 'click', () => {
         const action = button.dataset.action;
         if (action === 'refresh') { if (state.tab === 'logs') logBrowser.latest(); void refresh(); }
-        else if (action === 'extension-check' || action === 'extension-update' || action === 'start' || action === 'stop' || action === 'service-start' || action === 'service-stop' || action === 'restart' || action === 'service-restart' || action === 'copy-connection' || action === 'service-port') void command(action);
+        else if (action === 'extension-check' || action === 'extension-update' || action === 'start' || action === 'stop' || action === 'service-start' || action === 'service-stop' || action === 'restart' || action === 'service-restart' || action === 'copy-connection' || action === 'service-port' || action === 'authorize-project' || action === 'revoke-project') void command(action);
       });
     });
     root.querySelectorAll<HTMLButtonElement>('[data-log-page]').forEach(button => {

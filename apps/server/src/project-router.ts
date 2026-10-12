@@ -6,8 +6,8 @@ import type { McpRouting } from './mcp.js';
 import { ProjectConnector } from './project-connector.js';
 
 export class ProjectRouter implements McpRouting {
-  readonly instructions = '处理 Cocos Creator 工程、场景、节点、资源、预制体、材质、构建或运行时任务时，先从会话上下文确认目标工程绝对路径，并调用 cocos_project_connect。后续工程工具使用返回的 projectId；编辑器和运行时操作必须指定实例。目标不明确时先询问，不能用唯一打开窗口猜测工程。创建资源前调用 asset.location；整理先 plan 后 apply。写操作使用稳定 operationId 和适用版本/哈希守卫；结果未知时查询原操作，禁止自动重试。恢复未知构建前须确认原任务已经停止。';
-  constructor(readonly connector: ProjectConnector, private readonly catalog = new CapabilityCatalog()) {}
+  readonly instructions = 'Cocos 工具可直接传会话绝对 workspacePath，按 realpath 自动选择已授权工程并连接，无需先 cocos_project_connect；显式 projectId 优先，其次 projectPath。宿主可在启动时提供 COCOS_WORKSPACE_PATH，不能假定 stdio cwd 或安装目录是聊天工作区。工程内选择最近根，父目录多候选且无明确映射返回 AMBIGUOUS_TARGET 和脱敏 rows，选择 projectPath；不按名称、复制 id 或打开窗口猜工程。仅目标工程唯一且身份验证通过的编辑器实例可自动选择；多实例指定 instanceId。运行时明确指定 runtimeInstanceId。创建资源先 asset.location；整理先 plan 后 apply。写入传稳定 operationId 和适用 revision/哈希；未知结果查询原操作，禁止重发，恢复未知构建须确认原任务停止。';
+  constructor(readonly connector: ProjectConnector, private readonly catalog = new CapabilityCatalog(), private readonly workspacePath?: string) {}
   private result(value: JsonValue): CallToolResult { return new CaptureResult().format(value); }
   async call(name: string, args: JsonObject, context: ServerContext): Promise<CallToolResult> {
     if (context.mcpReq.signal.aborted) throw new CocosError('CANCELLED', 'Request cancelled before dispatch');
@@ -20,7 +20,10 @@ export class ProjectRouter implements McpRouting {
       if (name === 'cocos_capability_describe') return this.result(Json.value(this.catalog.describe(Json.string(args.capabilityId, 'capabilityId'))));
       if (name === 'cocos_coverage') return this.result(Json.value({ ...this.catalog.coverage(), requiresProjectConnection: true }));
     }
-    const projectId = Json.string(args.projectId, 'projectId'), row = this.connector.get(projectId), writing = this.guard(name, args);
+    args = await this.target(args);
+    const projectId = Json.string(args.projectId, 'projectId'), row = await this.connector.get(projectId);
+    args = await this.instances(name, args, projectId);
+    const writing = this.guard(name, args);
     if (writing && row.descriptor.apiVersion !== 1) throw new CocosError('UNSUPPORTED_VERSION', 'Backend API is incompatible with guarded writes; upgrade the project backend before editing', { actualApiVersion: row.descriptor.apiVersion ?? null, requiredApiVersion: 1 });
     if (row.descriptor.apiVersion !== undefined && row.descriptor.apiVersion !== 1) throw new CocosError('UNSUPPORTED_VERSION', 'Unsupported project backend API');
     row.inFlight++;
@@ -40,9 +43,37 @@ export class ProjectRouter implements McpRouting {
       }
     } finally { row.inFlight--; }
   }
+  private async target(args: JsonObject): Promise<JsonObject> {
+    if (args.projectId) return { ...args };
+    const workspace = typeof args.workspacePath === 'string' ? args.workspacePath : this.workspacePath;
+    const path = typeof args.projectPath === 'string' ? args.projectPath : workspace ? (await this.connector.workspace(workspace)).root : undefined;
+    if (!path) throw new CocosError('INVALID_ARGUMENT', 'Provide workspacePath, projectPath or a connected projectId; the host has not supplied a reliable session workspace');
+    const connected = Json.object(await this.connector.connect(path)), project = Json.object(connected.project!);
+    // 连接表由此 stdio 会话独占，工程标识由真实根路径生成；每次重新解析授权候选，不缓存旧授权选择。
+    const { workspacePath: _workspace, projectPath: _path, ...forwarded } = args;
+    return { ...forwarded, projectId: Json.string(project.projectId, 'projectId') };
+  }
+  private registered(name: string, args: JsonObject): ReturnType<CapabilityCatalog['describe']> | undefined {
+    if (name === 'cocos_capability_execute') return this.catalog.describe(Json.string(args.capabilityId, 'capabilityId'));
+    if (name === 'cocos_assets_organize_plan' || name === 'cocos_assets_organize_apply') return this.catalog.describe(name.endsWith('_plan') ? 'asset.organize.plan' : 'asset.organize.apply');
+    return this.catalog.search('', undefined, 0, 1000).rows.find(row => `cocos_${row.id.replaceAll('.', '_')}` === name);
+  }
+  private async instances(name: string, args: JsonObject, projectId: string): Promise<JsonObject> {
+    const steps = name === 'cocos_workflow_execute' && Array.isArray(args.steps) ? args.steps.map(value => Json.object(value)) : undefined;
+    const needsInstance = steps ? steps.some(step => this.catalog.describe(Json.string(step.capabilityId, 'capabilityId')).context === 'editor' && !step.instanceId) :
+      this.registered(name, args)?.context === 'editor' && !args.instanceId;
+    if (!needsInstance) return args;
+    const rows = await this.connector.projects.instances(projectId);
+    if (!rows.length) throw new CocosError('CONTEXT_UNAVAILABLE', 'No authenticated editor instance is available in the selected project');
+    if (rows.length !== 1) throw new CocosError('AMBIGUOUS_TARGET', 'Multiple authenticated instances belong to the selected project; specify instanceId', {
+      projectId, rows: rows.map(({ token: _token, ...row }) => Json.value(row)) });
+    const instanceId = rows[0]!.instanceId;
+    if (steps) return { ...args, steps: steps.map(step => this.catalog.describe(Json.string(step.capabilityId, 'capabilityId')).context === 'editor' && !step.instanceId ? { ...step, instanceId } : step) };
+    return { ...args, instanceId };
+  }
   private capability(id: string, args: JsonObject, planning = false): boolean {
     const capability = this.catalog.describe(id);
-    if (capability.context === 'editor' && !args.instanceId) throw new CocosError('AMBIGUOUS_TARGET', 'Editor operations require explicit instanceId from cocos_project_connect');
+    if (capability.context === 'editor' && !args.instanceId) throw new CocosError('AMBIGUOUS_TARGET', 'Editor operations require a selected authenticated instanceId');
     if (capability.context === 'runtime' && !args.runtimeInstanceId && !args.runtimeRef) throw new CocosError('AMBIGUOUS_TARGET', 'Runtime operations require explicit runtimeInstanceId or a planned runtimeRef');
     if (capability.effect === 'external' && !this.connector.policy.allowProjectCode) throw new CocosError('UNAUTHORIZED', 'Client policy does not allow executing project code');
     const writing = capability.effect !== 'read';
@@ -64,13 +95,13 @@ export class ProjectRouter implements McpRouting {
     if (name === 'cocos_build_start') { if (!args.operationId) throw new CocosError('INVALID_ARGUMENT', 'Build start requires a stable operationId'); return true; }
     if (name === 'cocos_build_cancel' || name === 'cocos_build_recover') return true;
     // 服务工具优先匹配；常用能力别名来自同一目录，不能由别名绕过目标与写入守卫。
-    const capability = this.catalog.search('', undefined, 0, 1000).rows.find(row => `cocos_${row.id.replaceAll('.', '_')}` === name);
+    const capability = this.registered(name, args);
     return capability ? this.capability(capability.id, args) : false;
   }
   async resource(uri: string): Promise<ReadResourceResult> {
     const url = new URL(uri), match = /^\/([a-f\d]{24})\/capabilities$/.exec(url.pathname);
     if (url.protocol !== 'cocos:' || url.hostname !== 'projects' || !match || url.search || url.hash) throw new CocosError('INVALID_ARGUMENT', 'Unknown project resource URI');
-    const row = this.connector.get(match[1]!); row.inFlight++;
+    const row = await this.connector.get(match[1]!); row.inFlight++;
     try {
       if ((await row.connections.active())?.serviceId !== row.descriptor.serviceId) throw new CocosError('CONTEXT_UNAVAILABLE', 'Backend identity changed; reconnect');
       return await row.client.readResource({ uri }, { timeout: 10000 });

@@ -193,7 +193,7 @@ Release ZIPs intentionally omit this machine-specific file. Use a separately ins
 
 ## Quick start
 
-For multiple game projects, use the [unified stdio client](docs/unified-client.md). Configure Codex once, then connect projects through `cocos_project_connect`. Independent sessions share one backend per project. After `pnpm check`, run `pnpm client:install`, or install the standalone offline client ZIP.
+For multiple game projects, use the [unified stdio client](docs/unified-client.md). Configure Codex once, then pass the session `workspacePath` directly to project tools for automatic connection. Explicit `projectPath`/`projectId` and `cocos_project_connect` remain supported; ambiguous authorized targets require selection. Independent sessions share one backend per project. After `pnpm check`, run `pnpm client:install`, or install the standalone offline client ZIP.
 
 ### 1. Install and build
 

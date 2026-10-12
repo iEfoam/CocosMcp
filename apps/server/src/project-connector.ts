@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { CocosError, Json, type JsonObject, type JsonValue } from '../../../packages/contracts/src/index.js';
 import type { ClientPolicy } from '../../../packages/application/src/client-policy.js';
-import { ProjectLocator } from '../../../packages/application/src/project-locator.js';
+import { ProjectAuthorizations } from '../../../packages/native-adapters/src/project-authorization.js';
 import { ProjectRegistry } from '../../../packages/application/src/registry.js';
 import { ServiceConnections, type ServiceDescriptor } from '../../../packages/application/src/service-connections.js';
 import type { ProjectPaths } from '../../../packages/application/src/paths.js';
@@ -21,11 +21,15 @@ export class ProjectConnector {
   private readonly connecting = new Map<string, Promise<ProjectBinding>>();
   private closing = false;
   constructor(readonly projects: ProjectRegistry, readonly policy: ClientPolicy, private readonly installation: string, private readonly workerFile: string) {}
-  get(projectId: string): ProjectBinding {
+  async get(projectId: string): Promise<ProjectBinding> {
     const row = this.bindings.get(projectId);
     if (!row) throw new CocosError('NOT_FOUND', 'Project is not connected; call cocos_project_connect with its workspace path');
     if (row.failed) throw new CocosError('CONTEXT_UNAVAILABLE', row.failed);
+    await new ProjectAuthorizations(this.installation).locate(row.paths.root, this.policy.allowedRoots);
     return row;
+  }
+  async workspace(input: string): Promise<ProjectPaths> {
+    return new ProjectAuthorizations(this.installation).workspace(input, this.policy.allowedRoots, this.policy.workspaceMappings);
   }
   list(): JsonValue { return { rows: [...this.bindings.values()].map(row => this.summary(row)) }; }
   private summary(row: ProjectBinding): JsonObject {
@@ -48,7 +52,7 @@ export class ProjectConnector {
   }
   async connect(input: string, instanceId?: string): Promise<JsonValue> {
     if (this.closing) throw new CocosError('RESOURCE_BUSY', 'Unified client is closing');
-    const paths = await new ProjectLocator(this.policy.allowedRoots).locate(input), connections = new ServiceConnections(paths);
+    const paths = await new ProjectAuthorizations(this.installation).locate(input, this.policy.allowedRoots), connections = new ServiceConnections(paths);
     let task = this.connecting.get(connections.projectId);
     if (!task) { task = this.attach(paths, connections); this.connecting.set(connections.projectId, task); }
     let row: ProjectBinding;

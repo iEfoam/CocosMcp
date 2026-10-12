@@ -4,6 +4,8 @@ import { join, isAbsolute } from 'path';
 import { ProjectPaths } from '../../packages/application/src/paths.js';
 import { ServiceConnections } from '../../packages/application/src/service-connections.js';
 import { ClientPackage } from '../../packages/native-adapters/src/client-installation.js';
+import { ProjectAuthorizations } from '../../packages/native-adapters/src/project-authorization.js';
+import { ProjectLocator } from '../../packages/application/src/project-locator.js';
 import type { PanelState } from '../../packages/editor-bridge/src/panel-state.js';
 
 export type McpServiceState = NonNullable<PanelState['service']>;
@@ -27,7 +29,12 @@ export class McpService {
         catch (error) { this.state.clientStatusError = error instanceof Error ? error.message : String(error); }
       }
     } catch (error) { this.state = { status: 'error', endpoint: null, error: error instanceof Error ? error.message : String(error) }; }
-    try { const root = this.clientRoot(); const { manifest } = await new ClientPackage().installed(root, false); this.state.unifiedClient = { installed: true, version: manifest.version, buildId: manifest.buildId }; }
+    try {
+      const root = this.clientRoot(), { manifest } = await new ClientPackage().installed(root, false);
+      this.state.unifiedClient = { installed: true, version: manifest.version, buildId: manifest.buildId };
+      try { this.state.unifiedClient.authorization = await new ProjectAuthorizations(root).state(this.project); }
+      catch (error) { this.state.unifiedClient.authorizationError = error instanceof Error ? error.message : String(error); }
+    }
     catch (error) { this.state.unifiedClient = { installed: false, error: error instanceof Error ? error.message : String(error) }; }
     return this.snapshot();
   }
@@ -40,6 +47,16 @@ export class McpService {
     const config = JSON.parse(readFileSync(join(this.extension, 'service-config.json'), 'utf8')) as { nodeExecutable?: string };
     if (!config.nodeExecutable || !isAbsolute(config.nodeExecutable) || !existsSync(config.nodeExecutable)) throw new Error('未找到 Node.js，请使用 Node.js 24 或更高版本重新安装扩展');
     return config.nodeExecutable;
+  }
+  async authorizeProject(): Promise<void> {
+    const root = this.clientRoot(); await new ClientPackage().installed(root);
+    const paths = await ProjectPaths.open(this.project), major = await new ProjectLocator([paths.root]).major(paths);
+    if (!major) throw new Error('授权需要有效的 Creator 工程');
+    await new ProjectAuthorizations(root).grant(paths.root, major);
+  }
+  async revokeProject(): Promise<void> {
+    const root = this.clientRoot(); await new ClientPackage().installed(root);
+    await new ProjectAuthorizations(root).revoke(this.project);
   }
   private async environment(): Promise<NodeJS.ProcessEnv> {
     const paths = await ProjectPaths.open(this.project), temporary = await paths.work('tmp', `mcp-service-${process.pid}`);

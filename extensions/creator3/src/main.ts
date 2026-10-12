@@ -115,6 +115,8 @@ class ExtensionLifecycle {
   async stopService(): Promise<void> { await this.service?.stop(); }
   async configurePort(value: unknown): Promise<void> { await this.getService().configurePort(value); }
   async copyConnection(mode: unknown): Promise<void> { preferences.copy(await this.getService().configuration(mode)); }
+  async authorizeProject(): Promise<void> { await this.getService().authorizeProject(); }
+  async revokeProject(): Promise<void> { await this.getService().revokeProject(); }
   async unload(): Promise<void> { try { await this.stopService(); await this.stop(); } finally { preferences.restoreMenu(); } }
   private bridge: EditorBridge | undefined;
   private starting: Promise<void> | undefined;
@@ -147,6 +149,8 @@ export const methods = {
   stopService: (): Promise<void> => lifecycle.stopService(),
   configurePort: (value: unknown): Promise<void> => lifecycle.configurePort(value),
   copyConnection: (mode: unknown): Promise<void> => lifecycle.copyConnection(mode),
+  authorizeProject: (): Promise<void> => lifecycle.authorizeProject(),
+  revokeProject: (): Promise<void> => lifecycle.revokeProject(),
   start: (): Promise<void> => lifecycle.start(),
   stop: (): Promise<void> => lifecycle.stop(),
   status: (): Promise<void> => lifecycle.status(),

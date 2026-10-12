@@ -23,8 +23,14 @@ for (const major of [2, 3] as const) test(`Creator ${major} panel selects instal
   const window = parseHTML('<html><body><div id="root"></div></body></html>').window, root = window.document.querySelector('#root') as unknown as HTMLElement;
   root.getBoundingClientRect = () => ({ left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600 }) as DOMRect;
   const snapshot: PanelState = { projectPath: '/example/game', editorVersion: `${major}.0.0`, creatorMajor: major, instance: null, supportedCapabilities: [], logs: [], runtimeConfigured: false,
-    service: { status: 'running', endpoint: 'http://127.0.0.1:54321/mcp', error: null, managed: false, shared: true, clientCount: 2, unifiedClient: { installed: true, version: '0.1.0', buildId: 'test' } } };
-  const calls: unknown[][] = [], reply = async (message: string, value?: unknown) => message === 'panel-state' ? snapshot : calls.push([message, value]);
+    service: { status: 'running', endpoint: 'http://127.0.0.1:54321/mcp', error: null, managed: false, shared: true, clientCount: 2, unifiedClient: { installed: true, version: '0.1.0', buildId: 'test', authorization: 'not-authorized' } } };
+  const calls: unknown[][] = [], reply = async (message: string, value?: unknown) => {
+    if (message === 'panel-state') return snapshot;
+    calls.push([message, value]);
+    if (message === 'authorize-project') snapshot.service!.unifiedClient!.authorization = 'authorized';
+    if (message === 'revoke-project') snapshot.service!.unifiedClient!.authorization = 'revoked';
+    return undefined;
+  };
   const module = { exports: {} };
   const entry = resolve(`.codex-work/build/extensions/creator${major}/dist/panel.${major === 2 ? 'js' : 'cjs'}`);
   runInNewContext(await readFile(entry, 'utf8'), { module, exports: module.exports, require: () => { throw new Error('Renderer dependencies are forbidden'); }, setTimeout, clearTimeout, setInterval: () => 1, clearInterval: () => {},
@@ -35,6 +41,12 @@ for (const major of [2, 3] as const) test(`Creator ${major} panel selects instal
     await panel.ready.call(major === 2 ? { $root: root } : { $: { root } });
     assert.match(root.innerHTML, /统一 stdio（多工程）/); assert.match(root.innerHTML, /已连接会话：2/); assert.ok(!root.innerHTML.includes('54321'));
     root.querySelector<HTMLButtonElement>('[data-action="copy-connection"]')!.click(); await new Promise(resolve => setImmediate(resolve)); assert.deepEqual(calls, [['copy-connection', 'unified']]);
+    assert.match(root.innerHTML, /当前工程未授权/);
+    root.querySelector<HTMLButtonElement>('[data-action="authorize-project"]')!.click(); await new Promise(resolve => setImmediate(resolve));
+    assert.match(root.innerHTML, /当前工程已授权/);
+    root.querySelector<HTMLButtonElement>('[data-action="revoke-project"]')!.click(); await new Promise(resolve => setImmediate(resolve));
+    assert.match(root.innerHTML, /当前工程授权已撤销/);
+    assert.deepEqual(calls.slice(1), [['authorize-project', undefined], ['revoke-project', undefined]]);
     const trigger = root.querySelector<HTMLButtonElement>('[data-dropdown-trigger="connection-mode"]')!; trigger.getBoundingClientRect = () => ({ left: 10, top: 20, right: 260, bottom: 56, width: 250, height: 36 }) as DOMRect;
     trigger.click(); root.querySelector<HTMLButtonElement>('[data-dropdown-value="http"]')!.click();
     assert.equal(root.querySelector<HTMLButtonElement>('[data-action="copy-connection"]')!.disabled, true);

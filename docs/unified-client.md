@@ -1,6 +1,6 @@
 # 统一 stdio 客户端与多工程连接
 
-全局只配置一个固定 Node 入口，AI 在任务中调用 `cocos_project_connect`，按工程真实路径发现或启动本机后端。新增游戏工程无需修改 TOML，也无需把端口或 token 发给 AI。
+全局只配置一个固定 Node 入口，工程工具直接传入会话 `workspacePath`，按工程真实路径自动发现、连接或启动本机后端；保留 `cocos_project_connect` 兼容入口。新增游戏工程无需修改 TOML，也无需把端口或 token 发给 AI。
 
 ## 安装和配置
 
@@ -12,7 +12,11 @@ pnpm check
 pnpm client:install
 ```
 
-`client:install` 默认允许仓库上一级目录下的 Creator 工程。其他父目录使用安装器，`--allowed-root` 可重复指定，目录必须存在：
+`client:install` 新安装默认 `allowedRoots: []`，使用“用户主动安装插件，即授权该工程”。先安装统一客户端，再通过源码 CLI 或控制中心更新安装对应 Creator 插件：安装器将真实工程路径和已校验的插件身份登记到客户端 `authorized-projects.json`。工程可位于任意目录，不需要逐个修改 TOML 或目录白名单。
+
+手动复制/ZIP 安装不会自动扩大权限：在 Creator 控制中心选择“统一 stdio（多工程）”，点击“授权当前工程”一次。普通插件加载、面板刷新与工程自带配置均不会自动授予访问权限；移除插件或校验文件变化会拒绝原授权，可在控制中心取消或重新授权。客户端不会扫描磁盘寻找工程。
+
+已有用户明确配置的 `allowedRoots` 保持兼容；确需父目录授权时可重复指定 `--allowed-root`（只初始化新安装），目录必须存在：
 
 ```sh
 node .codex-work/build/client/install.mjs \
@@ -55,27 +59,29 @@ tool_timeout_sec = 120
 
 ## 使用和目标选择
 
-统一入口初始化即返回不超过 512 字符的 instructions，要求 AI 在 Cocos 任务中从会话工作区确认工程绝对路径，先连接再调用能力，无需每个会话重复 MCP 说明。目标不明确时必须询问；模型指导不能保证每次选择工具，服务端不能读取 Codex 隐含上下文。
-
-`cocos_project_connect` 参数示例：
+统一入口初始化提供不超过 512 字符的 instructions。首次场景/节点读取直接传当前聊天工作区的绝对路径，无需先单独连接：
 
 ```json
-{"projectPath":"/absolute/path/to/games/game-a"}
+{"workspacePath":"/absolute/path/to/game-workspace","params":{}}
 ```
 
-路径 realpath 归一化后，在 allowedRoots 内向上查找 Creator 元数据和 assets。支持工程子目录及指向同一工程的别名，拒绝普通 Node 仓库和越界符号链接，不从唯一打开窗口猜测工程。
+每个工程工具接受 workspacePath 或 projectPath，仍兼容已连接的 projectId。优先级为显式 projectId → 显式 projectPath → 请求 workspacePath → 宿主启动时显式提供的 COCOS_WORKSPACE_PATH。projectId 不会自动恢复断开的连接；需要恢复时显式 connect。连接和派发均重新校验授权、插件身份、后端 identity、API 和租约。
 
-响应含 `project`、`connection`、脱敏实例 `rows`。取返回的 projectId 和明确 instanceId 调用 `cocos_scene_query` 获取场景 revision。多个实例须按任务显式选择。写入附稳定 operationId、适用的 expectedRevision/哈希；运行时传明确 runtimeInstanceId。创建资源先 `asset.location`，整理先 plan，再携同一 planHash apply。
+stdio 不自动携带聊天 cwd。launcher 的 workspaceRoot 只是客户端安装/运行状态目录，不是业务工作区，进程 cwd、唯一打开窗口、工程名称和复制的 project.json id 均不用于兜底。宿主能可靠绑定每个 stdio 会话时可提供 COCOS_WORKSPACE_PATH；否则模型须传 workspacePath 或 projectPath，不能宣称零输入识别。此流程不依赖已弃用 roots。工具/Schema 在新 stdio 会话初始化时加载，安装不会刷新已经运行的聊天连接。
+
+路径先 realpath 归一化，并按目录边界匹配。工程内工作区选择最近 Creator 根，嵌套工程仍须独立授权。父目录只匹配 authorized-projects.json 中已授权根，以及旧 allowedRoots 中本身就是工程的根，不递归搜索磁盘。没有候选拒绝访问；多个同等候选返回 AMBIGUOUS_TARGET 及脱敏 rows，调用方显式选择 projectPath，不能默认第一个或按活跃窗口排序。
+
+用户可在本机 policy.json 显式登记精确默认映射（不授予或扩大工程权限，修改后须启动新 stdio 会话）：
 
 ```json
-{
-  "projectId":"<connect 返回的 projectId>",
-  "instanceId":"<选中的 instanceId>",
-  "params":{}
-}
+{"workspaceMappings":[{"workspacePath":"/absolute/path/to/workspace","projectPath":"/absolute/path/to/workspace/game-a"}]}
 ```
 
-连接表仅属于当前 stdio 进程，没有全局“当前工程”。`cocos_projects` 列当前连接；`cocos_connection_status` 返回后端、编辑器状态和共享会话/请求数。`cocos_project_disconnect` 只释放本会话引用，有调用进行中时拒绝断开。
+仅匹配真实工作区精确路径；别名归一化后冲突映射拒绝选择。工程内工作区的最近根优先于父目录映射。映射失效、授权撤销或插件变化会拒绝访问，不能回退到另一个工程。
+
+只在选定工程中存在唯一且通过桥接身份探测的实例时自动填充 instanceId；多个实例返回 AMBIGUOUS_TARGET 和脱敏 rows，须显式选择。运行时仍指定 runtimeInstanceId 或工作流 runtimeRef。写入仍附稳定 operationId、适用 revision/哈希。创建资源先 asset.location，整理先 plan，再携同一 planHash apply。自动连接不重放写请求，也不切换、保存场景。
+
+连接缓存只属于当前 stdio 进程，按真实工程根产生的 projectId 隔离，没有全局“最近工程”或粘住旧候选的缓存。每个请求独立解析其真实工作区，多工作区并发不会相互更改默认目标。cocos_projects 列当前连接；cocos_connection_status 返回后端、编辑器状态和共享会话/请求数。cocos_project_disconnect 只释放本会话引用，有调用进行中时拒绝断开。
 
 ## 共享服务和恢复
 
@@ -105,9 +111,9 @@ Creator 3 的内置 Label 会在排版时修改 UITransform 尺寸。添加 Labe
 
 ### 从单工程旧插件迁移
 
-先停止目标工程的旧连接，再安装对应 Creator 版本的新扩展并重载编辑器。已有旧插件的源码安装会保留回滚目录及有效的 clientInstallation；手动 ZIP 安装按前述 service-config.json 配置同一个已安装统一客户端。检查面板的客户端 buildId，并实际查询目标工程的场景，文件安装成功不等于编辑器已经加载新版。
+先停止目标工程的旧连接，再安装对应 Creator 版本的新扩展并重载编辑器。已有旧插件的源码安装会保留回滚目录及有效的 clientInstallation，同时登记新插件的工程授权；手动 ZIP 安装按前述 service-config.json 配置同一个已安装统一客户端，再点击“授权当前工程”。检查面板的客户端 buildId，并实际查询目标工程的场景，文件安装成功不等于编辑器已经加载新版。
 
-删除旧插件不会自动删除 Codex 配置。若游戏工程 .codex/config.toml 中仍有旧的 [mcp_servers.cocos] HTTP 表，应同时停用或移除该旧连接及其子表，保留全局 cocos_unified。无需在每个新工程添加 command、端口或 token；工程位于已允许目录内时，使用其绝对路径调用 cocos_project_connect 即可。
+删除旧插件不会自动删除 Codex 配置。若游戏工程 .codex/config.toml 中仍有旧的 [mcp_servers.cocos] HTTP 表，应同时停用或移除该旧连接及其子表，保留全局 cocos_unified。无需在每个新工程添加 command、端口或 token；插件安装授权完成后，直接传 workspacePath 或 projectPath 调用工程工具即可。
 
 ## 策略、升级和回退
 
@@ -116,7 +122,7 @@ Creator 3 的内置 Label 会在排版时修改 UITransform 尺寸。添加 Labe
 ```json
 {
   "schemaVersion":1,
-  "allowedRoots":["/absolute/path/to/games"],
+  "allowedRoots":[],
   "autoStartBackend":true,
   "allowProjectCode":false,
   "clientHeartbeatSeconds":10,
@@ -125,7 +131,19 @@ Creator 3 的内置 Label 会在排版时修改 UITransform 尺寸。添加 Labe
 }
 ```
 
-安装保留已有 policy，allowed-root 参数仅初始化新安装，不隐式扩大已有授权。新增游戏父目录只改 policy；重新加载 stdio 后生效，已运行后端保留启动策略，待安全退出后再连接。allowProjectCode 默认关闭，执行项目代码仍需明确授权。
+安装保留已有 policy，allowed-root 参数仅初始化新安装，不隐式扩大已有授权。安装授权记录按工程精确登记，原子发布并使用跨进程锁防止并发覆盖；客户端在每次连接、工具与资源派发前即时读取，新安装和取消授权不需要重启 stdio。取消授权优先于旧父目录白名单，已发出的请求不会被自动重放或强行终止。插件更新登记新身份；复制工程、嵌套工程及移动后的新真实路径需要新安装或显式授权。
+
+旧版客户端升级为此版本后需重新建立连接一次，之后新增安装授权即时生效。policy 中的旧父目录配置仍在进程启动时读取；改用仅安装授权时，先登记已验证的已有工程，再将 allowedRoots 设为 [] 并重连。allowProjectCode 默认关闭，执行项目代码仍需明确授权。
+
+无编辑器时可使用受控的本机入口登记已有插件（必须指定工程根目录，插件完整性与 Creator 版本会被校验）：
+
+```sh
+node /absolute/path/to/client/versions/<buildId>/install.mjs \
+  --installation /absolute/path/to/client \
+  --authorize-project /absolute/path/to/game
+```
+
+撤销使用相同入口的 `--revoke-project`。这些入口仅供用户/安装流程调用，不注册成 AI 可以自行扩大权限的 MCP 工具。保留 authorized-projects.json 和 policy.json 作为本机状态，不打包进发行包。
 
 版本位于 `versions/<buildId>/`，白名单文件逐一 SHA-256 校验，current.json 指向不可变版本。进程启动后固定 router/worker 版本；升级不改变在运行的进程，不杀旧后端，新进程按兼容 API 复用服务。
 

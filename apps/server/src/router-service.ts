@@ -16,7 +16,8 @@ export class RouterService {
     for (const directory of ['cache', 'logs'] as const) await workspace.work(directory);
     Object.assign(process.env, { ...workspace.environment(), TMPDIR: temporary, TMP: temporary, TEMP: temporary });
     const projects = new ProjectRegistry(), connector = new ProjectConnector(projects, policy, installation.root, workerFile), transport = new McpTransport();
-    const router = new ProjectRouter(connector), factory = new CocosMcpServer(new CocosApplication(projects), undefined, undefined, false, router);
+    // 此输入须由宿主显式绑定到本次 stdio 会话；安装 workspaceRoot 只用于客户端运行状态落盘。
+    const router = new ProjectRouter(connector, undefined, process.env.COCOS_WORKSPACE_PATH), factory = new CocosMcpServer(new CocosApplication(projects), undefined, undefined, false, router);
     let closing: Promise<void> | undefined;
     const close = (): Promise<void> => closing ??= (async () => {
       await connector.close(); await transport.close();

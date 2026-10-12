@@ -109,6 +109,16 @@
         "methods": [
           "copyConnection"
         ]
+      },
+      "authorize-project": {
+        "methods": [
+          "authorizeProject"
+        ]
+      },
+      "revoke-project": {
+        "methods": [
+          "revokeProject"
+        ]
       }
     },
     "scene": {
