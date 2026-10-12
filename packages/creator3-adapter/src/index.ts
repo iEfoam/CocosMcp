@@ -62,6 +62,8 @@ export class Creator3Adapter implements EditorAdapter {
         const result = await this.scene('set-property', { uuid: ownerId, path: location ? `__comps__.${Number(location.index)}.${patch.path}` : patch.path, dump: patch.dump });
         if (result === false) throw new CocosError('EDITOR_ERROR', `Editor rejected property: ${patch.path}`);
       }
+      // Label 排版会继续修改节点尺寸；在本次记录内同步派生更新，避免返回的 revision 下一帧立即失效。
+      if (component && before.type === 'cc.Label') await this.port.scene('ui.flush_label', { componentId: uuid });
       const after = Json.object(await this.scene(query, uuid));
       for (const patch of prepared) {
         if (!PropertyDump.matches(PropertyDump.unwrap(PropertyDump.locate(after, patch.path)), patch.value)) {
@@ -231,6 +233,14 @@ export class Creator3Adapter implements EditorAdapter {
         const after = await this.port.scene('componentIds', str('nodeId')) as string[];
         const added = after.filter(uuid => !Array.isArray(before) || !before.includes(uuid));
         if (!added.length) throw new CocosError('VERIFICATION_FAILED', 'No new component appeared');
+        // 只同步本次新增的 Label，不遍历或改写工程里已有的文本组件。
+        if (p.type === 'cc.Label') {
+          try { for (const componentId of added) await this.port.scene('ui.flush_label', { componentId }); }
+          catch (error) {
+            // 组件已存在，排版失败不能当成无副作用失败诱导再次添加。
+            throw new CocosError('OUTCOME_UNKNOWN', 'Label was added but its layout could not be settled', { componentIds: added, cause: CocosError.from(error).message });
+          }
+        }
         return { componentIds: added, node: await this.scene('query-node', str('nodeId')) };
       }
       case 'component.query': return { component: await this.scene('query-component', str('componentId')) };

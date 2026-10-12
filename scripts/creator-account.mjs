@@ -1,6 +1,10 @@
 import { homedir } from 'node:os';
 import { readFile, mkdir, stat, writeFile, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const inspectProcess = promisify(execFile);
 
 /** 凭据只在本机读入内存并按原生格式保存，调用者只取得来源状态。 */
 export class CreatorAccount {
@@ -36,6 +40,15 @@ export class CreatorAccount {
     const relative = major === 3 ? 'profiles/v2/editor/user.json' : 'profiles/user_token.json';
     return { account: await this.profile(join(this.localHome, relative), major) ? 'existing-local-native-session' : 'unavailable' };
   }
+  async processState(pid) {
+    if (!['darwin', 'linux'].includes(process.platform)) return 'unknown';
+    try {
+      // 只读取可执行程序名，不读取参数、环境或凭据；历史 PID 存活不能证明它仍属于 Creator。
+      const { stdout } = await inspectProcess('/bin/ps', ['-p', String(pid), '-o', 'comm='], { timeout: 1500, maxBuffer: 64 * 1024, encoding: 'utf8' });
+      const name = stdout.trim().split(/[\\/]/).pop();
+      return /^CocosCreator(?:\.exe)?$/i.test(name ?? '') ? 'creator' : 'other';
+    } catch (error) { return error.code === 1 ? 'other' : 'unknown'; }
+  }
   async existing(project) {
     const root = await realpath(project), directory = join(root, '.codex-work/cache/cocos-mcp/instances');
     const { readdir } = await import('node:fs/promises');
@@ -70,8 +83,9 @@ export class CreatorAccount {
         const body = JSON.parse(Buffer.concat(chunks).toString());
         if (response.ok && body.result?.instanceId === descriptor.instanceId && body.result?.projectPath === root && body.result?.pid === descriptor.pid) return { ...metadata, status: 'existing-editor-reused' };
       } catch { /* 老扩展或启动期间无法核验时仍保留在用实例，避免重复打开登录窗口。 */ }
-      // 历史 PID 可能被其他进程复用；先扫描全部认证身份，不能让失联描述符挡住现有登录实例。
-      unverified ??= { ...metadata, status: 'existing-editor-present-unverified' };
+      // 扫描全部认证身份后仅保留仍可能属于 Creator 的失联记录；明确复用到其他程序的 PID 不阻止启动。
+      // 原生进程查询不可用时仍保守阻止重复打开，不能把查询失败当成编辑器已退出。
+      if (await this.processState(descriptor.pid) !== 'other') unverified ??= { ...metadata, status: 'existing-editor-present-unverified' };
     }
     return unverified;
   }

@@ -45,7 +45,10 @@ test('launcher reuses only the authenticated project identity and returns no acc
     await writeFile(join(directory, `${'0'.repeat(24)}.json`), JSON.stringify({ instanceId: '0'.repeat(24), projectPath: root, pid: process.pid, creatorMajor: 3, endpoint: `http://127.0.0.1:${address.port}/rpc`, token }));
     const account = new CreatorAccount(root), reused = await account.existing(root);
     assert.equal(reused?.status, 'existing-editor-reused'); assert.doesNotMatch(JSON.stringify(reused), new RegExp(token));
-    pid++; assert.equal((await account.existing(root))?.status, 'existing-editor-present-unverified');
+    pid++;
+    account.processState = async () => 'other'; assert.equal(await account.existing(root), null);
+    account.processState = async () => 'creator'; assert.equal((await account.existing(root))?.status, 'existing-editor-present-unverified');
+    account.processState = async () => 'unknown'; assert.equal((await account.existing(root))?.status, 'existing-editor-present-unverified');
     const outside = await mkdtemp(join(process.cwd(), '.codex-work/tmp/account-descriptor-outside-'));
     await writeFile(join(outside, 'descriptor.json'), JSON.stringify({instanceId, projectPath: root, pid: process.pid, creatorMajor: 3, endpoint: `http://127.0.0.1:${address.port}/rpc`, token}));
     const escaped = await mkdtemp(join(process.cwd(), '.codex-work/tmp/account-descriptor-escape-'));

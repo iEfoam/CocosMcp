@@ -6,8 +6,13 @@ import { SceneInspector } from '../packages/runtime3-bridge/src/scene.js';
 import { Creator3Adapter, type EditorPort } from '../packages/creator3-adapter/src/index.js';
 import type { RuntimeObject } from '../packages/runtime3-bridge/src/access.js';
 import { SceneResponse } from '../extensions/creator3/src/scene-response.js';
-import { CocosError } from '../packages/contracts/src/index.js';
+import { CocosError, Json } from '../packages/contracts/src/index.js';
 import { PrefabService } from '../packages/creator3-adapter/src/prefab.js';
+import { CreatorAccount } from '../scripts/creator-account.mjs';
+
+test('launcher identifies a live Node PID as unrelated to Creator without exposing process arguments', { skip: !['darwin', 'linux'].includes(process.platform) }, async () => {
+  assert.equal(await new CreatorAccount().processState(process.pid), 'other');
+});
 
 test('prefab apply verifies file writes independently of an ambiguous native false result', async t => {
   const root = await mkdtemp(join(process.env.TMPDIR!, 'prefab-apply-')); t.after(() => rm(root, {recursive: true, force: true}));
@@ -144,6 +149,79 @@ test('failed component verification cancels only its own recording', async () =>
   await assert.rejects(new Creator3Adapter(harness.port).execute('component.set', {componentId: 'camera', properties: {fov: 45}}), /rejected/);
   assert.deepEqual(harness.calls.find(call => call.message === 'cancel-recording')!.args, ['record']);
   assert.equal(harness.calls.some(call => call.message === 'undo'), false);
+});
+
+class LabelLayoutHarness {
+  added = false;
+  pending = false;
+  text = 'label';
+  width = 32;
+  flushFailure = false;
+  calls: string[] = [];
+  advanceFrame(): void {
+    if (this.pending) { this.width = this.text.length * 20; this.pending = false; }
+  }
+  port = {
+    scene: async (method: string, value?: { componentId?: string }) => {
+      this.calls.push(method);
+      if (method === 'componentIds') return this.added ? ['existing-camera', 'label'] : ['existing-camera'];
+      if (method === 'componentLocation') return { nodeId: 'owner', index: 1 };
+      if (method === 'fingerprint') return { added: this.added, text: this.text, width: this.width };
+      if (method === 'ui.flush_label') {
+        assert.equal(value?.componentId, 'label');
+        if (this.flushFailure) throw new CocosError('EDITOR_ERROR', 'layout failed');
+        this.advanceFrame(); return { flushed: true };
+      }
+      throw new Error(method);
+    },
+    request: async (_channel: string, method: string, value?: { dump: { value: string } }) => {
+      this.calls.push(method);
+      if (method === 'create-component') { this.added = true; this.pending = true; return null; }
+      if (method === 'query-component') return { type: 'cc.Label', value: { string: { type: 'String', value: this.text } } };
+      if (method === 'query-node') return { width: this.width };
+      if (method === 'set-property') { this.text = value!.dump.value; this.pending = true; return true; }
+      if (method === 'begin-recording') return 'record';
+      if (method === 'end-recording' || method === 'cancel-recording') return null;
+      throw new Error(method);
+    },
+  } as unknown as EditorPort;
+}
+
+test('adding a native Label returns settled node geometry and a revision stable across its next render frame', async () => {
+  const harness = new LabelLayoutHarness(), adapter = new Creator3Adapter(harness.port);
+  const result = await adapter.execute('component.add', { nodeId: 'owner', type: 'cc.Label' });
+  assert.deepEqual(result, { componentIds: ['label'], node: { width: 100 } });
+  assert.equal(harness.pending, false);
+  const revision = await adapter.revision(); harness.advanceFrame();
+  assert.equal(await adapter.revision(), revision);
+  assert.equal(harness.calls.filter(call => call === 'ui.flush_label').length, 1);
+});
+
+test('Label property writes settle native layout before readback and completing their own undo recording', async () => {
+  const harness = new LabelLayoutHarness(); harness.added = true;
+  const adapter = new Creator3Adapter(harness.port);
+  await adapter.execute('component.set', { componentId: 'label', properties: { string: 'native result' } });
+  assert.equal(harness.text, 'native result'); assert.equal(harness.width, 260); assert.equal(harness.pending, false);
+  assert.ok(harness.calls.indexOf('ui.flush_label') < harness.calls.lastIndexOf('query-component'));
+  assert.ok(harness.calls.lastIndexOf('query-component') < harness.calls.indexOf('end-recording'));
+  const revision = await adapter.revision(); harness.advanceFrame();
+  assert.equal(await adapter.revision(), revision);
+});
+
+test('failed layout after Label creation reports the existing component identity as an unknown outcome', async () => {
+  const harness = new LabelLayoutHarness(); harness.flushFailure = true;
+  await assert.rejects(new Creator3Adapter(harness.port).execute('component.add', { nodeId: 'owner', type: 'cc.Label' }),
+    error => error instanceof CocosError && error.code === 'OUTCOME_UNKNOWN' && JSON.stringify(Json.object(error.details ?? {}).componentIds) === JSON.stringify(['label']));
+  assert.equal(harness.added, true);
+  assert.equal(harness.calls.filter(call => call === 'create-component').length, 1);
+});
+
+test('failed Label layout cancels its own property recording and does not report an unstable success', async () => {
+  const harness = new LabelLayoutHarness(); harness.added = true; harness.flushFailure = true;
+  await assert.rejects(new Creator3Adapter(harness.port).execute('component.set', { componentId: 'label', properties: { string: 'failure' } }), /layout failed/);
+  assert.equal(harness.calls.includes('cancel-recording'), true);
+  assert.equal(harness.calls.includes('end-recording'), false);
+  assert.equal(harness.calls.includes('undo'), false);
 });
 
 test('node creation supplies scene root and rejects unattached native false success', async () => {

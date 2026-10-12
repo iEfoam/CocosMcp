@@ -93,6 +93,22 @@ tool_timeout_sec = 120
 
 账号沿用工程持久 profile，不输出凭据或反复启动登录窗口。关闭服务会阻止尚未派发的构建，等待已启动进程退出及最终状态落盘后才释放工程锁。
 
+### Creator 原生场景与节点验收
+
+桌面连接通过后，在明确指定的测试工程安装同版扩展，再启动对应 Creator。记录扩展 buildId、源码指纹、Creator 版本和 instanceId，通过统一入口验证 scene.query、scene.hierarchy、node.create、node.set、node.query、component.add、component.set 和 node.delete。每次写入使用返回的 revision 和独立 operationId，同时验证同 ID 不重复创建、旧 revision 拒绝写入以及原操作状态可查询。
+
+Creator 3 的内置 Label 会在排版时修改 UITransform 尺寸。添加 Label 和修改其属性会先同步本次组件的原生排版，再返回读回结果与 revision；不通过忽略尺寸或跳过版本检查掩盖变化。添加已发生但排版失败时返回 OUTCOME_UNKNOWN 和 componentIds，应查询现有组件，不能再次添加。
+
+测试节点放在已有测试场景中，清理时只删除本任务创建的节点，并核对场景快照与原资源及 meta 的哈希。原生 undo 历史和 dirty 标记不能单独证明所有 API 操作已恢复，不用全局撤销替代节点身份检查。保存或重开场景前先确认没有混入其他编辑。
+
+启动器优先核验桥接的工程、实例和 PID。macOS/Linux 下历史 PID 已被其他程序复用时忽略陈旧记录，不删除记录或终止进程；仍是 Creator 或无法读取进程身份时保留失联状态，避免重复打开登录窗口。其他平台保持保守处理。
+
+### 从单工程旧插件迁移
+
+先停止目标工程的旧连接，再安装对应 Creator 版本的新扩展并重载编辑器。已有旧插件的源码安装会保留回滚目录及有效的 clientInstallation；手动 ZIP 安装按前述 service-config.json 配置同一个已安装统一客户端。检查面板的客户端 buildId，并实际查询目标工程的场景，文件安装成功不等于编辑器已经加载新版。
+
+删除旧插件不会自动删除 Codex 配置。若游戏工程 .codex/config.toml 中仍有旧的 [mcp_servers.cocos] HTTP 表，应同时停用或移除该旧连接及其子表，保留全局 cocos_unified。无需在每个新工程添加 command、端口或 token；工程位于已允许目录内时，使用其绝对路径调用 cocos_project_connect 即可。
+
 ## 策略、升级和回退
 
 安装位于 `<workspace>/.codex-work/artifacts/cocos-client/`，policy 示例：
