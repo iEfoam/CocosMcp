@@ -1,7 +1,6 @@
+import { TestWorkspace } from './workspace.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp } from 'node:fs/promises';
-import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { PreviewDiagnostics, type PreviewDebugger } from '../extensions/creator3/src/preview-diagnostics.js';
 import type { JsonObject } from '../packages/contracts/src/index.js';
@@ -28,7 +27,7 @@ test('page listeners preserve default handling and emit structured errors and pr
   log.dispose();assert.equal(d.attached,false);
 });
 test('network failures and HTTP errors are bounded, sanitized and persisted for cursor pagination after restart', async () => {
-  const project = await mkdtemp(join(process.cwd(),'.codex-work/tmp/web-logs-'));
+  const project = await new TestWorkspace().create('web-logs-');
   const log=new PreviewDiagnostics(project), d=new DebuggerStub();await log.attach(d);
   d.emit('Network.requestWillBeSent',{requestId:'a',request:{url:'http://user:password@localhost/data?secret=1',method:'GET',headers:{Authorization:'secret'}}});
   d.emit('Network.loadingFailed',{requestId:'a',errorText:'net::ERR_FAILED'});

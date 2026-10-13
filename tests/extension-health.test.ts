@@ -1,6 +1,7 @@
+import { TestWorkspace } from './workspace.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cp, mkdir, mkdtemp, readFile, rename, symlink, unlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, rename, symlink, unlink, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { ExtensionHealth } from '../packages/native-adapters/src/extension-health.js';
@@ -10,7 +11,7 @@ import { ExtensionUpdate } from '../extensions/shared/extension-update.js';
 import files from '../packages/native-adapters/src/extension-files.json' with { type: 'json' };
 
 class HealthFixture {
-  async project(): Promise<string> { return mkdtemp(resolve('.codex-work/tmp/extension-health-')); }
+  async project(): Promise<string> { return new TestWorkspace().create('extension-health-'); }
   async source(root: string, major: 2 | 3): Promise<string> {
     const source = join(root, `extensions/creator${major}`);
     await cp(resolve(`.codex-work/build/extensions/creator${major}`), source, { recursive: true }); return source;

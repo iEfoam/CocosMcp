@@ -1,6 +1,7 @@
+import { TestWorkspace } from './workspace.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, chmod } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import { BuildJobs } from '../packages/native-adapters/src/build.js';
@@ -10,7 +11,7 @@ class BuildSessionHarness {
   project = '';
   creator = '';
   async setup(): Promise<void> {
-    this.project = await mkdtemp(join(process.cwd(), '.codex-work/tmp/build-session-'));
+    this.project = await new TestWorkspace().create('build-session-');
     this.creator = join(this.project, 'Creator.app');
     const resources = join(this.creator, 'Contents/Resources/app');
     const executable = join(this.creator, 'Contents/MacOS/CocosCreator');

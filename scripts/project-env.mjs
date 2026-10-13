@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, rmdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -8,6 +8,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const work = join(root, '.codex-work');
 const requestedTmp = process.env.TMPDIR;
 const taskTmp = requestedTmp && requestedTmp.startsWith(join(work, 'tmp') + '/') ? requestedTmp : join(work, 'tmp', `process-${process.pid}`);
+const ownsTmp = !existsSync(taskTmp);
 mkdirSync(taskTmp, { recursive: true });
 for (const directory of ['tmp', 'cache', 'build', 'logs', 'downloads']) {
   mkdirSync(join(work, directory), { recursive: true });
@@ -32,4 +33,12 @@ const environment = {
 const child = spawn(command, args, { cwd: root, env: environment, stdio: 'inherit', shell: false });
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => child.kill(signal));
 child.on('error', (error) => { console.error(error.message); process.exitCode = 1; });
-child.on('exit', (code, signal) => { process.exitCode = code ?? (signal === 'SIGINT' ? 130 : 1); });
+child.on('exit', (code, signal) => {
+  process.exitCode = code ?? (signal === 'SIGINT' ? 130 : 1);
+  // 空目录可以直接回收；非空或失败现场保留，不能递归删调用方传入的目录。
+  if (code === 0 && ownsTmp) {
+    try { rmdirSync(taskTmp); } catch (error) {
+      if (error.code !== 'ENOTEMPTY' && error.code !== 'ENOENT') console.error('Temporary directory cleanup failed: ' + error.message);
+    }
+  }
+});

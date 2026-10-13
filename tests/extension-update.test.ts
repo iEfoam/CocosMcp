@@ -1,6 +1,7 @@
+import { TestWorkspace } from './workspace.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { GithubUpdate } from '../packages/native-adapters/src/github-update.js';
@@ -23,7 +24,7 @@ class UpdateFixture {
       digest: createHash('sha256').update(data).digest('hex') };
   }
   async create() {
-    const project = await mkdtemp(resolve('.codex-work/tmp/update-test-'));
+    const project = await new TestWorkspace().create('update-test-');
     const root = join(project, 'extensions/cocos-mcp-creator3');
     await mkdir(root, {recursive: true});
     await writeFile(join(project, '.gitignore'), '.codex-work/\n');

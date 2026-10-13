@@ -1,6 +1,7 @@
+import { TestWorkspace } from './workspace.js';
 import { parseHTML } from 'linkedom';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, access, writeFile, unlink } from 'node:fs/promises';
+import { readFile, access, writeFile, unlink } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { runInNewContext } from 'node:vm';
@@ -145,7 +146,7 @@ for (const major of [2, 3] as const) {
   });
 
   test(`Creator ${major}: installed manifest and menu resolve the bundled default panel`, async () => {
-    const project = await mkdtemp(resolve('.codex-work/tmp/panel-install-'));
+    const project = await new TestWorkspace().create('panel-install-');
     const installer = new ExtensionInstaller();
     const first = await installer.install(project, major, buildRoot);
     const installed = await installer.install(project, major, buildRoot);
@@ -243,7 +244,7 @@ test('panel recovers from IPC failure on its next refresh', async () => {
 });
 
 test('panel snapshot omits credentials, ignores stale files, and never requires a scene revision', async () => {
-  const project = await mkdtemp(resolve('.codex-work/tmp/panel-state-'));
+  const project = await new TestWorkspace().create('panel-state-');
   const adapter: EditorAdapter = {
     major: 3, supportedCapabilities: () => ['scene.query'], dispose: async () => {},
     revision: async () => { throw new Error('No scene open'); },
@@ -270,7 +271,7 @@ test('panel snapshot omits credentials, ignores stale files, and never requires 
 test('panel reads authenticated runtime sessions without exposing tokens and reports gateway failure', async (t) => {
   const { ProjectRegistry } = await import('../packages/application/src/registry.js');
   const { RuntimeGateway } = await import('../packages/application/src/runtime-gateway.js');
-  const project = await mkdtemp(resolve('.codex-work/tmp/panel-runtime-'));
+  const project = await new TestWorkspace().create('panel-runtime-');
   const registry = new ProjectRegistry();
   const { projectId } = await registry.add(project);
   const gateway = new RuntimeGateway(registry);
@@ -312,7 +313,7 @@ test('panel reads authenticated runtime sessions without exposing tokens and rep
 
 test('managed MCP service starts once, serves HTTP, detects external gateway and cleans up on stop', async () => {
   const { McpService } = await import('../extensions/shared/mcp-service.js');
-  const project = await mkdtemp(resolve('.codex-work/tmp/managed-service-'));
+  const project = await new TestWorkspace().create('managed-service-');
   const extension = resolve('.codex-work/build/extensions/creator3');
   const service = new McpService(project, extension);
   const other = new McpService(project, extension);

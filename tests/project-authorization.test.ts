@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, readFile, writeFile, cp, symlink, rename, chmod, lstat } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, cp, symlink, rename, chmod, lstat, unlink } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
@@ -74,6 +74,47 @@ test('installing either Creator extension authorizes only its canonical project 
   assert.equal((await f.authorizations().rows()).length, 2);
   assert.equal((await lstat(join(f.installation, 'authorized-projects.json'))).mode & 0o777, 0o600);
   await assert.rejects(f.authorizations().locate(await f.game('never-installed'), []), { code: 'PATH_OUTSIDE_PROJECT' });
+});
+
+test('missing local configuration bootstraps a verified client and exposes authorized panel state for Creator 2 and 3', async () => {
+  const f = new AuthorizationFixture(); await f.setup();
+  await cp(resolve('.codex-work/build/client'), join(f.build, 'client'), { recursive: true });
+  for (const major of [2, 3] as const) {
+    await unlink(join(f.build, `extensions/creator${major}/service-config.json`));
+    const game = await f.game(`bootstrap-${major}`, major);
+    const result = await f.install(game, major);
+    assert.equal(result.authorization.state, 'authorized');
+    const config = JSON.parse(await readFile(join(f.extension(game, major), 'service-config.json'), 'utf8'));
+    assert.equal(config.clientInstallation, join(game, '.codex-work/artifacts/cocos-client'));
+    const state = await new McpService(game, f.extension(game, major)).inspect();
+    assert.equal(state.unifiedClient?.installed, true);
+    assert.equal(state.unifiedClient?.authorization, 'authorized');
+    const policy = JSON.parse(await readFile(join(config.clientInstallation, 'policy.json'), 'utf8'));
+    assert.deepEqual(policy.allowedRoots, []);
+    assert.equal((await new ProjectAuthorizations(config.clientInstallation).rows()).length, 1);
+    await f.install(game, major);
+    assert.equal((await new ProjectAuthorizations(config.clientInstallation).rows()).length, 1);
+  }
+});
+
+test('missing client and bundle cannot report a successful or pending installation', async () => {
+  const f = new AuthorizationFixture(); await f.setup();
+  const game = await f.game('missing-client', 2);
+  await unlink(join(f.build, 'extensions/creator2/service-config.json'));
+  await assert.rejects(f.install(game, 2), { code: 'VERIFICATION_FAILED' });
+  await assert.rejects(lstat(f.extension(game, 2)), { code: 'ENOENT' });
+  await assert.rejects(new ExtensionInstaller().authorizeInstalled(game, 2), { code: 'VERIFICATION_FAILED' });
+});
+
+test('broken configured client preserves the installed plugin and never falls back to broader access', async () => {
+  const f = new AuthorizationFixture(); await f.setup(); const game = await f.game('broken-client');
+  await f.install(game); const plugin = f.extension(game);
+  const before = await readFile(join(plugin, 'package.json'));
+  await writeFile(join(plugin, 'local-marker'), 'preserve');
+  await unlink(join(f.installation, 'current.json'));
+  await assert.rejects(f.install(game), { code: 'VERIFICATION_FAILED' });
+  assert.deepEqual(await readFile(join(plugin, 'package.json')), before);
+  assert.equal(await readFile(join(plugin, 'local-marker'), 'utf8'), 'preserve');
 });
 
 test('copied plugins cannot self-authorize; manual control-center authorization and revocation are explicit', async () => {

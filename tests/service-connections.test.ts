@@ -1,6 +1,7 @@
+import { TestWorkspace } from './workspace.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp, readFile, writeFile, symlink, mkdir, unlink, access } from 'node:fs/promises';
+import { readFile, writeFile, symlink, mkdir, unlink, access } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { createServer, request as httpRequest, type Server } from 'node:http';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -16,7 +17,7 @@ import { ExtensionInstaller } from '../packages/native-adapters/src/installer.js
 
 class ConnectionFixture {
   async project() {
-    const root = await mkdtemp(resolve('.codex-work/tmp/mcp-connection-test-'));
+    const root = await new TestWorkspace().create('mcp-connection-test-');
     const paths = await ProjectPaths.open(root), registry = new ProjectRegistry(); await registry.add(root);
     return { root, paths, registry, connections: new ServiceConnections(paths), extension: resolve('.codex-work/build/extensions/creator3') };
   }
@@ -169,7 +170,7 @@ test('port configuration guards invalid values and live ownership; symlinks cann
   try { await lease.publish(null); await assert.rejects(connections.configurePort(0), { code: 'RESOURCE_BUSY' }); assert.equal(await connections.port(), 23456); }
   finally { await lease.close(); }
   await connections.configurePort(0); assert.equal(await connections.port(), 0);
-  const outside = await mkdtemp(resolve('.codex-work/tmp/connection-outside-')), destination = join(outside, 'config.json');
+  const outside = await new TestWorkspace().create('connection-outside-'), destination = join(outside, 'config.json');
   await writeFile(destination, '{"preserved":true}');
   const config = await paths.resolve('.codex-work/cache/cocos-mcp/connection.json'); await unlink(config); await symlink(destination, config);
   await assert.rejects(connections.savePort(12345), { code: 'PATH_OUTSIDE_PROJECT' }); assert.equal(await readFile(destination, 'utf8'), '{"preserved":true}');

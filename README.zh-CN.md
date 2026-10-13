@@ -133,7 +133,10 @@ Creator 2 场景加载字节证明仍可为 unknown；外部 Chrome MCP 端到�
    Creator 2 → packages/cocos-mcp-creator2/，包名必须为 cocos-mcp-creator2；
    Creator 3 → extensions/cocos-mcp-creator3/，包名必须为 cocos-mcp-creator3。
    package.json 应直接位于扩展根目录；不改游戏资源、场景、脚本或其他扩展。
-5. 自动写入扩展根目录 service-config.json，将 nodeExecutable 设为验证过的 Node 绝对路径。
+5. 自动配置统一客户端并授权当前工程：本地源码构建使用现有 CLI install 入口，不手动复制文件替代安装器。
+   安装器写入 service-config.json 的 nodeExecutable 和 clientInstallation；有完整 client 构建时自动安装缺失客户端。
+   缺少客户端安装包、配置损坏或授权失败时必须停止并报告，不能将 pending 当作成功。仅登记当前工程，不扩大 allowedRoots。
+   安装后核对 authorization.state=authorized，并在目标工程控制中心的“统一 stdio（多工程）”下确认“当前工程已授权”和“取消工程授权”。
    使用发布包内的服务程序，不克隆源码或安装 npm/pnpm 依赖。
 6. 使用可用的桌面/编辑器工具打开目标工程、加载扩展，并从 CocosMCP 控制中心启动 MCP 服务。
    自动读取真实 HTTP 地址和本机 Bearer token，备份并合并当前 AI 客户端的 Streamable HTTP MCP 配置；

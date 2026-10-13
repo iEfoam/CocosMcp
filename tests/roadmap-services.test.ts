@@ -1,6 +1,7 @@
+import { TestWorkspace } from './workspace.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, writeFile, symlink, stat } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, symlink, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import { createServer } from 'node:http';
@@ -15,7 +16,7 @@ import { SceneInspector } from '../packages/runtime3-bridge/src/scene.js';
 import { CocosError, Json, type BridgeDescriptor, type BridgeRequest, type JsonObject, type JsonValue } from '../packages/contracts/src/index.js';
 
 test('local native credentials are reused once without overwriting project authentication or following a symlink', async () => {
-  const project = await mkdtemp(join(process.cwd(), '.codex-work/tmp/account-project-')), local = await mkdtemp(join(process.cwd(), '.codex-work/tmp/account-local-'));
+  const project = await new TestWorkspace().create('account-project-'), local = await new TestWorkspace().create('account-local-');
   const profile = 'profiles/v2/editor/user.json', source = { session_id: 'fake-id', session_key: 'fake-key', cocos_uid: 'fake-user' };
   await mkdir(join(local, 'profiles/v2/editor'), { recursive: true }); await writeFile(join(local, profile), JSON.stringify(source));
   const account = new CreatorAccount(local), first = await account.prepare(project, 3), target = join(first.home, profile);
@@ -23,7 +24,7 @@ test('local native credentials are reused once without overwriting project authe
   await writeFile(join(local, profile), JSON.stringify({ ...source, session_id: 'other-account' }));
   assert.equal((await account.prepare(project, 3)).account, 'existing-project-session'); assert.deepEqual(JSON.parse(await readFile(target, 'utf8')), source);
   assert.equal((await account.prepare(project, 2)).account, 'unavailable');
-  const escaped = await mkdtemp(join(process.cwd(), '.codex-work/tmp/account-escape-')); await mkdir(join(escaped, '.codex-work/cache'), { recursive: true });
+  const escaped = await new TestWorkspace().create('account-escape-'); await mkdir(join(escaped, '.codex-work/cache'), { recursive: true });
   await symlink(local, join(escaped, '.codex-work/cache/creator-home')); await assert.rejects(account.prepare(escaped, 3), /escapes project/);
   await writeFile(target, '{}'); const invalid = await account.prepare(project, 3);
   assert.equal(invalid.account, 'unavailable'); assert.equal(invalid.nextAction, 'inspect-preserved-project-profile'); assert.equal(await readFile(target, 'utf8'), '{}');
@@ -31,7 +32,7 @@ test('local native credentials are reused once without overwriting project authe
 });
 
 test('launcher reuses only the authenticated project identity and returns no account or bridge secrets', async () => {
-  const root = await mkdtemp(join(process.cwd(), '.codex-work/tmp/account-identity-')), instanceId = 'f'.repeat(24), token = 'a'.repeat(64);
+  const root = await new TestWorkspace().create('account-identity-'), instanceId = 'f'.repeat(24), token = 'a'.repeat(64);
   let pid = process.pid;
   const server = createServer((request, response) => {
     assert.equal(request.headers.authorization, `Bearer ${token}`);
@@ -49,9 +50,9 @@ test('launcher reuses only the authenticated project identity and returns no acc
     account.processState = async () => 'other'; assert.equal(await account.existing(root), null);
     account.processState = async () => 'creator'; assert.equal((await account.existing(root))?.status, 'existing-editor-present-unverified');
     account.processState = async () => 'unknown'; assert.equal((await account.existing(root))?.status, 'existing-editor-present-unverified');
-    const outside = await mkdtemp(join(process.cwd(), '.codex-work/tmp/account-descriptor-outside-'));
+    const outside = await new TestWorkspace().create('account-descriptor-outside-');
     await writeFile(join(outside, 'descriptor.json'), JSON.stringify({instanceId, projectPath: root, pid: process.pid, creatorMajor: 3, endpoint: `http://127.0.0.1:${address.port}/rpc`, token}));
-    const escaped = await mkdtemp(join(process.cwd(), '.codex-work/tmp/account-descriptor-escape-'));
+    const escaped = await new TestWorkspace().create('account-descriptor-escape-');
     await mkdir(join(escaped, '.codex-work/cache/cocos-mcp/instances'), {recursive: true});
     await symlink(join(outside, 'descriptor.json'), join(escaped, `.codex-work/cache/cocos-mcp/instances/${instanceId}.json`));
     assert.equal(await account.existing(escaped), null);
@@ -95,7 +96,7 @@ test('view configuration rechecks geometry synchronously after the final asynchr
 });
 
 test('evidence exports a real PNG reference, retains identity and redacts secrets before persistence', async () => {
-  const root = await mkdtemp(join(process.cwd(), '.codex-work/tmp/evidence-')), paths = await ProjectPaths.open(root);
+  const root = await new TestWorkspace().create('evidence-'), paths = await ProjectPaths.open(root);
   const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3]);
   const saved = await new EvidenceStore().save(paths, 'run-1', { previewSessionId: 'preview-id', token: 'do-not-save', passed: true, checks: [{ passed: false }, { passed: 'do-not-save' }], password: false, session_id: 'do-not-save', dataUrl: `data:image/png;base64,${png.toString('base64')}`, image: { width: 10, height: 20 } });
   const image = Json.object(Json.object(saved.result).image); assert.equal(image.width, 10); assert.equal(image.path, saved.evidenceRefs[0]!.path);
@@ -170,7 +171,7 @@ test('regression binds lifecycle checks to the owned preview while an old runtim
 class RecipeHarness {
   bridge = new RecipeBridge(); registry = new ProjectRegistry(this.bridge); app = new CocosApplication(this.registry, undefined, this.bridge); projectId = '';
   async setup(): Promise<void> {
-    const root = await mkdtemp(join(process.cwd(), '.codex-work/tmp/recipe-')); this.projectId = (await this.registry.add(root)).projectId;
+    const root = await new TestWorkspace().create('recipe-'); this.projectId = (await this.registry.add(root)).projectId;
     const directory = await this.registry.paths(this.projectId).work('cache', 'cocos-mcp/instances');
     const descriptor: BridgeDescriptor = { protocolVersion: 1, projectId: this.projectId, projectPath: root, instanceId: 'a'.repeat(24), creatorMajor: 3, editorVersion: '3.8.8', endpoint: 'http://127.0.0.1:6001/rpc', token: 'a'.repeat(64), pid: process.pid, startedAt: new Date().toISOString() };
     await writeFile(join(directory, `${descriptor.instanceId}.json`), JSON.stringify(descriptor));
@@ -220,7 +221,7 @@ test('acceptance restart exposes unknown status and never replays recorded input
 });
 
 test('audit uses a UTC half-open interval, finite pagination and rejects impossible dates', async () => {
-  const root = await mkdtemp(join(process.cwd(), '.codex-work/tmp/audit-range-')), paths = await ProjectPaths.open(root), audit = new OperationAudit();
+  const root = await new TestWorkspace().create('audit-range-'), paths = await ProjectPaths.open(root), audit = new OperationAudit();
   for (const day of ['07', '08', '09']) await audit.record(paths, { operationId: `day-${day}`, startedAt: `2026-10-${day}T00:00:00.000Z` });
   const p = { from: '2026-10-08T00:00:00Z', to: '2026-10-10T00:00:00Z', limit: 1 };
   const first = await audit.rows(paths, p); assert.equal((first.rows as JsonObject[])[0]!.operationId, 'day-08');

@@ -1,9 +1,10 @@
+import { TestWorkspace } from './workspace.js';
 import { capabilityEnglish } from '../extensions/shared/panel-capabilities-en.js';
 import { Operations } from '../packages/capability-catalog/src/operations.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtempSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { PanelI18n } from '../extensions/shared/panel-i18n.js';
 import { PanelPreferences, type PanelMenuHost } from '../extensions/shared/panel-preferences.js';
 
@@ -18,7 +19,7 @@ test('panel translates static text without rewriting log and path interpolations
 
 for (const major of [2, 3] as const) {
   test(`Creator ${major} language persists, updates only extension menus and preserves clipboard payload`, () => {
-    const project = mkdtempSync(resolve('.codex-work/tmp/panel-language-'));
+    const project = new TestWorkspace().createSync('panel-language-');
     const calls: { operation: string; path: string; options?: unknown }[] = [];
     let applications = 0;
     let copied = '';

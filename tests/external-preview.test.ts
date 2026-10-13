@@ -1,7 +1,8 @@
+import { TestWorkspace } from './workspace.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { ExternalPreview, ProjectBrowserConnector, type ExternalBrowserPort } from '../extensions/shared/external-preview.js';
@@ -32,7 +33,7 @@ class Fixture {
   }
   async stop(): Promise<void> { await new Promise<void>(resolve => this.server.close(() => resolve())); }
   async project(): Promise<string> {
-    const root = await mkdtemp(join(process.cwd(), '.codex-work/tmp/preview-refresh-'));
+    const root = await new TestWorkspace().create('preview-refresh-');
     await mkdir(join(root, 'assets')); await writeFile(join(root, 'assets/source.js'), 'const label = "new text";');
     return root;
   }

@@ -1,6 +1,7 @@
+import { TestWorkspace } from './workspace.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp, mkdir, writeFile, symlink } from 'node:fs/promises';
+import { mkdir, writeFile, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { TextureService } from '../packages/creator3-adapter/src/texture.js';
 import { Json, type JsonObject } from '../packages/contracts/src/index.js';
@@ -10,7 +11,7 @@ class TextureHarness {
   root = ''; writes = 0; failImport = false; settleReads = 0; remainingReads = 0;
   meta: JsonObject = { uuid: 'image', importer: 'image', userData: { type: 'sprite-frame' }, subMetas: { t: { uuid: 'texture', importer: 'texture', userData: { minfilter: 'nearest', magfilter: 'nearest', mipfilter: 'none', other: 'preserve' } }, s: { uuid: 'sprite', importer: 'sprite-frame', userData: {} } } };
   async setup(family: 'texture' | 'spriteframe' = 'texture'): Promise<TextureService> {
-    this.root = await mkdtemp(join(process.cwd(), '.codex-work/tmp/texture-')); await mkdir(join(this.root, 'assets')); await writeFile(join(this.root, 'assets/pic.png'), 'source-image');
+    this.root = await new TestWorkspace().create('texture-'); await mkdir(join(this.root, 'assets')); await writeFile(join(this.root, 'assets/pic.png'), 'source-image');
     return new TextureService({ version: '3.8.8', projectPath: this.root, request: async (_channel: string, method: string, ...args: unknown[]) => {
       if (method === 'query-asset-info') return { uuid: 'image', url: 'db://assets/pic.png' };
       if (method === 'query-asset-meta') {

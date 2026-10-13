@@ -1,6 +1,7 @@
+import { TestWorkspace } from './workspace.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { CocosApplication, ProjectRegistry } from '../packages/application/src/index.js';
 import { RuntimeGateway } from '../packages/application/src/runtime-gateway.js';
@@ -18,7 +19,7 @@ test('texture binding accepts public texture classes without TextureBase and rej
 });
 
 test('gateway expires sessions consistently, keeps genuine ambiguity and rejects foreign replies', async () => {
-  const root = await mkdtemp(join(process.cwd(), '.codex-work/tmp/gateway-regression-'));
+  const root = await new TestWorkspace().create('gateway-regression-');
   const registry = new ProjectRegistry(), project = await registry.add(root);
   let now = Date.now(); const gateway = new RuntimeGateway(registry, 1000, 30000, () => now);
   await gateway.start();
@@ -46,7 +47,7 @@ test('gateway expires sessions consistently, keeps genuine ambiguity and rejects
 });
 
 test('workflow references bind runtime, poll reads freshly and preserve recovery checkpoints', async () => {
-  const root = await mkdtemp(join(process.cwd(), '.codex-work/tmp/workflow-regression-'));
+  const root = await new TestWorkspace().create('workflow-regression-');
   const registry = new ProjectRegistry(), project = await registry.add(root); let calls = 0;
   const app = new CocosApplication(registry, undefined, undefined, false, { execute: async (_project, runtime, id, params) => {
     if (id === 'runtime.query') return { runtimeInstanceId: 'bound', target: 'scene' };

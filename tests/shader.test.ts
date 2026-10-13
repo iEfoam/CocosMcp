@@ -1,7 +1,8 @@
+import { TestWorkspace } from './workspace.js';
 import { Creator2Support } from '../packages/capability-catalog/src/creator2-support.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, writeFile, symlink } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ShaderVariants, ShaderDiagnostics, MaterialValues } from '../packages/shader-core/src/index.js';
 import { ShaderService } from '../packages/creator3-adapter/src/shader.js';
@@ -15,7 +16,7 @@ class AssetHarness {
   root = '';
   service!: ShaderService;
   async create(): Promise<void> {
-    this.root = await mkdtemp(join(process.cwd(), '.codex-work/tmp/shader-test-'));
+    this.root = await new TestWorkspace().create('shader-test-');
     await mkdir(join(this.root, 'assets'));
     const port = { version: '3.8.8', projectPath: this.root,
       request: async (_channel: string, method: string, url: string, content: string): Promise<unknown> => {

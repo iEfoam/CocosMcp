@@ -1,7 +1,6 @@
+import { TestWorkspace } from './workspace.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp } from 'node:fs/promises';
-import { resolve } from 'node:path';
 import { CreatorConsole } from '../extensions/creator3/src/console.js';
 import { CreatorSelection } from '../extensions/creator3/src/selection.js';
 import { Creator3Adapter } from '../packages/creator3-adapter/src/index.js';
@@ -59,7 +58,7 @@ test('console capability is read-only and only advertised by an available verifi
 });
 
 test('authenticated console reads work when scene revision is broken and never echo queries into logs', async () => {
-  const root = await mkdtemp(resolve('.codex-work/tmp/console-query-'));
+  const root = await new TestWorkspace().create('console-query-');
   const reader = new CreatorConsole({ query: () => [{ type: 'error', message: 'Scene compilation failed', process: 'Scene' }] });
   const bridge = new EditorBridge({ major: 3, supportedCapabilities: () => ['console.query'], dispose: async () => {},
     revision: async () => { throw new Error('Scene unavailable'); }, execute: async (_id, p) => reader.query(p) }, root, '3.8.8');

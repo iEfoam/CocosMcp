@@ -1,3 +1,4 @@
+import { TestWorkspace } from './workspace.js';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
@@ -87,7 +88,7 @@ test('queue deadline expires only waiting work and failure releases the next tas
 });
 
 test('workflow JSON publication is atomic and exclusive creation preserves the existing record', async () => {
-  const directory = await mkdtemp(join(process.cwd(), '.codex-work/tmp/workflow-atomic-'));
+  const directory = await new TestWorkspace().create('workflow-atomic-');
   const path = join(directory, 'workflow.json'), files = new AtomicJson();
   await files.write(path, { index: 0 }, true);
   await assert.rejects(files.write(path, { index: -1 }, true), { code: 'OPERATION_CONFLICT' });
@@ -98,7 +99,7 @@ test('workflow JSON publication is atomic and exclusive creation preserves the e
 });
 
 test('checkpoint failure after a successful step stops even continueOnError workflows without replay', async () => {
-  const root = await mkdtemp(join(process.cwd(), '.codex-work/tmp/workflow-checkpoint-'));
+  const root = await new TestWorkspace().create('workflow-checkpoint-');
   const registry = new ProjectRegistry(), project = await registry.add(root); let calls = 0;
   const app = new CocosApplication(registry, undefined, undefined, false, { execute: async () => {
     calls++;
@@ -118,7 +119,7 @@ test('checkpoint failure after a successful step stops even continueOnError work
 
 test('confirmed editor success survives audit failure and is not dispatched twice', async t => {
   const { BridgeClient } = await import('../packages/application/src/bridge-client.js');
-  const root = await mkdtemp(join(process.cwd(), '.codex-work/tmp/audit-failure-'));
+  const root = await new TestWorkspace().create('audit-failure-');
   const registry = new ProjectRegistry(), { projectId } = await registry.add(root), bridge = new BridgeClient();
   t.mock.method(registry, 'instance', async () => ({ protocolVersion: 1, projectId, projectPath: root, instanceId: 'editor', editorVersion: '3.8.8', creatorMajor: 3, endpoint: '', token: '', pid: process.pid, startedAt: '' }));
   const call = t.mock.method(bridge, 'call', async () => ({ result: { saved: true }, revision: 'revision' }));
@@ -132,7 +133,7 @@ test('confirmed editor success survives audit failure and is not dispatched twic
 
 test('unknown editor outcome is reconciled against its original instance without executing again', async t => {
   const { BridgeClient } = await import('../packages/application/src/bridge-client.js');
-  const root = await mkdtemp(join(process.cwd(), '.codex-work/tmp/reconcile-'));
+  const root = await new TestWorkspace().create('reconcile-');
   const registry = new ProjectRegistry(), { projectId } = await registry.add(root), bridge = new BridgeClient();
   const selected: Array<string | undefined> = [];
   t.mock.method(registry, 'instance', async (_project: string, instance?: string) => {
@@ -163,7 +164,7 @@ test('truncated editor JSON is an unknown outcome, never a retryable ordinary fa
 });
 
 test('runtime success, failure and authorization rejection are audited without request contents or error secrets', async () => {
-  const root = await mkdtemp(join(process.cwd(), '.codex-work/tmp/audit-runtime-')), registry = new ProjectRegistry(), { projectId } = await registry.add(root);
+  const root = await new TestWorkspace().create('audit-runtime-'), registry = new ProjectRegistry(), { projectId } = await registry.add(root);
   let calls = 0;
   const app = new CocosApplication(registry, undefined, undefined, false, { execute: async () => {
     calls++; if (calls === 2) throw new CocosError('RUNTIME_ERROR', 'password=never-log-this');
@@ -184,7 +185,7 @@ test('runtime success, failure and authorization rejection are audited without r
 });
 
 test('durable operation reservation prevents mutation replay after restart and rejects changed parameters', async () => {
-  const root = await mkdtemp(join(process.cwd(), '.codex-work/tmp/audit-restart-')), registry = new ProjectRegistry(), { projectId } = await registry.add(root);
+  const root = await new TestWorkspace().create('audit-restart-'), registry = new ProjectRegistry(), { projectId } = await registry.add(root);
   let calls = 0; const runtime = { execute: async () => { calls++; return { paused: false }; } };
   const first = new CocosApplication(registry, undefined, undefined, false, runtime), request = { projectId, capabilityId: 'runtime.resume', params: {}, operationId: 'resume-once' };
   const result = await first.execute(request); assert.equal(await first.execute(request), result); assert.equal(calls, 1);
@@ -196,7 +197,7 @@ test('durable operation reservation prevents mutation replay after restart and r
 });
 
 test('idempotency conflict is audited before dispatch without exposing changed parameters', async () => {
-  const root = await mkdtemp(join(process.cwd(), '.codex-work/tmp/audit-idempotency-')), registry = new ProjectRegistry(), { projectId } = await registry.add(root);
+  const root = await new TestWorkspace().create('audit-idempotency-'), registry = new ProjectRegistry(), { projectId } = await registry.add(root);
   let calls = 0; const app = new CocosApplication(registry, undefined, undefined, false, { execute: async () => { calls++; return {}; } });
   const request = { projectId, capabilityId: 'runtime.set', params: { path: 'name', value: 'initial' }, operationId: 'same-id' };
   await app.execute(request);
@@ -210,7 +211,7 @@ test('idempotency conflict is audited before dispatch without exposing changed p
 });
 
 test('runtime audit failure preserves successful mutation response and in-memory deduplication', async () => {
-  const root = await mkdtemp(join(process.cwd(), '.codex-work/tmp/runtime-audit-failure-')), registry = new ProjectRegistry(), { projectId } = await registry.add(root);
+  const root = await new TestWorkspace().create('runtime-audit-failure-'), registry = new ProjectRegistry(), { projectId } = await registry.add(root);
   await mkdir(join(root, '.codex-work/logs/cocos-mcp/operations.jsonl'), { recursive: true });
   let calls = 0; const app = new CocosApplication(registry, undefined, undefined, false, { execute: async () => { calls++; return { paused: false }; } });
   const request = { projectId, capabilityId: 'runtime.resume', params: {}, operationId: 'resume' };

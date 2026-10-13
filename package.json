@@ -15,7 +15,7 @@
     "start": "node scripts/project-env.mjs node .codex-work/build/server/cli.mjs",
     "catalog": "node scripts/project-env.mjs node .codex-work/build/server/cli.mjs catalog",
     "check": "pnpm typecheck && pnpm build && pnpm test && pnpm build",
-    "client:install": "node scripts/project-env.mjs node .codex-work/build/client/install.mjs --workspace . --allowed-root ..",
+    "client:install": "node scripts/project-env.mjs node .codex-work/build/client/install.mjs --workspace .",
     "client:rollback": "node scripts/project-env.mjs node .codex-work/build/client/install.mjs --workspace . --rollback"
   },
   "dependencies": {

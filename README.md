@@ -135,7 +135,12 @@ Use your available tools to perform the installation, rather than just describin
    Install Creator 2 into packages/cocos-mcp-creator2/ with package name cocos-mcp-creator2;
    install Creator 3 into extensions/cocos-mcp-creator3/ with package name cocos-mcp-creator3.
    Place package.json directly in the extension root. Do not modify game assets/scripts/scenes or other extensions.
-5. Write service-config.json beside package.json, setting nodeExecutable to the verified absolute Node path.
+5. Configure the unified client and authorize this exact project. For local builds, use the existing CLI install command,
+   not manual file copying. The installer writes nodeExecutable and clientInstallation into service-config.json and
+   bootstraps a missing client when a complete client bundle is present. Missing bundles, corrupt configuration or
+   authorization failures must fail installation; pending is not success. Do not broaden allowedRoots.
+   Verify authorization.state=authorized and the target project's “Unified stdio” panel shows “This project is authorized”
+   and “Revoke project authorization”.
    Use the bundled service; do not clone source or install npm/pnpm dependencies.
 6. Use desktop/editor tools to open the project, load the extension and start MCP from its control center.
    Read the actual HTTP endpoint and local Bearer token yourself. Back up and merge this AI client's Streamable HTTP

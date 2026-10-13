@@ -1,6 +1,7 @@
+import { TestWorkspace } from './workspace.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, symlink } from 'node:fs/promises';
+import { mkdir, writeFile, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { BuildArtifacts } from '../packages/native-adapters/src/build-artifacts.js';
@@ -9,7 +10,7 @@ import { Json, type JsonObject } from '../packages/contracts/src/index.js';
 class ArtifactFixture {
   project = ''; jobId = randomUUID(); root = '';
   async setup(state = 'succeeded'): Promise<void> {
-    this.project = await mkdtemp(join(process.cwd(), '.codex-work/tmp/artifacts-'));
+    this.project = await new TestWorkspace().create('artifacts-');
     this.root = join(this.project, '.codex-work/build/creator', this.jobId);
     await mkdir(join(this.root, 'game'), { recursive: true });
     await writeFile(join(this.root, 'game/index.html'), '<html>test</html>');

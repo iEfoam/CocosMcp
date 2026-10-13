@@ -1,6 +1,7 @@
+import { TestWorkspace } from './workspace.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { AnimationEditService } from '../packages/creator3-adapter/src/animation-edit.js';
 import { Json } from '../packages/contracts/src/index.js';
@@ -8,7 +9,7 @@ import type { EditorPort } from '../packages/creator3-adapter/src/port.js';
 class EditHarness {
   root = ''; writes = 0; failReadback = false;
   async setup(): Promise<AnimationEditService> {
-    this.root = await mkdtemp(join(process.cwd(), '.codex-work/tmp/animation-edit-')); await mkdir(join(this.root, 'assets')); await writeFile(join(this.root, 'assets/move.anim'), '{"original":true}');
+    this.root = await new TestWorkspace().create('animation-edit-'); await mkdir(join(this.root, 'assets')); await writeFile(join(this.root, 'assets/move.anim'), '{"original":true}');
     return new AnimationEditService({ projectPath: this.root, version: '3.8.8', request: async (_channel: string, method: string, ...args: unknown[]) => {
       if (method === 'query-asset-info') return { uuid: 'clip' };
       if (method === 'save-asset') { this.writes++; await writeFile(join(this.root, 'assets/move.anim'), String(args[1])); return { uuid: 'clip' }; }

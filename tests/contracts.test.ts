@@ -1,5 +1,6 @@
+import { TestWorkspace } from './workspace.js';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 import { CapabilityCatalog } from '../packages/capability-catalog/src/index.js';
@@ -20,7 +21,7 @@ import { Creator2Adapter } from '../packages/creator2-adapter/src/index.js';
 import { Creator3Adapter } from '../packages/creator3-adapter/src/index.js';
 
 const project = async (): Promise<ProjectPaths> => {
-  const root = await mkdtemp(join(process.cwd(), '.codex-work/tmp/test-project-'));
+  const root = await new TestWorkspace().create('test-project-');
   await mkdir(join(root, 'assets'), { recursive: true }); await writeFile(join(root, '.gitignore'), 'node_modules/\n');
   return ProjectPaths.open(root);
 };
@@ -47,7 +48,7 @@ test('runtime policy blocks host escape paths and bounds invocation arguments', 
 });
 
 test('workflow planning validates every step before execution', async () => {
-  const root = await mkdtemp(join(process.cwd(), '.codex-work/tmp/workflow-project-'));
+  const root = await new TestWorkspace().create('workflow-project-');
   const registry = new ProjectRegistry(); const registered = await registry.add(root);
   const application = new CocosApplication(registry);
   const plan = Json.object(application.plan(registered.projectId, [
@@ -105,7 +106,7 @@ test('JSON validation blocks prototype pollution paths and preserves canonical o
 test('project path refuses traversal and symlink escape', async () => {
   const paths = await project();
   await assert.rejects(paths.resolve('../outside'), (error: unknown) => error instanceof CocosError && error.code === 'PATH_OUTSIDE_PROJECT');
-  const outside = await mkdtemp(join(process.cwd(), '.codex-work/tmp/outside-'));
+  const outside = await new TestWorkspace().create('outside-');
   await symlink(outside, join(paths.root, 'assets', 'escape'));
   await assert.rejects(paths.resolve('assets/escape/file.txt'), (error: unknown) => error instanceof CocosError && error.code === 'PATH_OUTSIDE_PROJECT');
   await assert.rejects(paths.asset('db://assets/../outside.txt'), (error: unknown) => error instanceof CocosError && error.code === 'PATH_OUTSIDE_PROJECT');
