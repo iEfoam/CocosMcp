@@ -5,16 +5,26 @@ import type { CocosApplication } from '../../../packages/application/src/index.j
 import type { RuntimeGateway } from '../../../packages/application/src/runtime-gateway.js';
 import type { BuildJobs } from '../../../packages/native-adapters/src/build.js';
 import { CaptureResult } from './capture-result.js';
+import type { CapabilityCatalog } from '../../../packages/capability-catalog/src/index.js';
+import type { ProjectRegistry } from '../../../packages/application/src/registry.js';
 
 export interface McpRouting {
   readonly instructions: string;
+  readonly catalog: CapabilityCatalog;
+  readonly projects: ProjectRegistry;
   call(name: string, args: JsonObject, context: ServerContext): Promise<CallToolResult>;
   resource(uri: string): Promise<ReadResourceResult>;
 }
 
 export class CocosMcpServer {
   private activeTools = 0;
-  constructor(private readonly application: CocosApplication, private readonly runtimes?: RuntimeGateway, private readonly builds?: BuildJobs, private readonly allTools = false, private readonly routing?: McpRouting) {}
+  constructor(private readonly backend?: CocosApplication, private readonly runtimes?: RuntimeGateway, private readonly builds?: BuildJobs, private readonly allTools = false, private readonly routing?: McpRouting) {}
+  private get application(): CocosApplication {
+    if (!this.backend) throw new CocosError('CONTEXT_UNAVAILABLE', 'Application execution belongs to the project backend');
+    return this.backend;
+  }
+  private get catalog(): CapabilityCatalog { return this.routing?.catalog ?? this.application.catalog; }
+  private get projects(): ProjectRegistry { return this.routing?.projects ?? this.application.projects; }
   active(): number { return this.activeTools; }
 
   /** 两种入口共享 Schema 和工具说明，路由仅替换执行器；不能丢失图片与结构化 MCP 结果。 */
@@ -54,13 +64,13 @@ export class CocosMcpServer {
     this.tool(server, 'cocos_project_disconnect', { title: '断开工程连接', description: '仅释放当前客户端连接，不停止其他会话或运行中的构建', inputSchema: z.object(project), annotations: { ...read, readOnlyHint: false } }, unavailable);
     this.tool(server, 'cocos_connection_status', { title: '工程连接状态', description: '查看统一客户端已连接工程的后端身份、兼容性和编辑器状态，不返回凭据', inputSchema: z.object({ projectId: z.string().min(1).optional() }), annotations: read }, unavailable);
     this.tool(server, 'cocos_projects', { title: '工程列表', description: '统一客户端列出当前已连接工程；单工程服务列出启动时注册的工程', inputSchema: z.object({}), annotations: read },
-      () => this.result(() => this.application.projects.list()));
+      () => this.result(() => this.projects.list()));
     this.tool(server, 'cocos_instances', { title: '编辑器实例', description: '列出指定工程已打开的 Creator 实例，不返回认证凭据', inputSchema: z.object(project), annotations: read },
       args => this.result(() => this.application.instances(args.projectId)));
     this.tool(server, 'cocos_capability_search', { title: '搜索能力', description: '搜索操作目录；先查询再执行长尾功能', inputSchema: z.object({ projectId: z.string().optional(), query: z.string().optional(), module: z.string().optional(), offset: z.number().int().min(0).default(0), limit: z.number().int().min(1).max(500).default(100) }), annotations: read },
-      args => this.result(() => this.application.catalog.search(args.query, args.module, args.offset, args.limit)));
+      args => this.result(() => this.catalog.search(args.query, args.module, args.offset, args.limit)));
     this.tool(server, 'cocos_capability_describe', { title: '能力详情', description: '获取精确参数 Schema、版本范围、副作用、当前源码验证状态及历史证据', inputSchema: z.object({ projectId: z.string().optional(), capabilityId: z.string() }), annotations: read },
-      args => this.result(() => this.application.catalog.describe(args.capabilityId)));
+      args => this.result(() => this.catalog.describe(args.capabilityId)));
     this.tool(server, 'cocos_coverage', { title: '功能覆盖清单', description: '查看全部 54 个模块的范围验收、能力与独立服务工具计数及历史证据；partial 不代表没有可用操作', inputSchema: z.object({ projectId: z.string().optional() }), annotations: read },
       () => this.result(() => this.coverage()));
     this.tool(server, 'cocos_capability_execute', { title: '执行已注册能力', description: '创建资源前必须调用 asset.location，复用已有类型目录；后续使用结果的 assetLocation.url，禁止假定 assets 根路径。整理已有资源先 asset.organize.plan，审查引用后用相同范围及 planHash 调用 asset.organize.apply。按能力详情的 Schema 执行。修改前建议传 expectedRevision 和稳定 operationId。执行器不会执行任意 eval。',
@@ -101,26 +111,26 @@ export class CocosMcpServer {
       inputSchema: z.object({ ...project, workflowId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/) }), annotations: read },
       args => this.result(() => this.application.workflow(args.projectId, args.workflowId)));
     this.tool(server, 'cocos_operation_query', { title: '查询操作结果', description: '超时或断线后查询 operationId，避免重复执行修改', inputSchema: z.object({ ...project, instanceId: z.string().optional(), operationId: z.string() }), annotations: read },
-      args => this.result(async () => await this.builds?.operation(args.projectId, this.application.projects.paths(args.projectId).root, args.operationId) ?? this.application.operation(args.projectId, args.operationId, args.instanceId)));
+      args => this.result(async () => await this.builds?.operation(args.projectId, this.projects.paths(args.projectId).root, args.operationId) ?? this.application.operation(args.projectId, args.operationId, args.instanceId)));
     this.tool(server, 'cocos_runtime_instances', { title: '运行时实例', description: '列出已连接的开发运行实例', inputSchema: z.object(project), annotations: read },
       args => this.result(() => this.runtimes?.list(args.projectId) ?? { rows: [] }));
     this.tool(server, 'cocos_build_start', { title: '启动 Creator 构建', description: '使用 Creator CLI 构建已注册工程并返回任务 ID；构建需要本机 GUI 和已安装的平台工具', inputSchema: z.object({ ...project, operationId: z.string().min(1).max(128).optional(), creatorPath: z.string(), platform: z.string(), options: z.record(z.string(), z.unknown()).default({}) }), annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true } },
-      args => this.result(() => this.builds ? this.builds.start(args.projectId, this.application.projects.paths(args.projectId).root, args.creatorPath, args.platform, Json.object(Json.value(args.options)), args.operationId) : { error: 'Build service is unavailable' }));
+      args => this.result(() => this.builds ? this.builds.start(args.projectId, this.projects.paths(args.projectId).root, args.creatorPath, args.platform, Json.object(Json.value(args.options)), args.operationId) : { error: 'Build service is unavailable' }));
     this.tool(server, 'cocos_build_status', { title: '构建状态', description: '查询构建任务状态、产物和日志路径', inputSchema: z.object({ ...project, jobId: z.string() }), annotations: read },
-      args => this.result(() => this.builds?.status(args.projectId, this.application.projects.paths(args.projectId).root, args.jobId) ?? { error: 'Build service is unavailable' }));
+      args => this.result(() => this.builds?.status(args.projectId, this.projects.paths(args.projectId).root, args.jobId) ?? { error: 'Build service is unavailable' }));
     this.tool(server, 'cocos_build_list', { title: '构建任务', description: '列出工程的构建任务', inputSchema: z.object(project), annotations: read },
-      args => this.result(() => this.builds?.list(args.projectId, this.application.projects.paths(args.projectId).root) ?? { rows: [] }));
+      args => this.result(() => this.builds?.list(args.projectId, this.projects.paths(args.projectId).root) ?? { rows: [] }));
     this.tool(server, 'cocos_build_logs', { title: '构建日志', description: '分页读取构建日志', inputSchema: z.object({ ...project, jobId: z.string(), offset: z.number().int().min(0).default(0), limit: z.number().int().min(1).max(1000).default(200) }), annotations: read },
-      args => this.result(() => this.builds?.logs(args.projectId, this.application.projects.paths(args.projectId).root, args.jobId, args.offset, args.limit) ?? { rows: [] }));
+      args => this.result(() => this.builds?.logs(args.projectId, this.projects.paths(args.projectId).root, args.jobId, args.offset, args.limit) ?? { rows: [] }));
     this.tool(server, 'cocos_build_artifacts', { title: '核对构建产物', description: '检查已成功任务的完整文件集、入口和 SHA-256；不代表可安装或运行，不执行产物', inputSchema: z.object({ ...project, jobId: z.string().uuid(), entryPaths: z.array(z.string().min(1).max(1024)).min(1).max(32) }), annotations: read },
-      args => this.result(() => this.builds?.artifacts(args.projectId, this.application.projects.paths(args.projectId).root, args.jobId, args.entryPaths) ?? { error: 'Build service is unavailable' }));
+      args => this.result(() => this.builds?.artifacts(args.projectId, this.projects.paths(args.projectId).root, args.jobId, args.entryPaths) ?? { error: 'Build service is unavailable' }));
     this.tool(server, 'cocos_build_cancel', { title: '取消构建', description: '取消正在执行的构建任务', inputSchema: z.object({ ...project, jobId: z.string() }), annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false } },
-      args => this.result(() => this.builds?.cancel(args.projectId, this.application.projects.paths(args.projectId).root, args.jobId) ?? { error: 'Build service is unavailable' }));
+      args => this.result(() => this.builds?.cancel(args.projectId, this.projects.paths(args.projectId).root, args.jobId) ?? { error: 'Build service is unavailable' }));
     this.tool(server, 'cocos_build_recover', { title: '恢复未知构建占用', description: '仅在用户确认原构建已经停止后使用。保留未知结果与产物，只解除任务占用；记录 PID 仍存活时拒绝，不杀进程。', inputSchema: z.object({ ...project, jobId: z.string().uuid(), confirmedStopped: z.literal(true) }), annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false } },
-      args => this.result(() => this.builds?.recover(args.projectId, this.application.projects.paths(args.projectId).root, args.jobId) ?? { error: 'Build service is unavailable' }));
+      args => this.result(() => this.builds?.recover(args.projectId, this.projects.paths(args.projectId).root, args.jobId) ?? { error: 'Build service is unavailable' }));
 
     const common = new Set(['scene.query', 'scene.snapshot', 'scene.diff', 'scene.hierarchy', 'scene.open', 'scene.save', 'node.create', 'node.query', 'node.set', 'component.add', 'component.set', 'asset.query', 'asset.import', 'prefab.instantiate', 'ui.build', 'scene.validate', 'runtime.capture']);
-    for (const capability of this.application.catalog.search('', undefined, 0, Number.MAX_SAFE_INTEGER).rows) {
+    for (const capability of this.catalog.search('', undefined, 0, Number.MAX_SAFE_INTEGER).rows) {
       if (capability.implementation !== 'implemented' || !(capability.supportedMajors ?? capability.versions).length) continue;
       if (!this.allTools && !common.has(capability.id)) continue;
       const schema = z.fromJSONSchema(capability.inputSchema as Parameters<typeof z.fromJSONSchema>[0]);
@@ -129,12 +139,12 @@ export class CocosMcpServer {
         (args, context) => this.execute({ ...args, capabilityId: capability.id }, context));
     }
     server.registerResource('coverage', 'cocos://coverage', { mimeType: 'application/json', description: '全部提案模块的覆盖状态' },
-      uri => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(this.application.catalog.coverage()) }] }));
-    server.registerResource('project-capabilities', new ResourceTemplate('cocos://projects/{projectId}/capabilities', { list: async () => ({ resources: this.application.projects.list().rows.map(project => ({ uri: `cocos://projects/${project.projectId}/capabilities`, name: project.projectPath, mimeType: 'application/json' })) }) }),
+      uri => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(this.catalog.coverage()) }] }));
+    server.registerResource('project-capabilities', new ResourceTemplate('cocos://projects/{projectId}/capabilities', { list: async () => ({ resources: this.projects.list().rows.map(project => ({ uri: `cocos://projects/${project.projectId}/capabilities`, name: project.projectPath, mimeType: 'application/json' })) }) }),
       { mimeType: 'application/json' }, async (uri, variables) => {
         if (this.routing) return this.routing.resource(uri.href);
-        this.application.projects.paths(String(variables.projectId));
-        return { contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(this.application.catalog.search('', undefined, 0, Number.MAX_SAFE_INTEGER)) }] };
+        this.projects.paths(String(variables.projectId));
+        return { contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(this.catalog.search('', undefined, 0, Number.MAX_SAFE_INTEGER)) }] };
       });
     server.registerPrompt('cocos-edit-workflow', { title: '可靠场景编辑流程', description: '定位工程、读取场景、修改、保存并读回验证', argsSchema: z.object({ task: z.string() }) },
       ({ task }) => ({ messages: [{ role: 'user', content: { type: 'text', text: `任务：${task}\n${this.routing ? "直接传 workspacePath 自动连接，或显式传 projectPath/projectId；歧义时按 rows 选择，使用 cocos_projects 和 cocos_instances" : "先使用 cocos_projects 和 cocos_instances"}明确目标，查询所需能力 Schema，读取场景 revision。修改使用唯一 operationId 和 expectedRevision。查询实际结果，保存后检查场景状态。未知或未验证的能力必须如实报告；超时先查询操作结果。` } }] }));
@@ -142,7 +152,7 @@ export class CocosMcpServer {
   }
 
   private coverage() {
-    const coverage = this.application.catalog.coverage();
+    const coverage = this.catalog.coverage();
     return { ...coverage, rows: coverage.rows.map(row => ({ ...row, serviceTools: row.serviceTools.map(tool => ({ ...tool,
       availableInThisServer: tool.prerequisite === 'project-router' ? Boolean(this.routing) : tool.prerequisite === 'build-service' ? Boolean(this.builds) : tool.prerequisite === 'runtime-gateway' ? Boolean(this.runtimes) : true,
     })) })) };

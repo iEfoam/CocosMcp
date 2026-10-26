@@ -4,6 +4,14 @@ import { Ajv } from 'ajv';
 import { CapabilityCatalog } from '../packages/capability-catalog/src/index.js';
 import type { Capability } from '../packages/contracts/src/index.js';
 
+test('catalog listing defers capability compilation until first validation and retains required-field checks', t => {
+  const compile = t.mock.method(Ajv.prototype, 'compile'), catalog = new CapabilityCatalog();
+  catalog.search(); catalog.describe('scene.open'); catalog.coverage(); assert.equal(compile.mock.callCount(), 0);
+  assert.throws(() => catalog.validate('scene.open', {}), { code: 'INVALID_ARGUMENT' });
+  assert.equal(compile.mock.callCount(), 1);
+  assert.throws(() => catalog.validate('scene.open', {}), { code: 'INVALID_ARGUMENT' }); assert.equal(compile.mock.callCount(), 1);
+});
+
 test('deferred validation reuses canonical field sets, bounds AJV entries and retains argument validation', t => {
   const capabilities: Capability[] = Array.from({ length: 130 }, (_, i) => ({
     id: `custom.${i}`, title: 'test', description: 'Cache regression fixture', outputSchema: {}, module: 'custom', context: 'editor', effect: 'read', versions: [3], supportedMajors: [3],

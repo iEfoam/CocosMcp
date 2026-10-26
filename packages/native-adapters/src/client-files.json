@@ -1,6 +1,9 @@
 [
   "launcher.mjs",
   "router.mjs",
+  "router-daemon.mjs",
+  "session.mjs",
+  "connector.mjs",
   "worker.mjs",
   "install.mjs",
   "LICENSE"

@@ -27,9 +27,11 @@ export class ClientPackage {
       typeof value.buildId !== 'string' || !/^[a-f\d]{16}$/.test(value.buildId) || typeof value.builtAt !== 'string' || !value.builtAt.endsWith('Z') || !Number.isFinite(Date.parse(value.builtAt)) ||
       typeof value.sourceFingerprint !== 'string' || !/^[a-f\d]{64}$/.test(value.sourceFingerprint) || (value.verificationReportSha256 !== null && (typeof value.verificationReportSha256 !== 'string' || !/^[a-f\d]{64}$/.test(value.verificationReportSha256)))) throw new CocosError('VERIFICATION_FAILED', 'Invalid unified client manifest');
     const hashes = Json.object(value.fileHashes!);
-    if (Object.keys(hashes).sort().join('|') !== [...clientFiles].sort().join('|')) throw new CocosError('VERIFICATION_FAILED', 'Unexpected client package files');
+    const names = Object.keys(hashes), legacy = ['launcher.mjs', 'router.mjs', 'worker.mjs', 'install.mjs', 'LICENSE'];
+    // 旧版仍是有效回滚点；只接受两个精确白名单，不能放宽为任意 manifest 文件。
+    if (![clientFiles, legacy].some(expected => [...expected].sort().join('|') === names.slice().sort().join('|'))) throw new CocosError('VERIFICATION_FAILED', 'Unexpected client package files');
     let size = 0;
-    for (const name of clientFiles) {
+    for (const name of names) {
       const path = await paths.resolve(name), info = await lstat(path);
       size += info.size;
       if (!info.isFile() || info.isSymbolicLink() || !info.size || size > 40 * 1024 * 1024) throw new CocosError('VERIFICATION_FAILED', 'Invalid or oversized client file');
@@ -77,7 +79,7 @@ export class ClientInstallation {
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
       if (exists) await this.packages.verify(target);
       else {
-        for (const name of [...clientFiles, 'manifest.json']) await writeFile(join(staging, name), await readFile(await bundle.resolve(name)), { flag: 'wx', mode: 0o600 });
+        for (const name of [...Object.keys(manifest.fileHashes), 'manifest.json']) await writeFile(join(staging, name), await readFile(await bundle.resolve(name)), { flag: 'wx', mode: 0o600 });
         await this.packages.verify(staging); await rename(staging, target);
       }
       const policy = await installation.resolve('policy.json');

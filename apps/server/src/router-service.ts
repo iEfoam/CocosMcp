@@ -1,31 +1,24 @@
-import { rmdir } from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
-import { CocosApplication, ProjectPaths, ProjectRegistry } from '../../../packages/application/src/index.js';
-import { ClientPolicies } from '../../../packages/application/src/client-policy.js';
-import { CocosMcpServer } from './mcp.js';
-import { McpTransport } from './transport.js';
-import { ProjectConnector } from './project-connector.js';
-import { ProjectRouter } from './project-router.js';
+import { request } from 'node:http';
+import { ProjectPaths } from '../../../packages/application/src/paths.js';
+import { RouterRuntime } from './router-runtime.js';
 
 export class RouterService {
   async run(installationPath: string, workspaceRoot: string, workerFile: string): Promise<void> {
-    if (Number(process.versions.node.split('.')[0]) < 24) throw new Error('Unified Cocos MCP requires Node.js 24 or higher');
-    const installation = await ProjectPaths.open(installationPath), workspace = await ProjectPaths.open(workspaceRoot);
-    const policy = await new ClientPolicies().load(installation);
-    const temporary = await workspace.work('tmp', `cocos-client-${process.pid}-${randomUUID()}`);
-    for (const directory of ['cache', 'logs'] as const) await workspace.work(directory);
-    Object.assign(process.env, { ...workspace.environment(), TMPDIR: temporary, TMP: temporary, TEMP: temporary });
-    const projects = new ProjectRegistry(), connector = new ProjectConnector(projects, policy, installation.root, workerFile), transport = new McpTransport();
-    // 此输入须由宿主显式绑定到本次 stdio 会话；安装 workspaceRoot 只用于客户端运行状态落盘。
-    const router = new ProjectRouter(connector, undefined, process.env.COCOS_WORKSPACE_PATH), factory = new CocosMcpServer(new CocosApplication(projects), undefined, undefined, false, router);
-    let closing: Promise<void> | undefined;
-    const close = (): Promise<void> => closing ??= (async () => {
-      await connector.close(); await transport.close();
-      await rmdir(temporary).catch(error => { if (!['ENOENT', 'ENOTEMPTY'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error; });
-    })();
-    for (const signal of ['SIGTERM', 'SIGINT'] as const) process.once(signal, () => { void close().catch(error => console.error('[CocosMCP client]', String(error))); });
-    process.stdin.once('end', () => { void close().catch(error => console.error('[CocosMCP client]', String(error))); });
-    // 初始化无需工程、端口、工程锁或 Creator；仅在工具连接工程时创建对应后端。
-    transport.startStdio(factory);
+    const workspace = await ProjectPaths.open(workspaceRoot);
+    const { descriptor, token } = await new RouterRuntime().ensure(installationPath, workspace, workerFile);
+    // 兼容入口只转发字节，不加载 SDK、Schema、应用或工程执行器。
+    const call = request(new URL('/stdio', descriptor.endpoint!), { method: 'POST', headers: {
+      authorization: `Bearer ${token}`, 'content-type': 'application/x-ndjson', 'transfer-encoding': 'chunked',
+      'x-cocos-workspace': Buffer.from(process.env.COCOS_WORKSPACE_PATH ?? '', 'utf8').toString('base64'),
+    } });
+    const close = (): void => { process.stdin.unpipe(call); process.stdin.pause(); call.destroy(); };
+    for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, close);
+    process.stdin.once('error', close); process.stdout.once('error', close);
+    call.on('response', response => {
+      if (response.statusCode !== 200) { console.error('[CocosMCP bridge] Shared router rejected connection:', response.statusCode); process.exitCode = 1; response.resume(); close(); return; }
+      response.pipe(process.stdout, { end: false }); response.once('close', close);
+    });
+    call.once('error', error => { console.error('[CocosMCP bridge]', error.message); process.exitCode = 1; close(); });
+    call.flushHeaders(); process.stdin.pipe(call);
   }
 }

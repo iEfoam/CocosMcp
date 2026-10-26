@@ -15,7 +15,7 @@ await build({ define, entryPoints: ['apps/server/src/cli.ts'], outfile: join(out
   packages: 'external', sourcemap: true });
 const clientRoot = join(output, 'client');
 await mkdir(clientRoot, { recursive: true });
-for (const [entry, name] of [['router-service', 'router'], ['shared-service', 'worker'], ['install-client', 'install']]) {
+for (const [entry, name] of [['router-service', 'router'], ['router-daemon', 'router-daemon'], ['router-session', 'session'], ['project-connector', 'connector'], ['shared-service', 'worker'], ['install-client', 'install']]) {
   await build({ define, entryPoints: [`apps/server/src/${entry}.ts`], outfile: join(clientRoot, `${name}.mjs`), bundle: true, platform: 'node', target: 'node24', format: 'esm',
     banner: { js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);" } });
 }

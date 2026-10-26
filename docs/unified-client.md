@@ -1,6 +1,6 @@
-# 统一 stdio 客户端与多工程连接
+# 共享本机客户端服务与多工程连接
 
-全局只配置一个固定 Node 入口，工程工具直接传入会话 `workspacePath`，按工程真实路径自动发现、连接或启动本机后端；保留 `cocos_project_connect` 兼容入口。新增游戏工程无需修改 TOML，也无需把端口或 token 发给 AI。
+全局配置一个客户端接入点，工程工具直接传入会话 `workspacePath`，按工程真实路径自动发现、连接或启动本机后端；保留 `cocos_project_connect` 兼容入口。支持轻量 stdio 桥接和直接连接共享 HTTP 服务。新增游戏工程无需修改 TOML，也无需把端口或 token 发给 AI。
 
 ## 安装和配置
 
@@ -24,7 +24,7 @@ node .codex-work/build/client/install.mjs \
   --allowed-root /absolute/path/to/games
 ```
 
-离线包 `cocos-mcp-client.zip` 包含 launcher、router、worker、install、LICENSE 和 manifest。先核验同版 SHA256SUMS，解压到工作区 `.codex-work/downloads/`，再使用包内 `install.mjs` 执行同样命令。安装和运行无需 node_modules、源码或下载依赖；AI 模型联网要求另行判断。
+离线包 `cocos-mcp-client.zip` 包含 launcher、router、router-daemon、session、connector、worker、install、LICENSE 和 manifest。先核验同版 SHA256SUMS，解压到工作区 `.codex-work/downloads/`，再使用包内 `install.mjs` 执行同样命令。安装和运行无需 node_modules、源码或下载依赖；AI 模型联网要求另行判断。
 
 安装器输出完整 `configuration`，也可在新版 Creator 面板选择“统一 stdio（多工程）→ 复制 Codex 配置”。将它合并到 `~/.codex/config.toml`，保留其他设置。配置引用固定 launcher，不包含游戏路径、端口或 Bearer token：
 
@@ -37,6 +37,43 @@ tool_timeout_sec = 120
 ```
 
 实际使用安装器生成的完整配置，包含工作区内 TMP、缓存和 UTC 环境。配置和初始化 instructions 的行为依据 [OpenAI 官方 MCP 文档](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)。保存后重新加载客户端 MCP；安装完成不能代替真实工具调用验证，当前会话是否立即刷新由客户端决定。
+
+### 共享 HTTP 与轻量兼容入口
+
+保留现有 command/args 配置时，每个新聊天只有轻量 Node 字节桥接进程，经本机 HTTP 长连接转发到共享路由服务。桥接不加载 MCP SDK、能力目录、应用执行器或 Creator 适配器。路由服务在首条连接时加载 SDK 和工具声明，首次工具/资源路由才加载工程连接器；参数校验器在对应能力首次执行时编译。列工具不会启动游戏工程后端。
+
+同一安装版本复用一个路由进程，内部为每个会话分别创建 SDK 连接、工程表、默认工作区、请求/进度标识及取消状态。相同请求 ID 在不同会话中互不影响。同项目继续复用原来的共享工程后端，不合并两个会话的连接器。关闭一个会话只释放它自己的租约，后台构建和运行时工作仍由独立工程后端保护。
+
+如果希望完全取消每聊天的桥接进程，先使用已安装且校验通过的入口运行常驻服务，选用未占用的固定端口，例如：
+
+```sh
+node /absolute/path/to/CocosMcp/.codex-work/artifacts/cocos-client/launcher.mjs --serve --port 3039
+```
+
+服务只监听 `127.0.0.1`。端口占用、同版本服务已在运行或现有身份无法核实，均拒绝抢占；不要结束其他聊天的服务来腾端口。`--serve` 在前台持有监听，收到退出信号时排空会话并释放身份锁；应由用户选择的本机进程管理方式托管。此命令本身不安装 LaunchAgent，也不修改 Codex 配置。
+
+核实服务身份后，把本地 token 安全注入客户端宿主的 `COCOS_ROUTER_TOKEN` 环境变量，再将目标表切换为：
+
+```toml
+[mcp_servers.cocos_unified]
+url = "http://127.0.0.1:3039/mcp"
+bearer_token_env_var = "COCOS_ROUTER_TOKEN"
+enabled = true
+startup_timeout_sec = 20
+tool_timeout_sec = 120
+```
+
+HTTP 的 `url` 和 Bearer 环境变量配置依据同一份 [OpenAI 官方 MCP 文档](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)。桌面宿主必须实际继承该变量，不能把仅在终端中 export 成功当作桌面认证完成。不要将 stdio 的 command、args 或旧 env 子表与 HTTP 表混用。此处不输出 token；它位于工作区 `.codex-work/cache/cocos-router/<buildId>/.codex-work/cache/cocos-mcp/mcp-http-token`，权限为 `0600`。
+
+标准 `/mcp` 提供有状态的 2025 系列 Streamable HTTP 协议，通过随机 `Mcp-Session-Id` 隔离聊天，支持 POST、GET/SSE 和 DELETE。直接 HTTP 客户端应正常初始化并保存会话 ID；关闭时发送 DELETE。未知会话返回 404，须新建连接并查询原操作状态，写请求不能自动重放。兼容 stdio 长连接沿用 SDK 的双时代协商；直接 HTTP 不宣称支持无状态的 2026 协议。工具名称、参数 Schema、图片、结构化结果、资源和提示词沿用同一工厂。
+
+直接 HTTP 不从共享进程环境推断聊天工作区；通常在工具参数中传 `workspacePath`/`projectPath`。受控宿主可以在初始化时发送 UTF-8 绝对路径的标准 Base64 编码 `X-Cocos-Workspace`，它只属于本次会话，仍须通过工程授权。更换请求 Header 不会改变已经初始化的会话默认目标。
+
+回环检查之外还要求 Bearer 认证，并拒绝浏览器 Origin。发现文件包含 PID、serviceId、工作区和启动身份；使用已有的跨进程锁与认证 identity 校验实现启动防重，不靠 PID/端口猜测。状态文件按安装版本隔离；升级后的新服务与旧会话可以并存，不批量终止旧进程。
+
+自动启动的路由服务仅在没有任何仍保留的会话、初始化、工具调用和资源读取时，经过策略的 `idleExitSeconds` 后退出；下一次兼容入口可重新发现并启动。仍被宿主持有的 stdio 长连接永远不会因闲置超时被结束。原生 HTTP 会话保留至显式 DELETE，不因 GET/SSE 断开就猜测聊天结束；未正常释放的 HTTP 会话需要宿主恢复连接并关闭，或由用户安排服务维护。`--serve` 模式保留空闲监听，避免直接 URL 失效；无会话时不会持有工程连接。
+
+切换前保存全局配置和安装 current/launcher/policy，核对目标端口及认证，再只替换目标连接。已经运行的聊天保持其旧进程；待用户逐个正常关闭、重连后迁移。禁止批量结束旧进程或重启整个应用。回退时通过安装器恢复前版，并按备份恢复本次目标配置，保留后续无关改动。
 
 ### Codex 配置冲突与恢复
 
@@ -81,7 +118,7 @@ stdio 不自动携带聊天 cwd。launcher 的 workspaceRoot 只是客户端安�
 
 只在选定工程中存在唯一且通过桥接身份探测的实例时自动填充 instanceId；多个实例返回 AMBIGUOUS_TARGET 和脱敏 rows，须显式选择。运行时仍指定 runtimeInstanceId 或工作流 runtimeRef。写入仍附稳定 operationId、适用 revision/哈希。创建资源先 asset.location，整理先 plan，再携同一 planHash apply。自动连接不重放写请求，也不切换、保存场景。
 
-连接缓存只属于当前 stdio 进程，按真实工程根产生的 projectId 隔离，没有全局“最近工程”或粘住旧候选的缓存。每个请求独立解析其真实工作区，多工作区并发不会相互更改默认目标。cocos_projects 列当前连接；cocos_connection_status 返回后端、编辑器状态和共享会话/请求数。cocos_project_disconnect 只释放本会话引用，有调用进行中时拒绝断开。
+连接缓存只属于当前 MCP 会话，按真实工程根产生的 projectId 隔离，没有全局“最近工程”或粘住旧候选的缓存。每个请求独立解析其真实工作区，多工作区并发不会相互更改默认目标。cocos_projects 列当前连接；cocos_connection_status 返回后端、编辑器状态和共享会话/请求数。cocos_project_disconnect 只释放本会话引用，有调用进行中时拒绝断开。
 
 ## 共享服务和恢复
 

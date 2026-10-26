@@ -3,11 +3,13 @@ import { CocosError, Json, type JsonObject, type JsonValue } from '../../../pack
 import { CapabilityCatalog } from '../../../packages/capability-catalog/src/index.js';
 import { CaptureResult } from './capture-result.js';
 import type { McpRouting } from './mcp.js';
-import { ProjectConnector } from './project-connector.js';
+import type { ProjectConnector } from './project-connector.js';
 
 export class ProjectRouter implements McpRouting {
-  readonly instructions = 'Cocos 工具可直接传会话绝对 workspacePath，按 realpath 自动选择已授权工程并连接，无需先 cocos_project_connect；显式 projectId 优先，其次 projectPath。宿主可在启动时提供 COCOS_WORKSPACE_PATH，不能假定 stdio cwd 或安装目录是聊天工作区。工程内选择最近根，父目录多候选且无明确映射返回 AMBIGUOUS_TARGET 和脱敏 rows，选择 projectPath；不按名称、复制 id 或打开窗口猜工程。仅目标工程唯一且身份验证通过的编辑器实例可自动选择；多实例指定 instanceId。运行时明确指定 runtimeInstanceId。创建资源先 asset.location；整理先 plan 后 apply。写入传稳定 operationId 和适用 revision/哈希；未知结果查询原操作，禁止重发，恢复未知构建须确认原任务停止。';
-  constructor(readonly connector: ProjectConnector, private readonly catalog = new CapabilityCatalog(), private readonly workspacePath?: string) {}
+  static readonly instructions = 'Cocos 工具可直接传会话绝对 workspacePath，按 realpath 自动选择已授权工程并连接，无需先 cocos_project_connect；显式 projectId 优先，其次 projectPath。宿主可在启动时提供 COCOS_WORKSPACE_PATH，不能假定 stdio cwd 或安装目录是聊天工作区。工程内选择最近根，父目录多候选且无明确映射返回 AMBIGUOUS_TARGET 和脱敏 rows，选择 projectPath；不按名称、复制 id 或打开窗口猜工程。仅目标工程唯一且身份验证通过的编辑器实例可自动选择；多实例指定 instanceId。运行时明确指定 runtimeInstanceId。创建资源先 asset.location；整理先 plan 后 apply。写入传稳定 operationId 和适用 revision/哈希；未知结果查询原操作，禁止重发，恢复未知构建须确认原任务停止。';
+  readonly instructions = ProjectRouter.instructions;
+  constructor(readonly connector: ProjectConnector, readonly catalog = new CapabilityCatalog(), private readonly workspacePath?: string) {}
+  get projects() { return this.connector.projects; }
   private result(value: JsonValue): CallToolResult { return new CaptureResult().format(value); }
   async call(name: string, args: JsonObject, context: ServerContext): Promise<CallToolResult> {
     if (context.mcpReq.signal.aborted) throw new CocosError('CANCELLED', 'Request cancelled before dispatch');

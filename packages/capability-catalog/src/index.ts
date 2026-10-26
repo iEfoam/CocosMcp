@@ -23,7 +23,7 @@ export class CapabilityCatalog {
 
   register(capability: Capability): void {
     if (this.capabilities.has(capability.id)) throw new CocosError('OPERATION_CONFLICT', `Duplicate capability: ${capability.id}`);
-    this.validators.set(capability.id, this.ajv.compile(capability.inputSchema));
+    // 列工具和查询目录只需要 Schema；首次执行该能力时才编译，避免每个会话预编译全目录。
     this.capabilities.set(capability.id, { ...capability, ...this.evidence.describe(capability.id) });
   }
 
@@ -36,7 +36,8 @@ export class CapabilityCatalog {
   validate(id: string, params: JsonObject): Capability {
     const capability = this.describe(id);
     if (capability.implementation !== 'implemented' || !(capability.supportedMajors ?? capability.versions).length) throw new CocosError('UNSUPPORTED_CAPABILITY', `Capability is not executable: ${id}`);
-    const validate = this.validators.get(id)!;
+    let validate = this.validators.get(id);
+    if (!validate) { validate = this.ajv.compile(capability.inputSchema); this.validators.set(id, validate); }
     if (!validate(params)) throw new CocosError('INVALID_ARGUMENT', this.ajv.errorsText(validate.errors), { capabilityId: id });
     return capability;
   }
