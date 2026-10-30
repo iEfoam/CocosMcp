@@ -36,4 +36,4 @@ jobs:
         run: |
           FLAGS=(--prerelease --latest=false)
           if [[ "$COCOS_RELEASE_CHANNEL" == stable ]]; then FLAGS=(--verify-tag --latest); fi
-          gh release create "$COCOS_RELEASE_TAG" .codex-work/build/releases/*.json .codex-work/build/releases/*.zip .codex-work/build/releases/SHA256SUMS --target "$GITHUB_SHA" --title "CocosMCP $COCOS_RELEASE_TAG" --notes-file .codex-work/build/releases/release-notes.md "${FLAGS[@]}"
+          gh release create "$COCOS_RELEASE_TAG" .codex-work/build/releases/*.json .codex-work/build/releases/*.zip .codex-work/build/releases/release-notes.md .codex-work/build/releases/SHA256SUMS --target "$GITHUB_SHA" --title "CocosMCP $COCOS_RELEASE_TAG" --notes-file .codex-work/build/releases/release-notes.md "${FLAGS[@]}"
