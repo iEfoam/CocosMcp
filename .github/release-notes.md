@@ -1,12 +1,18 @@
-## 预览优化 / Preview improvements
+## 可靠性、UI 与 Prefab 优化 / Reliability, UI and Prefab improvements
 
-CP-001～013 已实现：Creator 2/3 完整 runtime 包及 SHA 健康检查、当前场景/帧证据、真实输入、横屏预设、加载字节刷新、就绪与诊断、脱敏审计、语义点击、验收配方、夹具清理和生命周期回归。启动器沿用本地凭据和已有会话。
+本次交付 O01–O15 优化及其必要的 UI 编排、样式和 Creator 登录复用依赖：
 
-Implemented CP-001–013: complete runtime packages and integrity checks, current scene/frame evidence, real input, landscape presets, loaded-byte refresh, readiness/diagnostics, sanitized auditing, semantic clicks, recipes, guarded fixtures and lifecycle regression. Launchers reuse local credentials and existing sessions.
+- 证据导出并发与容量守卫，写后未知结果账本，独立诊断/取消通道，原子恢复日志。
+- 输出契约、网关配额、按范围资源扫描、请求阶段计时、日志与构建历史管理。
+- Creator 3.8.8 UI 结构计划/执行、Prefab 资源编辑及实例挂载节点/组件覆盖；整组 Undo/Redo 和保存重开。
+- Prefab 差异与 guarded apply/restore、缺失脚本保护、UUID/字面路径/动态未知审查。
+- 开发/原生/发布构建档位、共享 CI 验证、只读检查与独立发布权限、不可覆盖候选包。
 
-最新源码本地验证为 333 项自动测试、Creator 2 原生 14/14、Creator 3 原生 12/14；3.8.8 隐藏窗口输入后态未知且配方成功断言未通过。此前两版 14/14 记录按原指纹保留，不作为当前源码全通过证明。CI 按本 Release 的提交重新验证。Creator 2 场景字节证明仍可 unknown，外部 Chrome MCP、真实设备和真实匹配/资金未验证。详见 [预览验收指南](https://github.com/iEfoam/CocosMcp/blob/main/docs/preview-acceptance.md)。Creator 2 旧七文件更新器需用完整 ZIP/安装器升级，不继续分发缺 runtime 的旧清单。
+发布准备前本地自动测试 534/534 通过。原生证据包括 Creator 3 UI 15/15、Creator 2 14/14，以及本轮 Creator 3 Prefab 资源/实例专项；各自适用其记录的源码检查点，不表示全部能力均获当前原生验证。此 Release 由 CI 对发布提交重新检查和构建。
 
-Latest local checks: 333 automated tests, Creator 2 native 14/14, and Creator 3 native 12/14. Creator 3 hidden-window input has an unknown outcome, and its recipe did not meet the success assertion. Earlier 14/14 results retain their original source fingerprint. CI rechecks this release's source. Creator 2 scene byte proof may remain unknown; external Chrome MCP, physical devices and real business/payment flows remain unverified. Legacy seven-file Creator 2 updaters require the full ZIP/installer upgrade.
+Prefab 实例源节点移动/删除需进入资源编辑模式；嵌套实例、压缩嵌套差异、动态字符串引用仍保留明确限制。未部署到用户工程或服务器。详见 [交付清单](https://github.com/iEfoam/CocosMcp/blob/main/docs/optimization-release-20261030.md)。
+
+Local pre-release validation passed 534 automated tests. Native acceptance is fixture- and source-checkpoint-specific: Creator 3 UI 15/15, Creator 2 14/14, plus focused Creator 3 Prefab asset/instance persistence and Undo/Redo checks. CI verifies this release commit independently. Nested Prefab overrides and dynamic reference rewriting retain documented limits. No project or server deployment is included.
 
 ## 安装 / Installation
 

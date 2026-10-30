@@ -7,6 +7,7 @@ import type { BuildJobs } from '../../../packages/native-adapters/src/build.js';
 import { CaptureResult } from './capture-result.js';
 import type { CapabilityCatalog } from '../../../packages/capability-catalog/src/index.js';
 import type { ProjectRegistry } from '../../../packages/application/src/registry.js';
+import { UiAuthoring } from './ui-authoring.js';
 
 export interface McpRouting {
   readonly instructions: string;
@@ -54,7 +55,7 @@ export class CocosMcpServer {
   }
 
   create(): McpServer {
-    const server = new McpServer({ name: 'cocos-mcp', version: '0.1.0' }, { instructions: this.routing?.instructions ?? '创建资源前调用 asset.location，优先复用已有对应类型目录，不得把生成资源散落在 assets 根目录。后续使用实际 assetLocation.url。用户要求项目资源整理时，先 asset.organize.plan，审查类型、路径引用和 skipped，再以相同范围及 planHash 执行 asset.organize.apply；通过 AssetDB 保留 UUID，检查 partial/pending 与恢复日志，不得直接搬动文件或重建 meta。' });
+    const server = new McpServer({ name: 'cocos-mcp', version: '0.1.0' }, { instructions: (this.routing?.instructions ?? '创建资源前调用 asset.location，优先复用已有对应类型目录，不得把生成资源散落在 assets 根目录。后续使用实际 assetLocation.url。用户要求项目资源整理时，先 asset.organize.plan，审查类型、路径引用和 skipped，再以相同范围及 planHash 执行 asset.organize.apply；通过 AssetDB 保留 UUID，检查 partial/pending 与恢复日志，不得直接搬动文件或重建 meta。') + UiAuthoring.instructions });
     const project = { projectId: z.string().min(1) };
     const envelope = { ...project, instanceId: z.string().optional(), runtimeInstanceId: z.string().optional(),
       operationId: z.string().min(1).max(128).optional(), expectedRevision: z.string().optional() };
@@ -129,7 +130,7 @@ export class CocosMcpServer {
     this.tool(server, 'cocos_build_recover', { title: '恢复未知构建占用', description: '仅在用户确认原构建已经停止后使用。保留未知结果与产物，只解除任务占用；记录 PID 仍存活时拒绝，不杀进程。', inputSchema: z.object({ ...project, jobId: z.string().uuid(), confirmedStopped: z.literal(true) }), annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false } },
       args => this.result(() => this.builds?.recover(args.projectId, this.projects.paths(args.projectId).root, args.jobId) ?? { error: 'Build service is unavailable' }));
 
-    const common = new Set(['scene.query', 'scene.snapshot', 'scene.diff', 'scene.hierarchy', 'scene.open', 'scene.save', 'node.create', 'node.query', 'node.set', 'component.add', 'component.set', 'asset.query', 'asset.import', 'prefab.instantiate', 'ui.build', 'scene.validate', 'runtime.capture']);
+    const common = new Set(['scene.query', 'scene.snapshot', 'scene.diff', 'scene.hierarchy', 'scene.open', 'scene.save', 'node.create', 'node.query', 'node.set', 'component.add', 'component.set', 'asset.query', 'asset.import', 'prefab.instantiate', 'ui.plan', 'ui.build', 'scene.validate', 'runtime.capture']);
     for (const capability of this.catalog.search('', undefined, 0, Number.MAX_SAFE_INTEGER).rows) {
       if (capability.implementation !== 'implemented' || !(capability.supportedMajors ?? capability.versions).length) continue;
       if (!this.allTools && !common.has(capability.id)) continue;

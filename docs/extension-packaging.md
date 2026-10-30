@@ -24,6 +24,10 @@ node scripts/project-env.mjs pnpm check
 node scripts/project-env.mjs node scripts/release-bundle.mjs
 ```
 
+打包目录排他创建，已有 `.codex-work/build/releases` 不会被覆盖。本地重复验收使用 `node scripts/project-env.mjs node scripts/release-bundle.mjs --directory <唯一候选名>`，输出到 `.codex-work/build/release-candidates/<唯一候选名>`；名称只接受字母、数字、点、横线和下划线，首字符必须是字母或数字。所有输入完成验证后才创建输出目录；磁盘写入失败时保留失败目录用于诊断，下一次使用新名称。不会自动清理历史包。
+
+除源匹配的成功记录外，打包还要求最近一次全量测试为 passed，防止同一源码后续失败被旧成功缓存掩盖。ZIP 与更新 JSON 的字节一致性、标准 SHA-256 清单、重复输出拒绝及后续输入损坏均有打包入口回归。
+
 本地安装器会复制整个构建目录，安装后即可获得全部资料。扩展代码修改仍应按项目检查流程完成类型检查及相关测试。
 
 发布脚本从同一份已验证构建生成以下交付物：

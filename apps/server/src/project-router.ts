@@ -4,16 +4,29 @@ import { CapabilityCatalog } from '../../../packages/capability-catalog/src/inde
 import { CaptureResult } from './capture-result.js';
 import type { McpRouting } from './mcp.js';
 import type { ProjectConnector } from './project-connector.js';
+import { StageTimings } from '../../../packages/native-adapters/src/stage-timings.js';
 
 export class ProjectRouter implements McpRouting {
-  static readonly instructions = 'Cocos 工具可直接传会话绝对 workspacePath，按 realpath 自动选择已授权工程并连接，无需先 cocos_project_connect；显式 projectId 优先，其次 projectPath。宿主可在启动时提供 COCOS_WORKSPACE_PATH，不能假定 stdio cwd 或安装目录是聊天工作区。工程内选择最近根，父目录多候选且无明确映射返回 AMBIGUOUS_TARGET 和脱敏 rows，选择 projectPath；不按名称、复制 id 或打开窗口猜工程。仅目标工程唯一且身份验证通过的编辑器实例可自动选择；多实例指定 instanceId。运行时明确指定 runtimeInstanceId。创建资源先 asset.location；整理先 plan 后 apply。写入传稳定 operationId 和适用 revision/哈希；未知结果查询原操作，禁止重发，恢复未知构建须确认原任务停止。';
+  static readonly instructions = '传绝对 workspacePath，按 realpath 连接已授权工程，无需 cocos_project_connect。projectId 优先于 projectPath，再 workspacePath/宿主 COCOS_WORKSPACE_PATH；禁止从 stdio cwd 或安装目录猜工作区。取最近工程根，多候选返回 AMBIGUOUS_TARGET/脱敏 rows，选择 projectPath，不按名称、复制 id 或窗口猜工程。仅唯一已验证实例可自动选择；多实例用 instanceId，运行时用 runtimeInstanceId。创建资源先 asset.location；整理先 plan 后 apply。写入用稳定 operationId 和适用 revision/哈希；未知结果查询原操作，禁止重发；恢复未知构建须确认原任务停止。';
   readonly instructions = ProjectRouter.instructions;
   constructor(readonly connector: ProjectConnector, readonly catalog = new CapabilityCatalog(), private readonly workspacePath?: string) {}
   get projects() { return this.connector.projects; }
   private result(value: JsonValue): CallToolResult { return new CaptureResult().format(value); }
   async call(name: string, args: JsonObject, context: ServerContext): Promise<CallToolResult> {
+    const timings = new StageTimings();
+    try {
+      const result = await this.route(name, args, context, timings);
+      // MCP 元信息不改写后端正文、图片和业务错误；每次调用独享计时，不能跨请求串线。
+      return { ...result, _meta: { ...result._meta, 'io.cocos-mcp/client-timings': timings.rows() } };
+    } catch (error) {
+      const failure = CocosError.from(error);
+      if (failure.details !== undefined && failure.details !== null && (typeof failure.details !== 'object' || Array.isArray(failure.details))) throw failure;
+      throw new CocosError(failure.code, failure.message, { ...Json.object(failure.details ?? {}), clientTimings: timings.rows() });
+    }
+  }
+  private async route(name: string, args: JsonObject, context: ServerContext, timings: StageTimings): Promise<CallToolResult> {
     if (context.mcpReq.signal.aborted) throw new CocosError('CANCELLED', 'Request cancelled before dispatch');
-    if (name === 'cocos_project_connect') return this.result(await this.connector.connect(Json.string(args.projectPath, 'projectPath'), typeof args.instanceId === 'string' ? args.instanceId : undefined));
+    if (name === 'cocos_project_connect') return this.result(await this.connector.connect(Json.string(args.projectPath, 'projectPath'), typeof args.instanceId === 'string' ? args.instanceId : undefined, timings));
     if (name === 'cocos_project_disconnect') return this.result(await this.connector.disconnect(Json.string(args.projectId, 'projectId')));
     if (name === 'cocos_connection_status') return this.result(await this.connector.status(typeof args.projectId === 'string' ? args.projectId : undefined));
     if (name === 'cocos_projects') return this.result(this.connector.list());
@@ -22,21 +35,22 @@ export class ProjectRouter implements McpRouting {
       if (name === 'cocos_capability_describe') return this.result(Json.value(this.catalog.describe(Json.string(args.capabilityId, 'capabilityId'))));
       if (name === 'cocos_coverage') return this.result(Json.value({ ...this.catalog.coverage(), requiresProjectConnection: true }));
     }
-    args = await this.target(args);
-    const projectId = Json.string(args.projectId, 'projectId'), row = await this.connector.get(projectId);
-    args = await this.instances(name, args, projectId);
+    const target = await this.target(args, timings);
+    args = target.args;
+    const projectId = Json.string(args.projectId, 'projectId'), row = await this.connector.get(projectId, timings);
+    args = await timings.measure('editor-selection', () => this.instances(name, args, projectId, target.instances));
     const writing = this.guard(name, args);
     if (writing && row.descriptor.apiVersion !== 1) throw new CocosError('UNSUPPORTED_VERSION', 'Backend API is incompatible with guarded writes; upgrade the project backend before editing', { actualApiVersion: row.descriptor.apiVersion ?? null, requiredApiVersion: 1 });
     if (row.descriptor.apiVersion !== undefined && row.descriptor.apiVersion !== 1) throw new CocosError('UNSUPPORTED_VERSION', 'Unsupported project backend API');
     row.inFlight++;
     try {
-      const active = await row.connections.active();
+      const active = await timings.measure('service-identity', () => row.connections.active());
       if (!active || active.serviceId !== row.descriptor.serviceId) throw new CocosError('CONTEXT_UNAVAILABLE', 'Backend identity changed; reconnect and inspect the target again');
       if (context.mcpReq.signal.aborted) throw new CocosError('CANCELLED', 'Request cancelled before dispatch');
       const token = context.mcpReq._meta?.progressToken;
       try {
-        return await row.client.callTool({ name, arguments: args }, { signal: context.mcpReq.signal, timeout: 120_000, maxTotalTimeout: 120_000,
-          ...((typeof token === 'string' || typeof token === 'number') ? { onprogress: progress => { void context.mcpReq.notify({ method: 'notifications/progress', params: { ...progress, progressToken: token } }).catch(() => {}); } } : {}) });
+        return await timings.measure('backend-rpc', () => row.client.callTool({ name, arguments: args }, { signal: context.mcpReq.signal, timeout: 120_000, maxTotalTimeout: 120_000,
+          ...((typeof token === 'string' || typeof token === 'number') ? { onprogress: progress => { void context.mcpReq.notify({ method: 'notifications/progress', params: { ...progress, progressToken: token } }).catch(() => {}); } } : {}) }));
       } catch (error) {
         // 已交给传输层的写请求不能自动重发；保留原标识，让调用方查询后端的持久结果。
         if (writing) throw new CocosError('OUTCOME_UNKNOWN', 'Write reply was not received; query its original operation/workflow/build before recovery', {
@@ -45,31 +59,34 @@ export class ProjectRouter implements McpRouting {
       }
     } finally { row.inFlight--; }
   }
-  private async target(args: JsonObject): Promise<JsonObject> {
-    if (args.projectId) return { ...args };
+  private async target(args: JsonObject, timings: StageTimings): Promise<{ args: JsonObject; instances?: JsonObject[] }> {
+    if (args.projectId) return { args: { ...args } };
     const workspace = typeof args.workspacePath === 'string' ? args.workspacePath : this.workspacePath;
-    const path = typeof args.projectPath === 'string' ? args.projectPath : workspace ? (await this.connector.workspace(workspace)).root : undefined;
+    const path = typeof args.projectPath === 'string' ? args.projectPath : workspace ? (await this.connector.workspace(workspace, timings)).root : undefined;
     if (!path) throw new CocosError('INVALID_ARGUMENT', 'Provide workspacePath, projectPath or a connected projectId; the host has not supplied a reliable session workspace');
-    const connected = Json.object(await this.connector.connect(path)), project = Json.object(connected.project!);
+    const connected = Json.object(await this.connector.connect(path, typeof args.instanceId === 'string' ? args.instanceId : undefined, timings)), project = Json.object(connected.project!);
     // 连接表由此 stdio 会话独占，工程标识由真实根路径生成；每次重新解析授权候选，不缓存旧授权选择。
     const { workspacePath: _workspace, projectPath: _path, ...forwarded } = args;
-    return { ...forwarded, projectId: Json.string(project.projectId, 'projectId') };
+    // 只复用本次 connect 已认证的候选来选择实例，不接收工具参数提供的快照。
+    // 后端执行时仍核验实例身份，授权和服务身份也按原路径重新检查。
+    return { args: { ...forwarded, projectId: Json.string(project.projectId, 'projectId') },
+      ...(Array.isArray(connected.rows) ? { instances: connected.rows.map(row => Json.object(row)) } : {}) };
   }
   private registered(name: string, args: JsonObject): ReturnType<CapabilityCatalog['describe']> | undefined {
     if (name === 'cocos_capability_execute') return this.catalog.describe(Json.string(args.capabilityId, 'capabilityId'));
     if (name === 'cocos_assets_organize_plan' || name === 'cocos_assets_organize_apply') return this.catalog.describe(name.endsWith('_plan') ? 'asset.organize.plan' : 'asset.organize.apply');
-    return this.catalog.search('', undefined, 0, 1000).rows.find(row => `cocos_${row.id.replaceAll('.', '_')}` === name);
+    return this.catalog.byToolName(name);
   }
-  private async instances(name: string, args: JsonObject, projectId: string): Promise<JsonObject> {
+  private async instances(name: string, args: JsonObject, projectId: string, snapshot?: JsonObject[]): Promise<JsonObject> {
     const steps = name === 'cocos_workflow_execute' && Array.isArray(args.steps) ? args.steps.map(value => Json.object(value)) : undefined;
     const needsInstance = steps ? steps.some(step => this.catalog.describe(Json.string(step.capabilityId, 'capabilityId')).context === 'editor' && !step.instanceId) :
       this.registered(name, args)?.context === 'editor' && !args.instanceId;
     if (!needsInstance) return args;
-    const rows = await this.connector.projects.instances(projectId);
+    const rows = snapshot ?? (await this.connector.projects.instances(projectId)).map(({ token: _token, ...row }) => Json.object(Json.value(row)));
     if (!rows.length) throw new CocosError('CONTEXT_UNAVAILABLE', 'No authenticated editor instance is available in the selected project');
     if (rows.length !== 1) throw new CocosError('AMBIGUOUS_TARGET', 'Multiple authenticated instances belong to the selected project; specify instanceId', {
       projectId, rows: rows.map(({ token: _token, ...row }) => Json.value(row)) });
-    const instanceId = rows[0]!.instanceId;
+    const instanceId = Json.string(rows[0]!.instanceId, 'instanceId');
     if (steps) return { ...args, steps: steps.map(step => this.catalog.describe(Json.string(step.capabilityId, 'capabilityId')).context === 'editor' && !step.instanceId ? { ...step, instanceId } : step) };
     return { ...args, instanceId };
   }

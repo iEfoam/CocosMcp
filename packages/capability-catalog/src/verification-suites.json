@@ -153,6 +153,11 @@
     ]
   },
   {
+    "source": "tests/creator2-ui-style.test.ts",
+    "level": "adapter-tested",
+    "entryIds": ["ui.plan", "ui.build", "ui.diff", "ui.apply"]
+  },
+  {
     "source": "tests/texture.test.ts",
     "level": "adapter-tested",
     "entryIds": [

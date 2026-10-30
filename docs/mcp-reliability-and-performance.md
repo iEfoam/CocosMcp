@@ -14,6 +14,8 @@ Creator 2 旧更新器的七文件白名单不能接收新完整包。首次升�
 
 ### 场景、帧和截图
 
+`preview.capture` 的共享输出契约要求截图 ID、UTC 捕获时间、来源、正整数尺寸、PNG data URL 和图片摘要/字节数。内嵌预览另外要求 `frameBinding=draw-observed-before-composite`、`exactPixelFrameIndex=null` 和明确的 stale 状态；业务与布局验证字段必须为 false。外部浏览器只承担其截图与会话证据，不要求提供原生 AFTER_DRAW 绑定。该契约校验返回结构，不能代替像素内容、实际布局或真实交互验收。
+
 preview.status/capture 区分 launchSceneId、currentSceneId 和 sceneGeneration。合法切场景后继续截图、连接 runtime；严格检查使用 expectedSceneId / expectedGeneration。generation 属于各自会话，不能跨预览和 runtime 直接比较。原生场景事件使旧对象句柄、任务和订阅失效。
 
 截图提供 captureId、UTC capturedAt、SHA-256、PNG 实际尺寸、Canvas 几何和帧证据。窗口合成截图记录绘制前后的计数，exactPixelFrameIndex 保持未知，不声称像素恰好来自某一个计数的帧。runtime.capture 在 AFTER_DRAW 回调内同步读图，避免 await 后 WebGL 缓冲已清空；不默认改变 preserveDrawingBuffer。
@@ -48,7 +50,17 @@ Creator 3 的 `prefab.instantiate` 显式保留原生预制体关联并核对资
 
 ### 审计和恢复
 
-operations.jsonl 同时记录编辑器、runtime、失败及权限拒绝的开始/终态、UTC 时间、耗时、context、effect 和副作用状态。请求仅存 SHA-256 指纹；源码、响应正文、密码、token、签名和图片 Base64 不写入通用账本。开始/终态是两条事件，不等同于两次工具执行。
+审计同时记录编辑器、runtime、失败及权限拒绝的开始/终态、UTC 时间、耗时、context、effect 和副作用状态。请求仅存 SHA-256 指纹；源码、响应正文、密码、token、签名和图片 Base64 不写入通用账本。开始/终态是两条事件，不等同于两次工具执行。
+
+新审计写入 `.codex-work/logs/cocos-mcp/operations/`，单个写入器按 UTC 日期或 4 MiB 分段，每条元信息最多 64 KiB。分段时间是文件分配时间，事件时间仍取 `startedAt`；筛选使用事件 UTC 时间的 `[from,to)`，不按文件名猜测事件日期。旧 `operations.jsonl` 保留原位并优先读取，不迁移或删除。
+
+`operation.audit.query` 新增 `nextPageCursor`，下页作为 `pageCursor` 传回，直接定位分段和字节偏移。保留旧整数 `cursor`/`nextCursor`，但旧游标仍需要从头计数；两种输入游标不能同时传。文件被替换、截短或移走会报 `STALE_REVISION`，非法偏移报 `INVALID_ARGUMENT`。游标不是日志订阅或跨进程一致性快照：并发写入可能落在已读分段，完整导出需待相关写入结束后重新查询。同一写入器内保持顺序，不宣称多进程事件按时间全局排序。
+
+轮转只限制单文件大小，不限制历史总占用；不会删除恢复账本、未知结果、幂等标记或历史日志。恢复证据不能按审计 TTL 淘汰。任何历史清理仍须先盘点精确路径并获得授权。
+
+编辑器桥接的新成功普通读操作只持久化参数指纹、`completed` 状态及 `resultRetention=not-retained-read`，不复制查询返回值或 revision。原调用仍获得完整结果；再次直接提交相同 ID、相同参数时重新执行读取并重新校验 revision，可能得到新的查询结果。应用层仍可在自身有界内存缓存有效期间返回缓存。操作查询会明确返回“结果未保留”标记，不将缺失结果当作 null 成功结果恢复。
+
+参数指纹保留，因此同 ID 改参或换成写操作仍然冲突。旧完整读账本保持原样重放；写操作、pending、failed、unknown 的恢复语义不变，不按 TTL 删除。该策略限制新成功读记录的载荷大小，不限制操作 ID 总数，也不宣称历史总空间有界；失败诊断与历史清理仍遵循上述保留规则。
 
 指定 operationId 的非只读操作在发送前创建排他持久化恢复记录。当前进程复用原去重结果；服务重启后 cocos_operation_query 可查恢复元信息，不保存完整响应，不自动重放。相同 ID 参数变化拒绝；已完成但内存响应已丢失时返回 OUTCOME_UNKNOWN，先确认实际状态，再决定是否创建新操作。审计失败单独警告，不使已执行成功变为可重试失败。
 
@@ -80,7 +92,7 @@ operations.jsonl 同时记录编辑器、runtime、失败及权限拒绝的开�
 
 ### 沿用本地登录会话
 
-`scripts/open-creator.mjs` 优先核对本工程的存活编辑器及认证 bridge.identity；已有实例直接复用。Creator 3 沿用固定 `.codex-work/cache/creator-home`，首次缺凭据时只复用本机原生会话文件，目录权限 0700、文件 0600，已有工程凭据不覆盖。Creator 2 沿用已登录 Dashboard 的工程入口；直接启动无法继承认证时明确拒绝，不再另开登录窗口。日志和返回值不包含会话密钥。凭据过期或被官方撤销仍需用户正常更新。
+`scripts/open-creator.mjs` 使用 `CreatorLauncher` 优先核对工程、版本与认证 `bridge.identity`，将原生 `loginState` 与桥接身份分开；优先唯一已登录实例，多实例显式选择，未登录或未知实例保留现场。Creator 3 使用固定 `.codex-work/cache/creator-home`，同账号更新会话采用工程内互斥、备份和内容守卫刷新，跨账号、活动窗口及无效旧 profile 不自动覆盖。`launch.json` 在派发前记录原尝试；未知结果、仍在启动或同凭据未确认登录时禁止重复启动。晚到的已登录桥接可以核对 PID 后将原尝试标记 ready。文件权限 0600，目录 0700；不输出会话密钥，不自动清理备份或残留锁。Creator 2 使用已登录 Dashboard，直接启动提前拒绝。原生 API 不可用时返回 unknown；没有更新会话的过期/撤销凭据仍需用户正常登录。具体状态和恢复边界见使用指南。
 
 发现编辑器时同时核对认证身份和进程，不只依赖历史 PID 存活；系统 PID 复用不能制造假多实例。启动器扫描全部有效候选后优先复用已认证实例。旧桥接缺少身份入口时，使用原有认证 describe 检查版本和能力，保持旧版发现兼容；真实多个编辑器仍须明确 instanceId。
 
@@ -88,7 +100,9 @@ operations.jsonl 同时记录编辑器、runtime、失败及权限拒绝的开�
 
 - 显式 operationId 的指纹、执行中请求、成功结果和错误统一保存在最多 2048 条记录中。确认终态保留 30 分钟（单调时钟计时），容量压力下先淘汰终态；相同 ID / 参数共享请求与结果，不同参数返回 OPERATION_CONFLICT。已确认失败在保留期内也返回原错误。
 - 执行中和 OUTCOME_UNKNOWN 不自动过期或淘汰。全部记录均受保护时，新请求返回 RESOURCE_BUSY。编辑器操作可通过 cocos_operation_query 向最初实例读取账本，确认终态后恢复正常保留策略；查询失败或 NOT_FOUND 不解除保护。运行时未知操作尚无自动对账机制，需人工核对运行状态。内存记录不跨服务重启，不能把 TTL 当成重复写入许可。
-- 每个工程保持串行执行，最多等待 128 个请求，排队超过 30 秒返回 TIMEOUT；尚未执行的取消立即移除并释放容量。执行后的取消由桥接报告是否结果未知；不会以超时为由提前释放正在执行的写任务。不同工程相互独立，状态查询沿用队列外通道。
+- 每个工程保持串行执行，最多等待 128 个请求，排队超过 30 秒返回 TIMEOUT；尚未执行的取消立即移除并释放容量。执行后的取消由桥接报告是否结果未知；不会以超时为由提前释放正在执行的写任务。不同工程相互独立。
+- 独立控制通道采用明确白名单：桥接身份/原子账本，以及 `console.query`、`preview.refresh.status`、`preview.refresh.cancel`；后面三个同时绕过应用层和桥接层队列，仍执行认证、实例/能力和参数守卫。普通场景读写继续串行，`preview.status` 会异步检查窗口并更新观测状态，因此没有因 read 标签而开放并发。刷新取消仅停止后续阶段，`nativePending=true` 表示原生导入仍可能完成，不代表回滚副作用。
+- 控制通道回归将一次写入保持五秒：身份、控制台和刷新取消在 500 ms 测试预算内返回，来自应用及直达桥接的后续写入均继续等待；未认证取消被拒绝。取消后的已派发导入仍完成一次，编译不再执行。该测试驱动实际应用/桥接队列和 PreviewRefresh 状态机，原生导入由夹具模拟，不冒充真实 Creator 验收。
 - 工作流 JSON 使用同目录临时文件、fsync 和原子发布，首次创建保留排他语义。成功步骤的检查点失败会停止工作流并返回 OUTCOME_UNKNOWN，附已完成步骤；未知结果不会因 continueOnError 继续。该机制保证读者不会看到半份 JSON，不等价于数据库事务或断电持久性承诺。
 - 编辑器已确认成功后，应用审计日志写入失败改为成功响应中的 warnings/AUDIT_WRITE_FAILED；不会把已完成操作变成普通失败。桥接响应体中断或格式无效返回 OUTCOME_UNKNOWN。
 - 工作流延迟参数校验复用最多 128 个 AJV 编译结果，缓存键包括能力、排序后的字段和 schema；淘汰时同时释放 AJV 内部缓存。绑定后的最终参数仍完整验证。
@@ -152,6 +166,67 @@ DOM 聚焦不合成业务点击。返回的 `focus` 包含焦点结果、Canvas 
 执行前持久化当前步骤及操作 ID。失败时保留成功步骤、失败操作 ID 和恢复提示。同一 `workflowId` 不得重复执行或覆盖历史状态。恢复时先调用 `cocos_workflow_status` / `cocos_operation_query` 并核对资源，再创建只包含剩余步骤的新工作流；不要重放状态未知的写操作。这里没有通用事务回滚或自动续跑。
 
 ## 性能预算
+
+### 构建历史持久化
+
+临时目录使用当前进程持有的所有权凭据，标记包含任务 ID、PID、用途、UTC 创建/结束时间和保留原因。测试入口与 Creator 构建入口已接入：仅成功、同一目录身份/标记且 `lsof` 没有观察到打开引用时，回收本次可再生文件。检查工具缺失、超时或警告时保留；失败、取消、未知或被替换目录保留。历史标记和复用的 PID 不能生成清理授权，外部不能用旧 JSON 恢复一次清理凭据。
+
+Creator 构建成功后只回收临时 CLI 配置副本；复现所需配置保存在 `.codex-work/logs/builds/<jobId>.config.json`，构建产物、日志、账号目录和历史完整记录继续保留。清理失败不改变已确认的构建结果。普通命令入口仅尝试回收自己创建的空目录，无法判定用途的非空目录继续保留。
+
+执行 `node scripts/project-env.mjs node scripts/storage-inventory.mjs` 生成只读 JSON/Markdown 清单，列出路径、逻辑/分配字节、任务/PID/用途/时间、观察状态和保留理由；不会跟随符号链接，也没有历史删除入口。扫描预算耗尽或读失败标记不完整，PID 存在仅是观察结果，不能证明进程身份。最新本机快照位于 `.codex-work/artifacts/storage-inventory/2026-10-29T11-43-44-195Z/REPORT.md`：673 个条目、91985 个文件系统条目被检查，没有不完整行。逻辑大小约 tmp 6.629 GiB、build 2.206 GiB，主要是既有临时/构建内容；本次保留并复用现有资源，没有清理历史。大小之和不能换算为可释放物理空间。
+
+构建状态按任务写入 `.codex-work/cache/cocos-mcp/build-history/<UUID 前两位>/<jobId>.json` 小索引。完整记录位于 `.codex-work/logs/build-history/<jobId>/<SHA256>.json`；索引不保存大错误正文，分别校验摘要和完整记录摘要。先持久化完整记录，再原子提交引用，同一任务的写入按调用顺序串行。提交前失败只留下未引用记录，提交后失去确认则以重启后的索引为准，不能推断写入没有发生。
+
+旧 `build-jobs.json` 保持原位、原内容并兼容读取；同任务的新索引优先。新写入不再扩张这个 16 MiB / 10000 条的旧文件，也不会重写其他任务。启动加载任务摘要，查询详情才读取完整记录；历史大错误不会因查询永久加入内存索引。列表仍兼容原返回格式，完整结果可能较大，当前不是无限容量或分页接口。
+
+运行中任务重启后仍按派发标记转为失败或未知，活跃 PID、未知恢复状态、operationId 和请求摘要持续保留。已完成操作可重放，换参数仍冲突，不会再次启动 Creator。完整记录、未引用记录和旧索引均属于恢复/审计材料，本次不按 TTL 删除。旧版本服务不认识新索引，因此带活动或未知构建时不得直接回退旧服务；应先用新版完成状态核对和恢复。
+
+自动回归包含超过 16 MiB 的分离历史、旧文件不变、单任务更新隔离、提交前后故障、同任务并发顺序、内容/索引损坏、重启防重放及服务活动 PID 保护。这些使用独立文件夹和模拟构建进程，不等同于 Creator 原生构建验收。
+
+### 请求阶段计时与发现基准
+
+操作返回的 `timings` 区分 `queue`、`editor-discovery`、`editor-rpc`、`runtime-dispatch`、`evidence-write` 和审计阶段；每行包含阶段名、毫秒耗时和调用次数，不含请求正文或凭据。终态审计保留写入前的快照，返回值才包含 `audit-terminal`。同操作 ID 的重放结果不是一次新的性能采样。
+
+新桥接额外返回 `nativeTimings`：原生执行前后的 revision、意图/完成账本写入、`native-execution` 和输出校验分别计时。HTTP `Server-Timing` 中的 `cocos-json` 记录原生回复 JSON 编码时间，由客户端归入 `response-serialization`，不包含网络发送或 MCP SDK 最后的线协议编码。`editor-rpc` 包含网络与原生处理，是外层总时段，不能与内层 `nativeTimings` 相加。旧桥接缺少这些可选字段时保持兼容；无效附加计时会被忽略，不会把已确认成功的写入变成未知状态。
+
+统一客户端在标准 MCP `_meta["io.cocos-mcp/client-timings"]` 返回本次调用的阶段行，包括 `workspace-resolution`、`authorization`、`service-connect`、`editor-discovery`、`authorization-recheck`、`editor-selection`、`service-identity`、`backend-rpc`。仅记录本次实际经过的阶段：显式 projectId 不需要重新解析工作区，已认证快照选择也不增加一次发现。工作区解析包含候选路径与准入解析，授权阶段针对选中的工程，服务连接阶段可能包含冷启动；不要将它们当作纯文件 I/O 或纯网络时间。抛出的对象型错误 details 带 `clientTimings`，原有非对象 details 保持原形。后端正文、图片、业务错误以及已有 `_meta` 不被改写，计时不在请求之间共享。
+
+自动工程连接复用本次已认证候选来选择实例，后端执行仍独立核验身份。并发发现只共享在途认证，不缓存终态；显式实例按第一方桥接的 instanceId.json 规则直接读取目标，不枚举无关描述符；文件名不能代替内部身份、工程、PID、端点和实时认证检查。
+
+可从仓库根复现实例发现基准：
+
+```sh
+node scripts/project-env.mjs node --input-type=module -e 'import {build} from "esbuild"; await build({entryPoints:["scripts/discovery-benchmark.ts"],outfile:".codex-work/build/benchmarks/discovery.mjs",bundle:true,platform:"node",format:"esm",target:"node24"});'
+node scripts/project-env.mjs node .codex-work/build/benchmarks/discovery.mjs
+```
+
+脚本使用真实回环 HTTP 和合成身份，包含 16 份描述符（8 个有效、8 个失效 PID 身份），每个回复注入 3 ms 延迟。2026-10-29 macOS ARM64 / Node 24.21.0 的结果如下；不代表 Creator 原生执行性能：
+
+| 场景 | 样本数 | P50 / P95（ms） | 每组调用 / 认证次数 |
+| --- | --- | --- | --- |
+| 首次完整发现 | 1 | 42.00 / 42.00 | 1 / 16 |
+| 后续完整发现 | 10 | 21.05 / 23.65 | 1 / 16 |
+| 并发完整发现 | 10 | 21.32 / 22.99 | 10 / 16 |
+| 显式实例 | 10 | 4.23 / 4.57 | 1 / 1 |
+
+所有组的认证并发不超过 4；多实例歧义拒绝，身份失效后重新认证并拒绝旧实例。报告保存在 `.codex-work/artifacts/discovery-benchmark/2026-10-29T11-18-49-087Z/REPORT.json`；重新运行使用独立时间目录。成功后仅清理本次合成 fixture，失败时保留诊断现场。这里的“后续”指本机文件/HTTP 热身，认证本身未缓存，也不是与历史源码的耗时对照。
+
+### 资源扫描与摘要预算
+
+资源整理将范围内候选枚举与可复用类型目录查找分开。目录查找优先最浅层，范围枚举尊重 `scopeUrl`、`recursive` 和显式 `urls`，受保护目录只返回跳过摘要。单次候选最多 2000 个、扫描条目最多 50000 个，摘要内容总预算 1 GiB；超过预算需要缩小计划，不能省略 `planHash`、UUID 或内容复核。
+
+元数据最多 1 MiB，glTF 依赖检查最多 16 MiB。文件通过同一个打开的句柄每次读取至多 64 KiB，并核对读取前后文件身份、大小、修改时间及最终路径；增长、原位修改、路径替换和元数据变化均拒绝形成可执行计划。glTF 依赖审查的摘要还必须与最终候选摘要相同。检查不能替代跨文件事务，因此 apply 仍重新规划及逐项验证。
+
+复现只读扫描基准：
+
+```sh
+node scripts/project-env.mjs node --input-type=module -e 'import {build} from "esbuild"; await build({entryPoints:["scripts/asset-scan-benchmark.ts"],outfile:".codex-work/build/benchmarks/asset-scan.mjs",bundle:true,platform:"node",format:"esm",target:"node24"});'
+node scripts/project-env.mjs node .codex-work/build/benchmarks/asset-scan.mjs
+```
+
+2026-10-29 macOS ARM64 / Node 24.21.0，存在 5001 个无关文件时，12 个 64 KiB 资源的范围计划 5 次样本 P50/P95 为 19.95/33.71 ms；显式指定一个 128 MiB 资源为 108.55/111.09 ms。范围计划成功，全树递归仍按原契约拒绝超过 2000 个候选。原始报告：`.codex-work/artifacts/asset-scan-benchmark/2026-10-29T11-24-12-055Z/REPORT.json`。这是独立文件系统夹具，不是 Creator 导入或 AssetDB 性能；没有清除系统缓存或与旧实现作耗时对照。RSS 为整个进程的 5 ms 采样值，不能当作硬峰值或单次分配量。成功仅清理本次夹具，失败保留现场。
+
+### Shader 帧性能
 
 ```json
 {"frames":120,"warmupFrames":10,"maxFrameMs":20}

@@ -76,7 +76,7 @@ The exact adaptation baselines are **Creator 2.4.15** and **Creator 3.8.8**. Thi
 | Media & diagnostics | Basic audio/video/particle controls and UI/Label/atlas/Graphics diagnostics | Media, particles and performance/render diagnostics; platform experience and GPU performance need separate evidence |
 | Workflows & builds | Local workflows and CLI jobs; recorded game-build environment failures remain | Local workflows, CLI jobs and artifact checks; signing, devices, SDKs and publication require separate acceptance |
 
-As of 2026-10-08, the catalog contains **315 capability entries across 54 modules**. Creator 2.4.15 wires up to **123 editor + 106 runtime endpoints**, with another 11 handled or composed in the application layer; **276 entries apply to major version 3**. These are not current availability, native pass counts, or the default tool-list length. The latest regression passed **333 tests**. This batch was installed and tested in isolated projects for both versions; production game projects were not updated.
+As of 2026-10-08, the catalog contains **315 capability entries across 54 modules**. Creator 2.4.15 wires up to **123 editor + 106 runtime endpoints**, with another 11 handled or composed in the application layer; **276 entries apply to major version 3**. These are not current availability, native pass counts, or the default tool-list length. That historical snapshot passed **333 tests**. This batch was installed and tested in isolated projects for both versions; production game projects were not updated.
 
 **Still incomplete:** additional 2.4.15 joints, Prefab differences/repair, image/font/atlas quality workflows, loading traces, TMX persistence, 2.x templates, material pipeline controls, focus/grid, single stepping/Scheduler, and other tracked work. The 2.4.15 game build still has recorded `exportSimpleProject` and FBX converter failures; building the plugin does not prove game export succeeds. The 3.8.8 post-processing and skinning paths also retain explicit limitations.
 
@@ -84,7 +84,7 @@ See the [version support matrix](docs/version-support.md), [2.4.15 adaptation re
 
 ### Preview reliability and acceptance (2026-10-08)
 
-CP-001 through CP-013 are implemented: complete runtime bundles, scene/frame identity, focus before input, landscape/view restoration, loaded-byte refresh evidence, layered readiness, sanitized auditing, semantic clicks, acceptance recipes, guarded fixtures, and lifecycle regression. An earlier source snapshot passed 14 synthetic native checks per version. The latest snapshot passed 333 automated tests and 14/14 native checks on Creator 2; Creator 3 passed 12/14, with hidden-window input outcome unknown and the recipe failing its success assertion. This is not a full native pass for the current source. Launchers reuse local credentials and existing sessions rather than creating a fresh login environment for every run.
+CP-001 through CP-013 are implemented: complete runtime bundles, scene/frame identity, focus before input, landscape/view restoration, loaded-byte refresh evidence, layered readiness, sanitized auditing, semantic clicks, acceptance recipes, guarded fixtures, and lifecycle regression. An earlier source snapshot passed 14 synthetic native checks per version. That historical snapshot passed 333 automated tests and 14/14 native checks on Creator 2; Creator 3 passed 12/14, with hidden-window input outcome unknown and the recipe failing its success assertion. This is not a full native pass for the current source. Launchers reuse local credentials and existing sessions rather than creating a fresh login environment for every run.
 
 Creator 2 scene loaded-byte proof may still be unknown. External Chrome MCP integration, physical devices, GPU memory, and real matchmaking/payment flows remain unverified. See the [preview acceptance guide](docs/preview-acceptance.md) for examples, reproduction steps, and evidence boundaries (Chinese).
 
@@ -328,3 +328,5 @@ The detailed guides below are currently written in Chinese. Both README editions
 ## License
 
 First-party code is licensed under **MIT**. Cocos Creator, the engine, Spine, DragonBones, platform SDKs, and other third-party dependencies remain subject to their respective licenses.
+
+For the current build, see the generated `.codex-work/build/verification-summary.md` (under `profiles/dev/` for development builds). It separates source applicability, test counts, version-specific native evidence, and module scope acceptance. Dated figures above are historical. See [build profiles](docs/build-profiles.md).

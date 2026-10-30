@@ -23,12 +23,25 @@ export class UiUpdateService {
     const hierarchy = Json.object(await this.port.scene('hierarchy', { rootId, limit: 1000 }));
     if (Number(hierarchy.total) > 1000) throw new CocosError('INVALID_ARGUMENT', 'UI update subtree exceeds 1000 nodes');
     const actual = hierarchy.rows as JsonObject[], changes: JsonObject[] = [], blocked: JsonObject[] = [];
-    const add = async (kind: 'node' | 'component', id: string, properties: JsonObject, key: string): Promise<void> => {
+    const add = async (kind: 'node' | 'component', id: string, properties: JsonObject, key: string, type?: string): Promise<void> => {
       const dump = Json.object(await this.port.request('scene', kind === 'node' ? 'query-node' : 'query-component', id));
+      const coupled = new Set<string>();
       for (const [property, after] of Object.entries(properties)) {
+        if (coupled.has(property)) continue;
         const field = PropertyDump.locate(dump, property); PropertyDump.assign(field, after);
         const before = PropertyDump.unwrap(field);
-        if (!PropertyDump.matches(before, after)) changes.push({ key, kind, id, property, before, after });
+        if (!PropertyDump.matches(before, after)) {
+          const change: JsonObject = { key, kind, id, property, before, after };
+          const offset = type === 'cc.Widget' ? UiDocumentModel.widgetOffsets[property] : undefined;
+          if (offset) {
+            // 原生对齐/单位 setter 会换算偏移；即使数值未变也必须重写，并以相同顺序补偿，不能反向恢复两条独立变化。
+            const offsetField = PropertyDump.locate(dump, offset), offsetBefore = PropertyDump.unwrap(offsetField);
+            const offsetAfter = properties[offset] ?? offsetBefore;
+            PropertyDump.assign(offsetField, offsetAfter);
+            change.companion = { property: offset, before: offsetBefore, after: offsetAfter }; coupled.add(offset);
+          }
+          changes.push(change);
+        }
       }
     };
     for (const row of document) {
@@ -40,7 +53,7 @@ export class UiUpdateService {
         const matches = (node.components as JsonObject[]).filter(c => c.type === component.type);
         if (matches.length !== 1) { blocked.push({ key: row.key, type: component.type, reason: 'COMPONENT_STRUCTURE_CHANGE_REQUIRED' }); continue; }
         const properties = await new UiProperties(this.port).resolve(component.properties ?? {}, mapping);
-        await add('component', Json.string(matches[0]!.componentId, 'componentId'), properties, row.key);
+        await add('component', Json.string(matches[0]!.componentId, 'componentId'), properties, row.key, component.type);
       }
     }
     const snapshotHash = await this.snapshot(rootId), revision = this.hash(await this.port.scene('fingerprint'));
@@ -57,7 +70,9 @@ export class UiUpdateService {
     let checkpoint = String(plan.snapshotHash), pending: JsonObject | null = null;
     const update = async (change: JsonObject, restore: boolean): Promise<void> => {
       if (await this.snapshot(rootId) !== checkpoint) throw new CocosError('STALE_REVISION', 'UI subtree changed during update');
-      await this.run(`${change.kind}.set`, { [change.kind === 'node' ? 'nodeId' : 'componentId']: change.id!, properties: { [String(change.property)]: restore ? change.before! : change.after! } });
+      const properties: JsonObject = { [String(change.property)]: restore ? change.before! : change.after! };
+      if (change.companion) { const companion = Json.object(change.companion); properties[String(companion.property)] = restore ? companion.before! : companion.after!; }
+      await this.run(`${change.kind}.set`, { [change.kind === 'node' ? 'nodeId' : 'componentId']: change.id!, properties });
       if (change.kind === 'component') await this.port.scene('ui.flush_label', { componentId: change.id! });
       checkpoint = await this.snapshot(rootId);
     };

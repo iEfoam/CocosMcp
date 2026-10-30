@@ -1,3 +1,4 @@
+import { RuntimeFeatureRoutes } from './feature-routes.js';
 import { Creator2PhysicsContact } from '../../runtime2-bridge/src/physics-contact.js';
 import { Creator2SpineEvents } from '../../runtime2-bridge/src/spine-events.js';
 import { Creator2DragonBonesEvents } from '../../runtime2-bridge/src/dragonbones-events.js';
@@ -6,25 +7,15 @@ import { Creator2Collision } from '../../runtime2-bridge/src/collision.js';
 import { Creator2Material } from '../../runtime2-bridge/src/material.js';
 import { Creator2Support } from '../../capability-catalog/src/creator2-support.js';
 import { Creator2Features } from '../../runtime2-bridge/src/features.js';
-import { GraphicsInspector } from './graphics.js';
-import { TwoDInspector } from './two-d-inspector.js';
 import { TwoDControl } from './two-d-control.js';
 import { FeatureSupport } from './feature-support.js';
 import { FrameSession } from './frame-session.js';
-import { PathSampler } from './path.js';
-import { SkinningCompatibility } from './skinning-compatibility.js';
-import { AnimationGraphObserver } from './animation-graph.js';
 import { DebugOverlayController } from './debug-overlay.js';
-import { EngineFeatureInspector } from './engine-inspector.js';
-import { ParticleController } from './particle.js';
 import { CocosError, Json, type JsonObject, type JsonValue } from '../../contracts/src/index.js';
 import { RuntimeAccess as A, RuntimePolicy, type RuntimeObject } from './access.js';
 import { SceneInspector, type SceneEnvironment } from './scene.js';
 import { MaterialController } from './material.js';
 import { ShaderPreview } from './shader-preview.js';
-import { PhysicsQueries } from './physics.js';
-import { MediaController } from './media.js';
-import { AnimationController } from './animation-control.js';
 import { RuntimeAssets } from './assets.js';
 import { RuntimeTaskSessions } from './task-session.js';
 import { RuntimeViewSession } from './view-session.js';
@@ -49,6 +40,7 @@ export class RuntimeController {
   private readonly assets: RuntimeAssets;
   private readonly frames: FrameSession;
   private readonly debug: DebugOverlayController;
+  private readonly featureRoutes: RuntimeFeatureRoutes;
   private readonly tasks: RuntimeTaskSessions;
   private readonly view: RuntimeViewSession;
   private lastCapture: JsonObject | undefined;
@@ -66,6 +58,7 @@ export class RuntimeController {
     this.assets = new RuntimeAssets(environment.cc);
     this.frames = new FrameSession(environment.cc);
     this.debug = new DebugOverlayController(this.inspector);
+    this.featureRoutes = new RuntimeFeatureRoutes(this.inspector, this.frames, this.debug);
     const director = A.object(environment.cc.director);
     const event = environment.cc.Director && A.object(environment.cc.Director).EVENT_AFTER_SCENE_LAUNCH;
     if (typeof event === 'string' && typeof director.on === 'function' && typeof director.off === 'function') {
@@ -203,45 +196,7 @@ export class RuntimeController {
       });
       this.synchronize(); return { loaded: true, scene: this.inspector.sceneInfo(), sceneGeneration: this.generation };
     }
-    if (/^runtime\.(ui|render2d|label|atlas|spine|tilemap)\./.test(id) || id === 'runtime.physics2d.trace_contacts') return FeatureSupport.run(id, A.engineVersion(this.environment.cc), async () => {
-      const control = new TwoDControl(this.inspector, this.frames);
-      if (id.startsWith('runtime.spine.')) return control.spine(id, p);
-      if (id.startsWith('runtime.tilemap.')) return control.tilemap(id, p);
-      if (id === 'runtime.physics2d.trace_contacts') return control.contacts(p);
-      return new TwoDInspector(this.inspector).execute(id, p);
-    });
-    if (FeatureSupport.owns(id)) return FeatureSupport.run(id, A.engineVersion(this.environment.cc), async () => {
-      if (id.startsWith('runtime.debug.')) return this.debug.execute(id, p);
-      if (id === 'runtime.skinning.plan') return new SkinningCompatibility(this.inspector).plan(p);
-      if (id.startsWith('runtime.animation_graph.')) return new AnimationGraphObserver(this.inspector, this.frames).execute(id, p);
-      if (id === 'runtime.path.preview') {
-        const sampled = new PathSampler(this.environment.cc).sample(p), parent = this.inspector.node(Json.string(p.parentId, 'parentId'));
-        const vector = FeatureSupport.require(this.environment.cc.Vec3, 'Vec3'); FeatureSupport.methods(vector, ['transformMat4']);
-        const points = (sampled.rows as JsonObject[]).map(row => { const value = Json.object(row.position), v = A.construct(vector, [value.x, value.y, value.z]); return A.safeData(A.call(vector, 'transformMat4', v, v, parent.worldMatrix)); });
-        return this.debug.execute('runtime.debug.draw', { ...p, lines: points.slice(1).map((point, index) => ({ start: points[index]!, end: point })) });
-      }
-      const inspector = new EngineFeatureInspector(this.inspector, this.frames);
-      if (id === 'runtime.probe.preview') {
-        const points=inspector.probePoints(p);
-        const drawing=Json.object(this.debug.execute('runtime.debug.shape',{...p,shape:{kind:'points',points:points.rows!,radius:p.radius??0.05}}));
-        return {...drawing,...points};
-      }
-      if (id === 'runtime.postprocess.inspect') return inspector.postprocess(p);
-      if (id === 'runtime.character.test_route') return inspector.route(p);
-      return inspector.inspect(id.split('.')[1]!, p);
-    });
-    if (id.startsWith('runtime.graphics.') || /^runtime\.particle[23]d\./.test(id)) {
-      if (this.environment.major !== 3 || A.engineVersion(this.environment.cc) !== '3.8.8') throw new CocosError('UNSUPPORTED_VERSION', 'Graphics and particle tools require Creator 3.8.8');
-      return id.startsWith('runtime.graphics.') ? new GraphicsInspector(this.environment.cc).execute(id, p) : new ParticleController(this.inspector).execute(id, p);
-    }
-    if (/^runtime\.(physics[23]d|audio|video|webview)\./.test(id)) {
-      if (this.environment.major !== 3 || A.engineVersion(this.environment.cc) !== '3.8.8') throw new CocosError('UNSUPPORTED_VERSION', 'Physics and media tools require Creator 3.8.8');
-      return id.startsWith('runtime.physics') ? new PhysicsQueries(this.environment.cc).execute(id, p) : new MediaController(this.inspector).execute(id, p);
-    }
-    if (id.startsWith('runtime.animation.')) {
-      if (this.environment.major !== 3 || A.engineVersion(this.environment.cc) !== '3.8.8') throw new CocosError('UNSUPPORTED_VERSION', 'Animation controls require Creator 3.8.8');
-      return new AnimationController(this.inspector).execute(id, p);
-    }
+    if (this.featureRoutes.owns(id)) return this.featureRoutes.execute(id, p);
     if (id.startsWith('runtime.asset.') || id === 'runtime.bundle.inspect') {
       if (!((this.environment.major === 3 && A.engineVersion(this.environment.cc) === '3.8.8') || (this.environment.major === 2 && A.engineVersion(this.environment.cc) === '2.4.15'))) throw new CocosError('UNSUPPORTED_VERSION', 'Runtime asset tools require Creator 2.4.15 or 3.8.8');
       return this.assets.execute(id, p);

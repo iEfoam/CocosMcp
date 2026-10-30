@@ -52,7 +52,7 @@ class EngineFeatureSmoke {
       const mask=await call('ik.mask_create',{rootId:rig.nodeId!,name:'MinimalIKMask',url:maskLocation.url!,joints:[{path:'Root',enabled:true},{path:'Root/Middle',enabled:true},{path:'Root/Middle/End',enabled:true}]});assert.equal(mask.supported,true);
       const modelLocation=await call('asset.location',{url:`db://assets/MinimalSkin_${suffix}.gltf`});
       const model=await call('asset.create',{url:modelLocation.url!,content:new MinimalSkinnedFixture().document()});
-      const subAssets=Object.values(Json.object(Json.object(model.asset).subAssets)).map(Json.object);
+      const subAssets=Object.values(Json.object(Json.object(model.asset).subAssets)).map(value => Json.object(value));
       const prefab=subAssets.find(asset=>asset.type==='cc.Prefab');assert.ok(prefab,'Native importer must create a prefab');
       const skinRoot=await call('node.create',{name:'MinimalSkin',parentId:nodeId,assetUuid:prefab.uuid!});
       const skinTree=await call('scene.hierarchy',{rootId:skinRoot.nodeId!,includeComponents:true});

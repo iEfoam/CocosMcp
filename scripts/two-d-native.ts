@@ -76,7 +76,7 @@ class TwoDNativeAcceptance {
         await call('asset.set_meta', { url: pictureLocation.url!, userData: { type: 'sprite-frame' } });
         inspected = await call('spriteframe.inspect', { url: pictureLocation.url! });
       }
-      const spriteMeta = Object.values(Json.object(Json.object(inspected.meta).subMetas)).map(Json.object).find(row => row.importer === 'sprite-frame'); assert.ok(spriteMeta);
+      const spriteMeta = Object.values(Json.object(Json.object(inspected.meta).subMetas)).map(value => Json.object(value)).find(row => row.importer === 'sprite-frame'); assert.ok(spriteMeta);
       const frameUuid = String(spriteMeta.uuid), edge = Json.object(spriteMeta.userData).borderLeft === 8 ? 10 : 8;
       const imageParams = { url: pictureLocation.url!, spriteFrameUuid: frameUuid, settings: { borderLeft: edge, borderRight: 8, borderTop: 8, borderBottom: 8 } };
       const borderPlan = await call('spriteframe.plan', imageParams), edited = await call('spriteframe.apply', { ...imageParams, planHash: borderPlan.planHash! });
@@ -133,10 +133,10 @@ class TwoDNativeAcceptance {
       await call('runtime.set', { target: `component:${colliderId}`, path: 'enabled', value: true });
       const logs = await call('preview.logs'); assert.equal((logs.rows as unknown[]).length, 0, 'Preview must not report errors');
       rows.push({ check: 'native-2d-core', passed: true, screenshotReviewRequired: true });
-    } catch (error) { failure = error; rows.push({ error: CocosError.from(error).toJSON() }); }
+    } catch (error) { failure = error; rows.push({ error: Json.value(CocosError.from(error).toJSON()) }); }
     finally {
       try { if (ownedPreview) await call('preview.stop'); if (sceneId && previous) { await call('scene.save'); await call('scene.open', { uuid: previous }); } }
-      catch (error) { failure ??= error; rows.push({ restorationError: CocosError.from(error).toJSON() }); }
+      catch (error) { failure ??= error; rows.push({ restorationError: Json.value(CocosError.from(error).toJSON()) }); }
       await gateway.close();
       const path = resolve('.codex-work/logs/two-d-native.json'); await writeFile(path, JSON.stringify({ passed: !failure, sceneId, previous, rows }, null, 2)); console.log(path);
     }

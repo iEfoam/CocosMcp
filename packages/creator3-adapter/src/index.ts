@@ -11,20 +11,24 @@ import { ShaderService } from './shader.js';
 import { AssetOrganization } from './asset-organization.js';
 import { AssetQuery } from './asset-query.js';
 import { PreviewService } from './preview.js';
+import { AssetReferenceAudit } from '../../asset-policy/src/reference-audit.js';
 import { GeometryService } from './geometry.js';
 import { RenderingService } from './rendering.js';
 import { AnimationEditService } from './animation-edit.js';
 import { UiService } from './ui.js';
 import { TextureService } from './texture.js';
 import { PrefabService } from './prefab.js';
+import { PrefabChanges, type PrefabChangeAction } from './prefab-changes.js';
 
 export class Creator3Adapter implements EditorAdapter {
+  async loginState(): Promise<'logged-in' | 'logged-out' | 'unknown'> { return this.port.loginState ? this.port.loginState() : 'unknown'; }
   readonly major = 3 as const;
   private readonly shaders: ShaderService;
   constructor(private readonly port: EditorPort) { this.shaders = new ShaderService(port); }
 
   supportedCapabilities(): string[] {
     const excluded = new Set<string>();
+    if (this.port.version !== '3.8.8') for (const id of ['scene.references', 'ui.structure.plan', 'ui.structure.apply', 'prefab.diff', 'prefab.change.plan', 'prefab.change.apply']) excluded.add(id);
     if (!this.port.consoleAvailable || !this.port.consoleQuery || this.port.version !== '3.8.8') excluded.add('console.query');
     if (!this.port.preview || this.port.version !== '3.8.8') for (const row of new Operations().list()) if (row.id.startsWith('preview.')) excluded.add(row.id);
     return new Operations().list().filter(row => row.context === 'editor' && row.supportedMajors?.includes(3) && !excluded.has(row.id)
@@ -90,13 +94,14 @@ export class Creator3Adapter implements EditorAdapter {
       options.assetUuid = params.assetUuid; options.type = 'cc.Prefab'; options.unlinkPrefab = false;
     }
     const uuid = Json.string(await this.scene('create-node', options), 'created node UUID');
-    if (!await this.port.scene('nodeExists', uuid)) throw new CocosError('VERIFICATION_FAILED', 'Created node was not attached to the active scene', { nodeId: uuid });
+    if (!await this.port.scene('nodeExists', uuid)) throw new CocosError('OUTCOME_UNKNOWN', 'Created node was not attached to the active scene', { nodeId: uuid });
     // 预制体实例化可能忽略原生接口的 name 参数，显式设置并读回验证。
     await this.setProperties(uuid, { name: options.name! }, false);
     const node = await this.scene('query-node', uuid);
     const tree = Json.object(await this.port.scene('hierarchy', { rootId: uuid, limit: 1, includeComponents: false }));
     const root = Json.object((tree.rows as JsonValue[])[0]);
-    if (root.parentId !== parent || root.name !== options.name) throw new CocosError('VERIFICATION_FAILED', 'Created node parent or name differs from request', { nodeId: uuid });
+    // 原生可能已创建并自动挂到 Canvas；核验失败不能被解释为未执行并再次创建。
+    if (root.parentId !== parent || root.name !== options.name) throw new CocosError('OUTCOME_UNKNOWN', 'Created node parent or name differs from request', { nodeId: uuid, requestedParentId: parent, actualParentId: root.parentId ?? null, actualName: root.name ?? null });
     if (params.assetUuid) {
       try {
         const reference = Json.object(await this.port.scene('prefabReference', uuid));
@@ -114,8 +119,10 @@ export class Creator3Adapter implements EditorAdapter {
     if (FeatureSupport.owns(id)) return new EngineFeatureService(this.port, (id, params) => this.execute(id, params)).execute(id, p);
     const organization = new AssetOrganization(this.port);
     if (id === 'asset.location') return organization.location(Json.string(p.url, 'url'));
+    if (id === 'asset.references.scan') return new AssetReferenceAudit(this.port.projectPath).audit(p);
     if (id === 'asset.organize.plan') return organization.plan(p);
     if (id === 'asset.organize.apply') return organization.apply(p);
+    if (id === 'asset.organize.recovery') return organization.recovery(Json.string(p.journalId, 'journalId'));
     const prepared = await organization.prepare(id, p);
     const result = await this.executePrepared(id, prepared.params);
     return prepared.location ? { ...Json.object(result), assetLocation: prepared.location } : result;
@@ -148,6 +155,10 @@ export class Creator3Adapter implements EditorAdapter {
       // 原生 remove-node 负责撤销记录和 dirty 状态，不直接销毁编辑器树。
       const result = await this.execute('node.delete', { nodeId: p.rootId! });
       return { ...Json.object(result), removedRootId: p.rootId!, needsSave: true, verifiedAbsent: true, undoScope: 'native-remove-node' };
+    }
+    if (id === 'scene.references' || id === 'ui.structure.plan' || id === 'ui.structure.apply') {
+      if (this.port.version !== '3.8.8') throw new CocosError('UNSUPPORTED_VERSION', 'Native scene inspection requires Creator 3.8.8');
+      return Json.value(await this.port.scene(id, p));
     }
     if (id.startsWith('ui.')) return new UiService(this.port, (id, params) => this.execute(id, params)).execute(id, p);
     if (id === 'console.query') {
@@ -300,6 +311,9 @@ export class Creator3Adapter implements EditorAdapter {
         return { assetUuid, rootId, ...(oldRows[0]?.name !== newRows[0]?.name ? { previousRootName: oldRows[0]!.name!, rootName: newRows[0]!.name! } : {}), rows: oldRows.map((row, index) => ({ path: row.path!, previousNodeId: row.nodeId!, nodeId: newRows[index]!.nodeId! })) };
       }
       case 'prefab.apply': return new PrefabService(this.port).apply(str('nodeId'));
+      case 'prefab.change.plan': return new PrefabChanges(this.port).plan(str('nodeId'), str('action') as PrefabChangeAction);
+      case 'prefab.change.apply': return new PrefabChanges(this.port).execute(str('nodeId'), str('action') as PrefabChangeAction, str('expectedHash'), str('planHash'));
+      case 'prefab.diff': return new PrefabService(this.port).diff(str('nodeId'));
       case 'prefab.revert': return this.scene('restore-prefab', str('nodeId'));
       case 'prefab.unlink': return this.scene('unlink-prefab', str('nodeId'));
       case 'view.query': return { is2D: await this.scene('query-is2D'), grid: await this.scene('query-is-grid-visible'), tool: await this.scene('query-gizmo-tool-name'), coordinate: await this.scene('query-gizmo-coordinate'), pivot: await this.scene('query-gizmo-pivot') };

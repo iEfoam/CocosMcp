@@ -18,7 +18,7 @@ class AuthorizedEditor implements EditorAdapter {
   readonly major = 3;
   supportedCapabilities(): string[] { return ['scene.query']; }
   async revision(): Promise<string> { return '0'; }
-  async execute(): Promise<JsonValue> { return { marker: 'authorized-editor' }; }
+  async execute(): Promise<JsonValue> { return { marker: 'authorized-editor', context: 'editor', scene: {}, dirty: false }; }
   async dispose(): Promise<void> {}
 }
 class AuthorizationFixture {

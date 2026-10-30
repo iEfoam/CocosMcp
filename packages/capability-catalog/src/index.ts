@@ -13,6 +13,7 @@ export interface ModuleAcceptance {
 
 export class CapabilityCatalog {
   private readonly capabilities = new Map<string, Capability>();
+  private readonly toolAliases = new Map<string, string>();
   private readonly validators = new Map<string, ValidateFunction>();
   private readonly ajv = new Ajv({ allErrors: true, strict: true });
   private readonly deferredValidators = new Map<string, { schema: JsonSchema; validate: ValidateFunction }>();
@@ -25,6 +26,12 @@ export class CapabilityCatalog {
     if (this.capabilities.has(capability.id)) throw new CocosError('OPERATION_CONFLICT', `Duplicate capability: ${capability.id}`);
     // 列工具和查询目录只需要 Schema；首次执行该能力时才编译，避免每个会话预编译全目录。
     this.capabilities.set(capability.id, { ...capability, ...this.evidence.describe(capability.id) });
+    this.toolAliases.set(`cocos_${capability.id.replaceAll('.', '_')}`, capability.id);
+  }
+
+  byToolName(name: string): Capability | undefined {
+    const id = this.toolAliases.get(name);
+    return id === undefined ? undefined : this.capabilities.get(id);
   }
 
   describe(id: string): Capability {

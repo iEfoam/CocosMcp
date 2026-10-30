@@ -6,12 +6,13 @@
     "children": [
       { "key": "title", "name": "Title", "position": { "x": 0, "y": 150, "z": 0 }, "components": [
         { "type": "cc.UITransform", "properties": { "contentSize": { "width": 400, "height": 60 } } },
-        { "type": "cc.Label", "properties": { "string": "Cocos MCP", "fontSize": 32, "lineHeight": 40 } }
+        { "type": "cc.Label", "properties": { "string": "Cocos MCP", "fontSize": 32, "lineHeight": 40, "color": { "r": 80, "g": 180, "b": 255, "a": 255 }, "horizontalAlign": 1, "verticalAlign": 1 } },
+        { "type": "cc.Widget", "properties": { "isAlignTop": true, "isAbsoluteTop": false, "top": 0.1, "isAlignHorizontalCenter": true, "isAbsoluteHorizontalCenter": true, "horizontalCenter": 0 } }
       ] },
       { "key": "start", "name": "StartButton", "components": [
         { "type": "cc.UITransform", "properties": { "contentSize": { "width": 220, "height": 64 } } },
-        { "type": "cc.Label", "properties": { "string": "Start", "fontSize": 24, "lineHeight": 32 } },
-        { "type": "cc.Button", "properties": { "interactable": true, "transition": 0 } }
+        { "type": "cc.Label", "properties": { "string": "Start", "fontSize": 24, "lineHeight": 32, "horizontalAlign": 1, "verticalAlign": 1 } },
+        { "type": "cc.Button", "properties": { "interactable": true, "transition": 1, "target": { "nodeKey": "start" }, "normalColor": { "r": 255, "g": 255, "b": 255, "a": 255 }, "hoverColor": { "r": 150, "g": 220, "b": 255, "a": 255 }, "pressedColor": { "r": 80, "g": 180, "b": 255, "a": 255 }, "disabledColor": { "r": 120, "g": 120, "b": 120, "a": 255 }, "duration": 0.1 } }
       ] },
       { "key": "scroll", "name": "Scroll", "position": { "x": 0, "y": -130, "z": 0 }, "components": [
         { "type": "cc.UITransform", "properties": { "contentSize": { "width": 400, "height": 100 } } },

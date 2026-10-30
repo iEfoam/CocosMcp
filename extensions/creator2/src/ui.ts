@@ -16,6 +16,8 @@ export class Creator2Ui {
       if (!this.virtual(component.type) && !this.type(component.type)) throw new CocosError('UNSUPPORTED_CAPABILITY', `Creator 2 component unavailable: ${component.type}`);
       if (component.type === 'cc.Canvas' && component.properties?.alignCanvasWithScreen !== undefined) throw new CocosError('UNSUPPORTED_CAPABILITY', 'Creator 2 Canvas uses designResolution/fitWidth/fitHeight');
       if (component.type === 'cc.Mask' && component.properties?.type === 3) throw new CocosError('UNSUPPORTED_CAPABILITY', 'Creator 2 Mask type 3 is unavailable');
+      // 2.x Node.color 的 alpha 不控制渲染透明度，禁止静默接受；透明度继续由虚拟 UIOpacity 映射。
+      if (this.nodeColor(component.type, 'color') && component.properties?.color && Json.object(component.properties.color).a !== 255) throw new CocosError('UNSUPPORTED_CAPABILITY', 'Creator 2 renderer color requires a=255; use cc.UIOpacity.opacity for transparency');
     }
   }
   private async resolve(value: JsonValue, mapping: Map<string, RuntimeObject>): Promise<unknown> {
@@ -34,11 +36,13 @@ export class Creator2Ui {
       const event = A.construct(A.object(this.inspector.environment.cc.Component).EventHandler, []);
       event.target = component.node; event.component = this.inspector.type(component); event.handler = value.handler; event.customEventData = value.customEventData ?? ''; return event;
     }
+    if ('r' in value && 'g' in value && 'b' in value && 'a' in value) return A.construct(this.inspector.environment.cc.Color, [value.r, value.g, value.b, value.a]);
     if ('width' in value && 'height' in value) return A.construct(this.inspector.environment.cc.Size, [value.width, value.height]);
     if ('x' in value && 'y' in value) return A.construct(this.inspector.environment.cc.Vec2, [value.x, value.y]);
     return value;
   }
   private target(node: RuntimeObject, type: string): RuntimeObject { return this.virtual(type) ? node : A.object(A.call(node, 'getComponent', this.type(type))); }
+  private nodeColor(type: string, key: string): boolean { return key === 'color' && ['cc.Sprite', 'cc.Label'].includes(type); }
   private property(type: string, key: string): string { return type === 'cc.UITransform' ? ({ contentSize: '_contentSize', anchorPoint: '_anchorPoint' }[key] ?? key) : key; }
   private assign(target: RuntimeObject, type: string, key: string, value: unknown): void {
     if (type === 'cc.UITransform' && key === 'contentSize') A.call(target, 'setContentSize', value);
@@ -96,8 +100,10 @@ export class Creator2Ui {
         changes.push({ target: node, type: '', key: 'name', before: node.name, after: row.node.name });
         if (row.node.position) changes.push({ target: node, type: '', key: 'position', before: A.call(node.position, 'clone'), after: A.construct(this.inspector.environment.cc.Vec3, [row.node.position.x, row.node.position.y, row.node.position.z]) });
         for (const component of [...row.node.components ?? []].sort((a,b) => Number(a.type === 'cc.UITransform') - Number(b.type === 'cc.UITransform'))) {
-          const target = this.target(node, component.type);
-          for (const [key, value] of Object.entries(component.properties ?? {})) {
+          const componentTarget = this.target(node, component.type);
+          for (const [key, value] of Object.entries(UiDocumentModel.orderedProperties(component.properties ?? {}))) {
+            // 2.x 的渲染颜色属于 Node；状态颜色仍属于 Button，Undo 也必须记录实际持有属性的对象。
+            const target = this.nodeColor(component.type, key) ? node : componentTarget;
             const property = this.property(component.type, key);
             if (!A.descriptor(target, property)) throw new CocosError('UNSUPPORTED_CAPABILITY', `Creator 2 property unavailable: ${component.type}.${key}`);
             changes.push({ target, type: component.type, key, before: target[property] && typeof target[property] === 'object' && typeof A.object(target[property]).clone === 'function' ? A.call(target[property], 'clone') : target[property], after: await this.resolve(value, mapping) });

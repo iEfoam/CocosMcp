@@ -4,9 +4,12 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, unlinkS
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'path';
 import { CocosError, Json, type BridgeDescriptor, type BridgeRequest, type EditorAdapter, type JsonObject, type JsonValue } from '../../contracts/src/index.js';
 import { Operations } from '../../capability-catalog/src/operations.js';
+import { OutputContracts } from '../../capability-catalog/src/output-contracts.js';
 import type { PanelState } from './panel-state.js';
+import { StageTimings } from '../../native-adapters/src/stage-timings.js';
+import { EditorControlPolicy } from '../../capability-catalog/src/editor-control.js';
 
-interface LedgerEntry { fingerprint: string; status: 'pending' | 'completed' | 'failed'; result?: JsonValue; revision?: string; error?: JsonValue }
+interface LedgerEntry { fingerprint: string; status: 'pending' | 'completed' | 'failed' | 'unknown'; result?: JsonValue; revision?: string; error?: JsonValue; resultRetention?: 'not-retained-read' }
 
 export class EditorBridge {
   private server: Server | undefined;
@@ -16,6 +19,7 @@ export class EditorBridge {
   private sequence = 0;
   private readonly logEpoch = randomBytes(16).toString('hex');
   private readonly catalog = new Map(new Operations().list().map(row => [row.id, row]));
+  private readonly outputs = new OutputContracts();
 
   constructor(private readonly adapter: EditorAdapter, private readonly projectPath: string, private readonly editorVersion: string) {}
 
@@ -158,13 +162,20 @@ export class EditorBridge {
     const descriptor = this.descriptor!;
     if (request.protocolVersion !== 1 || request.projectId !== descriptor.projectId || request.instanceId !== descriptor.instanceId) throw new CocosError('UNAUTHORIZED', 'Bridge instance does not match');
     // 启动器身份核验不依赖当前场景成功加载，也不返回认证令牌。
-    if (request.capabilityId === 'bridge.identity') return { result: { instanceId: descriptor.instanceId, projectId: descriptor.projectId,
-      projectPath: descriptor.projectPath, creatorMajor: descriptor.creatorMajor, pid: descriptor.pid }, revision: '' };
+    if (request.capabilityId === 'bridge.identity') {
+      // 账号查询失败不能抹掉已认证的实例身份；旧版本明确返回 unknown，不把桥接认证当作 Cocos 登录。
+      let loginState: 'logged-in' | 'logged-out' | 'unknown' = 'unknown';
+      if (request.params.includeLoginState !== false) {
+        try { loginState = await this.adapter.loginState?.() ?? 'unknown'; } catch { /* 原生账号服务暂不可用时仍可复用当前窗口。 */ }
+      }
+      return { result: { instanceId: descriptor.instanceId, projectId: descriptor.projectId,
+        projectPath: descriptor.projectPath, creatorMajor: descriptor.creatorMajor, editorVersion: this.editorVersion, pid: descriptor.pid, loginState }, revision: '' };
+    }
     if (request.capabilityId === 'bridge.describe') return { result: { supportedCapabilities: this.adapter.supportedCapabilities(), editorVersion: this.editorVersion }, revision: await this.adapter.revision() };
     if (request.capabilityId === 'bridge.operation') {
       const path = this.ledgerPath(Json.string(request.params.operationId, 'operationId'));
       if (!existsSync(path)) throw new CocosError('NOT_FOUND', 'Operation record not found');
-      return { result: JSON.parse(readFileSync(path, 'utf8')) as JsonValue, revision: await this.adapter.revision() };
+      return { result: JSON.parse(readFileSync(path, 'utf8')) as JsonValue, revision: '' };
     }
     const capability = this.catalog.get(request.capabilityId);
     if (!capability || !this.adapter.supportedCapabilities().includes(request.capabilityId)) throw new CocosError('UNSUPPORTED_CAPABILITY', `Not supported by this editor: ${request.capabilityId}`);
@@ -179,30 +190,52 @@ export class EditorBridge {
     if (existsSync(ledger)) {
       const previous = JSON.parse(readFileSync(ledger, 'utf8')) as LedgerEntry;
       if (previous.fingerprint !== fingerprint) throw new CocosError('OPERATION_CONFLICT', 'operationId was used with different arguments');
-      if (previous.status === 'completed') return { result: previous.result ?? null, revision: previous.revision ?? '' };
-      if (previous.status === 'failed') { const error = Json.object(previous.error); throw new CocosError(error.code as CocosError['code'], String(error.message)); }
-      throw new CocosError('OUTCOME_UNKNOWN', 'This operation was interrupted; verify editor state before submitting a new operation');
+      // 只对明确标记的新成功读记录重新读取；旧账本及所有写恢复证据继续按原语义重放/阻止重放。
+      const reread = capability.effect === 'read' && previous.status === 'completed' && previous.resultRetention === 'not-retained-read';
+      if (!reread) {
+        if (previous.status === 'completed') return { result: previous.result ?? null, revision: previous.revision ?? '' };
+        if (previous.status === 'failed' || previous.status === 'unknown') { const error = Json.object(previous.error); throw new CocosError(error.code as CocosError['code'], String(error.message), error.details); }
+        throw new CocosError('OUTCOME_UNKNOWN', 'This operation was interrupted; verify editor state before submitting a new operation');
+      }
     }
     const previewIndependent = request.capabilityId.startsWith('preview.');
     if (previewIndependent && request.expectedRevision !== undefined) throw new CocosError('INVALID_ARGUMENT', 'Preview operations use explicit content evidence, not scene revision');
-    const revision = previewIndependent ? '' : await this.adapter.revision();
+    const timings = new StageTimings();
+    const revision = previewIndependent ? '' : await timings.measure('revision-before', () => this.adapter.revision());
     if (request.expectedRevision !== undefined && request.expectedRevision !== revision) throw new CocosError('STALE_REVISION', 'Scene changed after it was read', { actualRevision: revision });
-    this.writeLedger(ledger, { fingerprint, status: 'pending' });
+    timings.sync('ledger-intent', () => this.writeLedger(ledger, { fingerprint, status: 'pending' }));
+    let confirmedResult: JsonValue | undefined;
     try {
       let result: JsonValue;
       if (request.capabilityId === 'logs.query') {
         const cursor = Number(request.params.cursor ?? 0);
         const rows = this.events.filter(event => Number(event.sequence) > cursor && (!request.params.level || request.params.level === event.level)).slice(0, Number(request.params.limit ?? 100));
         result = { rows, nextCursor: rows.length ? rows[rows.length - 1]!.sequence! : cursor, droppedBefore: this.events.length ? Number(this.events[0]!.sequence) - 1 : 0 };
-      } else result = await this.adapter.execute(request.capabilityId, request.params);
+      } else result = await timings.measure('native-execution', () => this.adapter.execute(request.capabilityId, request.params));
+      confirmedResult = result;
+      timings.sync('output-validation', () => this.outputs.validate(request.capabilityId, result));
       if (request.capabilityId !== 'logs.query') this.log('info', `${request.capabilityId} completed`);
-      const nextRevision = previewIndependent ? '' : await this.adapter.revision();
-      this.writeLedger(ledger, { fingerprint, status: 'completed', result, revision: nextRevision });
-      return { result, revision: nextRevision };
+      const nextRevision = previewIndependent ? '' : await timings.measure('revision-after', () => this.adapter.revision());
+      // 普通查询的结果可重新获取，不永久复制大型场景/资源列表；指纹仍保留以拒绝同 ID 改参或改成写操作。
+      timings.sync('ledger-complete', () => this.writeLedger(ledger, capability.effect === 'read'
+        ? { fingerprint, status: 'completed', resultRetention: 'not-retained-read' }
+        : { fingerprint, status: 'completed', result, revision: nextRevision }));
+      return { result, revision: nextRevision, timings: timings.rows() };
     } catch (error) {
-      const failure = CocosError.from(error, 'EDITOR_ERROR');
+      const original = CocosError.from(error, 'EDITOR_ERROR');
+      // 原生动作已经完成后的读回/落盘失败不能冒充未执行；保留结果供人工核对，禁止重放。
+      const failure = confirmedResult !== undefined && capability.effect !== 'read'
+        ? new CocosError('OUTCOME_UNKNOWN', 'Editor mutation completed but its verification or ledger failed; inspect the original operation', {
+          operationId: request.operationId, stage: 'post-execution', sideEffectState: 'acknowledged', confirmedResult, cause: Json.value(original.toJSON()),
+        }) : original;
       this.log('error', `${request.capabilityId} failed (${failure.code})`);
-      this.writeLedger(ledger, { fingerprint, status: 'failed', error: Json.value(failure.toJSON()) });
+      try {
+        this.writeLedger(ledger, { fingerprint, status: failure.code === 'OUTCOME_UNKNOWN' ? 'unknown' : 'failed', error: Json.value(failure.toJSON()),
+          ...(confirmedResult !== undefined ? { result: confirmedResult } : {}) });
+      } catch {
+        // 之前的 pending 记录仍阻止重放；持久化异常不能掩盖原始执行结果。
+        throw new CocosError(failure.code, failure.message, { ...Json.object(failure.details ?? {}), auditWarnings: ['AUDIT_WRITE_FAILED'] });
+      }
       throw failure;
     }
   }
@@ -215,7 +248,14 @@ export class EditorBridge {
   }
 
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
-    const reply = (status: number, value: unknown): void => { response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); response.end(JSON.stringify(value)); };
+    const reply = (status: number, value: unknown): void => {
+      const timings = new StageTimings();
+      const serialized = timings.sync('response-serialization', () => JSON.stringify(value));
+      // 放在响应头避免把计时写回正文后再次序列化；该值只包含 JSON 编码，不包含网络发送。
+      response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store',
+        'server-timing': `cocos-json;dur=${Number(timings.rows()[0]!.durationMs).toFixed(3)}` });
+      response.end(serialized);
+    };
     if (!this.authorized(request)) { reply(403, { error: { code: 'UNAUTHORIZED', message: 'Bridge authentication failed' } }); return; }
     if (request.method !== 'POST' || request.url !== '/rpc') { reply(404, { error: { code: 'NOT_FOUND', message: 'Use POST /rpc' } }); return; }
     const chunks: Buffer[] = []; let size = 0;
@@ -230,8 +270,10 @@ export class EditorBridge {
         request.on('end', () => { try { accept(Json.object(JSON.parse(Buffer.concat(chunks).toString('utf8'))) as unknown as BridgeRequest); } catch (error) { reject(error); } });
       });
       Json.object(body.params, 'params');
-      const task = this.tail.then(() => this.perform(body));
-      this.tail = task.then(() => undefined, () => undefined);
+      // 仅让已核对的身份、账本、控制台和刷新控制绕过场景队列。
+      const control = EditorControlPolicy.allows(body.capabilityId);
+      const task = control ? this.perform(body) : this.tail.then(() => this.perform(body));
+      if (!control) this.tail = task.then(() => undefined, () => undefined);
       reply(200, await task);
     } catch (error) { if (!response.destroyed) reply(400, { error: CocosError.from(error, 'EDITOR_ERROR').toJSON() }); }
   }

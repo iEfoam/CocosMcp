@@ -6,6 +6,7 @@ export interface SceneEnvironment {
   cc: RuntimeObject;
   major: 2 | 3;
   serialize?: (value: unknown) => unknown;
+  serializeReferences?: (value: unknown) => unknown;
   editor?: boolean;
 }
 

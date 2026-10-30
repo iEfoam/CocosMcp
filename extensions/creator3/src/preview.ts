@@ -1,3 +1,4 @@
+import { ManagedPreviewCapture } from './preview-capture.js';
 import { ExternalPreview, ProjectBrowserConnector, type ExternalBrowserPort } from '../../shared/external-preview.js';
 import { PreviewRefresh, type PreviewRefreshHost } from '../../shared/preview-refresh.js';
 import { PreviewRedaction } from '../../shared/preview-redaction.js';
@@ -6,7 +7,7 @@ import { PreviewDiagnostics, type PreviewDebugger } from './preview-diagnostics.
 import { CocosError, Json, type JsonObject, type JsonValue } from '../../../packages/contracts/src/index.js';
 import { randomBytes } from 'crypto';
 import { PreviewObserver } from './preview-observer.js';
-import { CaptureEvidence, type PreviewImage } from './capture-evidence.js';
+import { type PreviewImage } from './capture-evidence.js';
 import { PreviewCoordinates } from './preview-coordinates.js';
 import { readFile } from 'node:fs/promises';
 import { ProjectPaths } from '../../../packages/application/src/paths.js';
@@ -44,7 +45,15 @@ export class ManagedPreview {
   private sceneGeneration = 0;
   private observedGeneration: number | null = null;
   private observation: JsonObject = {};
-  private lastCapture: JsonObject | undefined;
+  private readonly capture = new ManagedPreviewCapture({
+    current: window => this.window === window,
+    inspect: (window, params) => this.inspect(window, params),
+    observe: (frame, params) => this.observe(frame, params),
+    bounded: (task, milliseconds) => this.bounded(task, milliseconds),
+    engineReadySource: () => this.engineReadySource(),
+    rendered: () => { this.gameReady = true; },
+    diagnostics: () => this.diagnostics,
+  });
   private ready = false;
   private gameReady = false;
   private runtimeRegistered = false;
@@ -94,7 +103,7 @@ export class ManagedPreview {
   }
 
   private invalidateObservation(): void {
-    this.currentSceneId = null; this.observedGeneration = null; this.observation = {}; this.lastCapture = undefined;
+    this.currentSceneId = null; this.observedGeneration = null; this.observation = {}; this.capture.reset();
     this.gameReady = false; this.runtimeRegistered = false;
   }
 
@@ -329,7 +338,7 @@ export class ManagedPreview {
       try { observation = await this.inspect(window, params); }
       catch (error) { throw new CocosError(CocosError.from(error).code, 'Preview input was not sent: ' + CocosError.from(error).message, { inputSent: false, stage: 'engine', focused: true }); }
       const coordinateSpace = String(params.coordinateSpace ?? 'window-css'), coordinates = new PreviewCoordinates();
-      const referenceCapture = this.lastCapture;
+      const referenceCapture = this.capture.last;
       if (coordinateSpace === 'image-pixels') observation = coordinates.imageObservation(referenceCapture, params.captureId, observation, size);
       let { x, y } = coordinates.point(Number(params.x), Number(params.y), coordinateSpace, observation, size);
       if (!['click', 'wheel', 'drag', 'long_press', 'key', 'touch_drag', 'touch_cancel'].includes(String(params.action))) throw new CocosError('INVALID_ARGUMENT', 'Unsupported preview input action');
@@ -412,36 +421,7 @@ export class ManagedPreview {
     if (method === 'capture') {
       const window = this.window;
       if (!window || window.isDestroyed() || !this.ready) throw new CocosError('CONTEXT_UNAVAILABLE', 'Start an MCP preview before capturing it');
-      if (params.frameMode === 'lastFrame') {
-        const current = await this.inspect(window, params);
-        if (!this.lastCapture || this.lastCapture.sceneGeneration !== current.sceneGeneration) throw new CocosError('CONTEXT_UNAVAILABLE', 'No captured frame exists in the current scene generation');
-        return { ...this.lastCapture, stale: true, freshness: 'explicit-last-frame', imageDelivery: params.imageDelivery ?? 'image' };
-      }
-      // 等待引擎实际完成一帧，而不是把页面加载或 Canvas 存在误当作场景已经渲染。
-      const frame = await this.bounded(window.webContents.executeJavaScript(`(async () => {
-        ${this.engineReadySource()}
-        ${new PreviewObserver().source()}
-        return new Promise(resolve => {
-          const timer=setTimeout(() => {cc.director.off(cc.Director.EVENT_AFTER_DRAW, done);resolve({...read(),ready:false, reason:'frame-timeout'});},5000);
-          function done(){clearTimeout(timer);resolve(read());}
-          cc.director.once(cc.Director.EVENT_AFTER_DRAW,done);
-        });
-      })()`), 18000);
-      if (!frame || typeof frame !== 'object' || (frame as { ready?: boolean }).ready !== true) throw new CocosError('CONTEXT_UNAVAILABLE', 'Preview has not rendered a game frame', frame as JsonValue);
-      if (this.window !== window || window.isDestroyed()) throw new CocosError('STALE_HANDLE', 'Managed preview session changed during capture');
-      const observed = this.observe(Json.object(frame), params);
-      this.gameReady = true;
-      const image = await window.webContents.capturePage();
-      const current = await this.inspect(window);
-      if (current.sceneGeneration !== observed.sceneGeneration) throw new CocosError('STALE_HANDLE', 'Scene changed during window capture; image discarded', { before: observed.sceneGeneration!, after: current.sceneGeneration! });
-      if (image.isEmpty()) throw new CocosError('VERIFICATION_FAILED', 'Preview capture returned an empty image');
-      const capture = { ...new CaptureEvidence().summarize(image), ...observed, windowContentSize: window.getContentSize?.() ?? null, stale: false, source: 'managed-preview-window',
-        imageDelivery: params.imageDelivery ?? 'image',
-        frameBinding: 'draw-observed-before-composite', frameIndexAfterCapture: current.frameIndex ?? null, exactPixelFrameIndex: null,
-        verification: 'rendered-frame-captured', businessOutcomeVerified: false, layoutVerified: false,
-        checks: [{ check: 'image-nonempty', status: 'passed' }, { check: 'frame-drawn', status: 'passed' }, { check: 'expected-layout', status: 'unknown' }], rows: this.diagnostics.slice(-50) };
-      this.lastCapture = capture;
-      return capture;
+      return this.capture.execute(window, params);
     }
     throw new CocosError('UNSUPPORTED_CAPABILITY', `Unknown managed preview operation: ${method}`);
   }

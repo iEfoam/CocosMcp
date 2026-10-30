@@ -6,7 +6,7 @@ export class UiProperties {
   constructor(private readonly port: EditorPort) {}
   async resolve(properties: JsonObject, mapping: Map<string, string>): Promise<JsonObject> {
     const result: JsonObject = {};
-    for (const [key, value] of Object.entries(properties)) {
+    for (const [key, value] of Object.entries(UiDocumentModel.orderedProperties(properties))) {
       if (UiDocumentModel.eventProperties.has(key)) result[key] = Json.value(await this.port.scene('ui.eventBindings', { events: value }));
       else if (value && typeof value === 'object' && !Array.isArray(value) && typeof value.nodeKey === 'string') {
         const nodeId = mapping.get(value.nodeKey);

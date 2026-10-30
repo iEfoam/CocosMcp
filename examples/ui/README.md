@@ -1,5 +1,11 @@
 # Creator 3 UI 示例
 
+正式静态界面优先使用 `menu.json`：先读取当前工程的 Canvas、相机及场景 revision，再调用 `ui.plan`，将相同文档、父节点及返回的 `planHash` 交给 `ui.build`。创建结果的 `rows` 是后续 `ui.diff/apply` 的 UUID 映射。通过 `scene.save` 保存，读回声明属性和场景 dirty 状态；可复用面板也可先查询 `asset.location`，再用 `prefab.create` 保存并核验资源。`needsSave: true` 不是保存成功。
+
+脚本只负责交互、数据绑定和动态内容；动态列表可实例化已保存的 Prefab。颜色、布局和对齐字段见 [声明式 UI](../../docs/roadmap-implementation.md#声明式-ui)。遇到能力缺口先查组件属性接口或补充适配，不默认改成启动时生成整页 UI。
+
+以下运行时面板仅用于独立交互测试，不是静态界面推荐模板。
+
 `McpReactorUiTest.ts` 是 Creator 3.8.8 反应堆场景使用的独立运行时 UI 面板，提供按钮计数、文本输入回显和 12 行滚动列表。列表名称、ONLINE 和 OK 均为演示文案，不表示实际设备或项目诊断结果。
 
 通过 `asset.location` 查找工程脚本目录，再通过 AssetDB 导入脚本。在目标场景的独立节点上添加 `McpReactorUiTest` 组件并保存。进入预览后生成 Canvas、相机和控件；禁用该节点或移除组件即可停用测试层。不要把脚本生成到 assets 根目录。

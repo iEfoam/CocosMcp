@@ -296,11 +296,17 @@ Creator 3.x 的账号目录固定为 `<project>/.codex-work/cache/creator-home`�
 node scripts/project-env.mjs node scripts/open-creator.mjs --project /path/to/project --creator /Applications/Cocos/Creator/3.8.8/CocosCreator.app/Contents/MacOS/CocosCreator
 ```
 
-该入口先复用工程已有编辑器实例，再沿用固定的 `creator-home` 和 `shader-editor`。项目中没有会话时，只从本机 `.CocosCreator/profiles/v2/editor/user.json` 读取 Creator 3 原生会话，并以 0600 权限原样保存；不会输出凭据或覆盖已有账号。`--dry-run` 不读取账号、不启动编辑器。过期凭据是否有效由原生编辑器判断。
+该入口先按目标工程和 Creator 主版本核对已有实例，优先选择唯一的 `loginState=logged-in` 实例；多个候选用 `--instance <instanceId>` 明确选择。已打开但登录失效或不可核验时保留同一窗口，不再启动第二个窗口。Creator 2.4.15 和 3.8.8 通过只读原生 `Editor.User.isLoggedIn()` 查询，只接受布尔返回值；超时、异常、旧插件和未适配的版本返回 `unknown`，桥接认证成功不等于账号已登录。
+
+首次没有工程会话时，从本机 `.CocosCreator/profiles/v2/editor/user.json` 读取 Creator 3 原生会话，并以 0600 权限保存到固定的 `creator-home`。已有会话只在本机是**同一账号、不同凭据且修改时间更新**时刷新；先在 `.codex-work/backups/creator-account/` 保存 0600 备份，再按内容守卫替换。工程实例仍打开、工程会话更新、账号不同或原生登出留下无效文件时保留现场，不覆盖或静默换号。修改时间只能判断新旧，不能证明官方会话有效。
+
+启动前写入 `.codex-work/cache/creator-session/launch.json`，记录一次尝试的凭据摘要和进程状态，不记录明文凭据。原生登录失效、启动退出或 45 秒内仍无法确认时，同一份会话不会再自动启动；仍存活的进程继续保留。正常登录后再次调用入口会核对同一 PID，解除旧的未确认状态；已确认登录且正常关闭后可再次打开。较新的同账号会话也可恢复启动。结果未知或残留锁需要先检查原启动进程，不能删除目录盲目重试；本入口不会自动终止用户窗口。
+
+`--dry-run` 仅检查路径与参数，不读取账号、不写状态、不启动编辑器。安装路径不包含版本号时使用 `--major 2|3`，不能猜测版本。没有新的有效会话时仍需在已有 Creator/Dashboard 正常登录，工具不绕过官方认证。
 
 Creator 2 优先从已经登录的 Dashboard 打开工程。其 CLI 和 Creator 3 的账号格式不同，不能互相转换；没有可复用的原生 CLI 账号时，启动器与构建入口会在启动前返回说明，避免再弹出登录窗口。重启 MCP 或安装扩展不要求重新登录。
 
-多实例选择仍需核对工程、Creator 版本和 instanceId。启动器通过认证身份排除历史 PID 复用造成的假实例；不会关闭用户其他工程。两版隔离工程已实测返回 existing-editor-reused。`--dry-run` 只是参数检查，不能证明账号有效；不要将登录目录、runtime 配置、token 或 service-config.json 提交到 Git 或复制给他人。
+多实例选择仍需核对工程、Creator 版本和 instanceId。启动器通过认证身份排除历史 PID 复用造成的假实例；不会关闭用户其他工程。2026-10-29 已在隔离工程核对 Creator 2.4.15 的原生登录查询、插件重载和已有实例复用，并通过 14 项本机原生预览验收；这不代表账号过期恢复、所有 Creator 2 小版本或真实业务已验收。不要将登录目录、会话备份、runtime 配置、token 或 service-config.json 提交到 Git 或复制给他人。
 
 ## 9. 常见错误处理
 

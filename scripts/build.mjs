@@ -1,18 +1,35 @@
 import { VerificationBuild } from './verification.mjs';
 import { createHash } from 'node:crypto';
-import { build } from 'esbuild';
+import { build as esbuild } from 'esbuild';
+import { BuildPlan } from './build-plan.mjs';
 import { mkdir, readFile, writeFile, copyFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import files from '../packages/native-adapters/src/extension-files.json' with { type: 'json' };
 import clientFiles from '../packages/native-adapters/src/client-files.json' with { type: 'json' };
 
 const root = process.cwd();
+const plan = new BuildPlan(process.argv.slice(2));
 const define = await new VerificationBuild().definitions();
-const output = resolve(root, '.codex-work/build');
+const output = resolve(root, plan.output);
 const builtAt = new Date().toISOString();
+await mkdir(output, { recursive: true });
+const profilePath = join(output, 'build-profile.json');
+const metadata = { profile: plan.profile, majors: plan.majors, targets: plan.targets, builtAt, sourceFingerprint: JSON.parse(define.__COCOS_SOURCE_FINGERPRINT__), state: 'building', rows: [] };
+await writeFile(profilePath, JSON.stringify(metadata, null, 2) + '\n');
+// 记录每个实际编译入口，不并行写输出；maxRSS 是本进程高水位，并非单步骤内存差值。
+const build = async options => {
+  const started = performance.now();
+  try { await esbuild(options); metadata.rows.push({ output: options.outfile ?? options.outdir, durationMs: performance.now() - started, maxRssKiB: process.resourceUsage().maxRSS, status: 'completed' }); }
+  catch (error) { metadata.state = 'failed'; metadata.rows.push({ output: options.outfile ?? options.outdir, durationMs: performance.now() - started, maxRssKiB: process.resourceUsage().maxRSS, status: 'failed' }); throw error; }
+  finally { await writeFile(profilePath, JSON.stringify(metadata, null, 2) + '\n'); }
+};
+if (plan.includes('server')) {
 await mkdir(join(output, 'server'), { recursive: true });
 await build({ define, entryPoints: ['apps/server/src/cli.ts'], outfile: join(output, 'server/cli.mjs'), bundle: true, platform: 'node', target: 'node24', format: 'esm',
   packages: 'external', sourcemap: true });
+}
+if (plan.includes('client')) {
 const clientRoot = join(output, 'client');
 await mkdir(clientRoot, { recursive: true });
 for (const [entry, name] of [['router-service', 'router'], ['router-daemon', 'router-daemon'], ['router-session', 'session'], ['project-connector', 'connector'], ['shared-service', 'worker'], ['install-client', 'install']]) {
@@ -28,7 +45,8 @@ await writeFile(join(clientRoot, 'manifest.json'), JSON.stringify({ schemaVersio
   version: process.env.COCOS_RELEASE_TAG?.replace(/^v/, '') || '0.1.0', buildId: clientDigest.digest('hex').slice(0, 16), builtAt,
   sourceFingerprint: clientFingerprint, verificationReportSha256: clientEvidence.length && clientEvidence.every(row => row.sourceFingerprint === clientFingerprint) ? clientEvidence[0].reportSha256 : null,
   fileHashes: clientHashes }, null, 2) + '\n');
-for (const major of [2, 3]) {
+}
+for (const major of plan.majors) {
   const extensionRoot = join(output, `extensions/creator${major}`);
   const extension = major === 2 ? 'js' : 'cjs';
   await mkdir(join(extensionRoot, 'dist'), { recursive: true });
@@ -73,11 +91,24 @@ for (const major of [2, 3]) {
   }
   await writeFile(join(extensionRoot, 'package.json'), JSON.stringify(manifest, null, 2) + '\n');
 }
+if (plan.includes('runtime')) {
 await mkdir(join(output, 'runtime'), { recursive: true });
 await build({ define, entryPoints: ['packages/runtime3-bridge/src/bootstrap.ts'], outfile: join(output, 'runtime/cocos-mcp.js'), bundle: true,
   platform: 'browser', target: 'es2018', format: 'iife', globalName: 'CocosMCPRuntime', sourcemap: true });
 await build({ define, entryPoints: ['packages/runtime3-bridge/src/bootstrap.ts'], outfile: join(output, 'runtime/cocos-mcp.mjs'), bundle: true,
   platform: 'browser', target: 'es2018', format: 'esm', sourcemap: true });
-console.log('Built MCP server, Creator 2/3 extensions and development runtime bridges in .codex-work/build/');
+}
+if (plan.includes('smoke')) {
 await build({ define, entryPoints: ['scripts/ui-preview-smoke.ts'], outfile: join(output, 'ui-preview-smoke.mjs'), bundle: true,
   platform: 'node', target: 'node24', format: 'esm', packages: 'external' });
+}
+const summaryModule = join(output, 'verification-summary.mjs');
+await build({ define, entryPoints: ['packages/catalog-generator/src/verification-summary.ts'], outfile: summaryModule,
+  bundle: true, platform: 'node', target: 'node24', format: 'esm', packages: 'external' });
+const { VerificationSummary } = await import(pathToFileURL(summaryModule).href);
+const summary = new VerificationSummary().create(metadata.sourceFingerprint, await new VerificationBuild().overview(metadata.sourceFingerprint));
+await writeFile(join(output, 'verification-summary.json'), JSON.stringify(summary.json, null, 2) + '\n');
+await writeFile(join(output, 'verification-summary.md'), summary.markdown);
+metadata.state = 'completed'; metadata.completedAt = new Date().toISOString();
+await writeFile(profilePath, JSON.stringify(metadata, null, 2) + '\n');
+console.log(`Built ${plan.profile} profile (${[...plan.targets, ...plan.majors.map(major => `creator${major}`)].join(', ')}) in ${plan.output}`);

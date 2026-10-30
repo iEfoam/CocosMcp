@@ -55,7 +55,9 @@ export interface ExecutionResult {
   result: JsonValue;
   verification: Verification;
   completedAt: string;
-  warnings?: Array<{ code: 'AUDIT_WRITE_FAILED'; message: string }>;
+  timings?: JsonObject[];
+  nativeTimings?: JsonObject[];
+  warnings?: Array<{ code: 'AUDIT_WRITE_FAILED'; message: string; details?: JsonValue }>;
 }
 
 export interface BridgeDescriptor {
@@ -122,6 +124,7 @@ export class CocosError extends Error {
 
 export interface EditorAdapter {
   readonly major: CreatorMajor;
+  loginState?(): Promise<'logged-in' | 'logged-out' | 'unknown'>;
   execute(capabilityId: string, params: JsonObject): Promise<JsonValue>;
   revision(): Promise<string>;
   supportedCapabilities(): string[];

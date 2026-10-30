@@ -18,6 +18,7 @@ import type { JsonValue } from '../../../packages/contracts/src/index.js';
 import type { PanelState } from '../../../packages/editor-bridge/src/panel-state.js';
 
 interface CreatorEditor extends PanelMenuHost {
+  User?: { isLoggedIn(): Promise<boolean> };
   App: { path: string; version: string };
   Project: { path: string };
   Message: { request(channel: string, message: string, ...args: unknown[]): Promise<unknown> };
@@ -30,6 +31,16 @@ declare const Editor: CreatorEditor;
 declare const __COCOS_SOURCE_FINGERPRINT__: string;
 
 class CreatorHost implements EditorPort {
+  async loginState(): Promise<'logged-in' | 'logged-out' | 'unknown'> {
+    // 只查询原生登录状态，不读取/返回账号凭据，也不调用 login、showMask 等会弹窗的接口。
+    if (Editor.App.version !== '3.8.8' || typeof Editor.User?.isLoggedIn !== 'function') return 'unknown';
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const loggedIn = await Promise.race([Editor.User.isLoggedIn(), new Promise<undefined>(resolve => { timeout = setTimeout(() => resolve(undefined), 1000); })]);
+      return loggedIn === true ? 'logged-in' : loggedIn === false ? 'logged-out' : 'unknown';
+    } catch { return 'unknown'; }
+    finally { if (timeout) clearTimeout(timeout); }
+  }
   extensionState(): JsonValue { return Json.value(lifecycle.extensionState()); }
   private consoleReader: CreatorConsole | undefined;
   get consoleAvailable(): boolean { return Editor.App.version === '3.8.8' && typeof Editor.Logger?.query === 'function'; }

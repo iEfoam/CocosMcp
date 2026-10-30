@@ -1,6 +1,7 @@
 import type { JsonValue } from '../../contracts/src/index.js';
 
 export interface EditorPort {
+  loginState?(): Promise<'logged-in' | 'logged-out' | 'unknown'>;
   version: string;
   projectPath: string;
   extensionName: string;

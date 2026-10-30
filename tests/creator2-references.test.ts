@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Creator2ReferenceAudit } from '../extensions/creator2/src/reference-audit.js';
+import { SerializedReferenceAudit } from '../packages/ui-core/src/reference-audit.js';
+import { Creator3Adapter } from '../packages/creator3-adapter/src/index.js';
+import type { EditorPort } from '../packages/creator3-adapter/src/port.js';
 import type { JsonObject } from '../packages/contracts/src/index.js';
 
 test('serialized reference audit retains nested ownership and ignores engine topology', () => {
@@ -27,6 +30,17 @@ test('invalid serialized object references are visible and excessive traversal r
   assert.throws(() => audit.inspect('{}'), /object table/);
 });
 
+test('shared reference audit reports duplicate identities, anonymous owners and damaged records', () => {
+  const audit = new SerializedReferenceAudit().inspect([
+    { __type__: 'cc.Node', _id: 'same' }, { __type__: 'cc.Node', _id: 'same' },
+    { __type__: 'cc.Node' }, { __type__: 'Custom', node: { __id__: 0 } }, null,
+  ]);
+  const issues = audit.issues as JsonObject[];
+  assert.equal(issues.filter(row => row.code === 'DUPLICATE_OBJECT_IDENTITY').length, 1);
+  assert.equal(issues.filter(row => row.code === 'MISSING_OBJECT_IDENTITY').length, 2);
+  assert.equal(issues.filter(row => row.code === 'INVALID_SERIALIZED_RECORD').length, 1);
+});
+
 import { SceneInspector } from '../packages/runtime3-bridge/src/scene.js';
 class EventAuditHarness {
   getterCalls = 0;
@@ -37,17 +51,52 @@ class EventAuditHarness {
   table = [
     { __type__: 'cc.Node', _id: 'target' },
     { __type__: 'cc.Button', _id: 'sender', clickEvents: [{ __type__: 'cc.ClickEvent', target: { __id__: 0 }, _componentId: 'ReceiverID', component: 'WrongLegacyName', handler: 'handler' }] },
+    { __type__: 'cc.Node', _id: 'root' }, { __type__: 'Receiver', _id: 'receiver' },
   ];
   inspector = new SceneInspector({ major: 2, cc: { director: { getScene: () => this.root }, js: {
     _getClassById: (id: string) => id === 'ReceiverID' ? Object : null,
     getClassByName: () => null, getClassName: (c: { kind?: string }) => c.kind ?? 'cc.Node',
   } }, serialize: () => this.table });
 }
+test('scene reference coverage refuses omitted live objects and uses the dedicated expanded serializer', () => {
+  const h = new EventAuditHarness(), audit = new SerializedReferenceAudit();
+  const full = h.table.slice();
+  h.table.pop();
+  const incomplete = audit.scene(h.inspector);
+  assert.equal(incomplete.complete, false);
+  assert.ok((incomplete.issues as JsonObject[]).some(row => row.code === 'SERIALIZED_OBJECT_MISSING' && row.targetId === 'receiver'));
+  h.inspector.environment.serializeReferences = () => full;
+  assert.equal(audit.scene(h.inspector).complete, true);
+  assert.equal(h.callbackCalls, 0);
+});
 test('Creator 2 event audit resolves class IDs, creates component dependencies and never invokes handlers', () => {
   const h = new EventAuditHarness(), audit = new Creator2ReferenceAudit().scene(h.inspector);
   assert.equal((audit.events as JsonObject[])[0]!.valid, true);
   assert.ok((audit.rows as JsonObject[]).some(row => row.kind === 'event-component' && row.sourceId === 'sender' && row.targetId === 'receiver'));
   assert.equal(h.callbackCalls, 0);
+});
+
+test('Creator 3 event audit uses native class IDs and does not invoke a custom component handler', () => {
+  const h = new EventAuditHarness();
+  const inspector = new SceneInspector({ ...h.inspector.environment, major: 3 });
+  const result = new SerializedReferenceAudit().scene(inspector);
+  assert.equal((result.events as JsonObject[])[0]!.targetComponentId, 'receiver');
+  assert.equal(h.callbackCalls, 0); assert.deepEqual(result.issues, []);
+});
+
+test('Creator 3 reference audit dispatches read-only scene inspection and rejects unadapted versions', async () => {
+  const calls: string[] = [], h = new EventAuditHarness();
+  const port = { version: '3.8.8', scene: async (method: string) => {
+    calls.push(method); return new SerializedReferenceAudit().scene(new SceneInspector({ ...h.inspector.environment, major: 3 }));
+  }, request: async () => { throw new Error('Unexpected native mutation'); } } as unknown as EditorPort;
+  const adapter = new Creator3Adapter(port);
+  assert.ok(adapter.supportedCapabilities().includes('scene.references'));
+  await adapter.execute('scene.references', {});
+  assert.deepEqual(calls, ['scene.references']);
+  port.version = '3.7.0';
+  assert.ok(!adapter.supportedCapabilities().includes('scene.references'));
+  await assert.rejects(adapter.execute('scene.references', {}), { code: 'UNSUPPORTED_VERSION' });
+  assert.equal(calls.length, 1);
 });
 test('Creator 2 event audit rejects missing, ambiguous and accessor handlers without executing getters', () => {
   const h = new EventAuditHarness(), auditor = new Creator2ReferenceAudit();

@@ -13,6 +13,7 @@ import { ManagedPreview, type PreviewWindow } from '../extensions/creator3/src/p
 import type { PreviewDebugger } from '../extensions/creator3/src/preview-diagnostics.js';
 import { Creator2PreviewCompiler, type Creator2ProjectCompiler } from '../extensions/creator2/src/preview-compiler.js';
 import { CapabilityCatalog } from '../packages/capability-catalog/src/index.js';
+import { OutputContracts } from '../packages/capability-catalog/src/output-contracts.js';
 import { Json, type JsonObject, type JsonValue } from '../packages/contracts/src/index.js';
 
 class BrowserStub implements ExternalBrowserPort {
@@ -85,6 +86,7 @@ test('scoped connector exports project PNG bytes without allowing screenshot pat
     const address = server.address(); assert.ok(address && typeof address !== 'string');
     await writeFile(join(directory, 'browser-connector.json'), JSON.stringify({ protocolVersion: 1, projectPath: root, endpoint: `http://127.0.0.1:${address.port}`, token }));
     const connector = new ProjectBrowserConnector(root), captured = await connector.call('capture', {});
+    new OutputContracts().validate('preview.capture', { ...captured, imageDelivery: 'image' });
     assert.equal(captured.width, 20); assert.equal(captured.height, 10); assert.equal(Json.object(captured.image).byteLength, png.length);
     assert.equal(captured.dataUrl, 'data:image/png;base64,' + png.toString('base64')); assert.doesNotMatch(JSON.stringify(captured), new RegExp(token));
     path = '../outside.png'; await assert.rejects(connector.call('capture', {}), { code: 'CONTEXT_UNAVAILABLE' });
@@ -108,6 +110,7 @@ test('embedded refresh uses its own window without a Chrome connector and proves
     const preview = new ManagedPreview({ create: () => window }, root, 2, { projectPath: root, importResource: async () => null,
       compile: async batch => ({ status: 'completed', sourceRevision: batch.sourceRevision!, errors: [], artifacts: [{ url: '/compiled.js', sha256: createHash('sha256').update(compiled).digest('hex') }] }) });
     await preview.execute('start', { url: 'http://127.0.0.1:7456', sceneId: 'scene' });
+    new OutputContracts().validate('preview.capture', await preview.execute('capture', {}));
     const operation = Json.object(await preview.execute('refresh', { urls: ['db://assets/source.js'], target: 'embedded' }));
     const result = await fixture.finish(preview, String(operation.operationId));
     assert.equal(navigations, 3, 'refresh navigates only the owned embedded window');

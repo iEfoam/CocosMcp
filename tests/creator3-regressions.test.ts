@@ -232,7 +232,7 @@ test('node creation supplies scene root and rejects unattached native false succ
       assert.equal(message, 'create-node'); options = value; return 'orphan';
     },
   } as unknown as EditorPort;
-  await assert.rejects(new Creator3Adapter(port).execute('node.create', {name: 'Cube'}), /not attached/);
+  await assert.rejects(new Creator3Adapter(port).execute('node.create', {name: 'Cube'}), { code: 'OUTCOME_UNKNOWN', message: 'Created node was not attached to the active scene' });
   assert.deepEqual(options, {name: 'Cube', parent: 'root'});
 });
 

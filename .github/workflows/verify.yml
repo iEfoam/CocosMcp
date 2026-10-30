@@ -1,0 +1,81 @@
+name: Verify source and prepare immutable artifacts
+on:
+  workflow_call:
+    inputs:
+      release:
+        type: boolean
+        default: false
+    outputs:
+      tag:
+        value: ${{ jobs.verify.outputs.tag }}
+      channel:
+        value: ${{ jobs.verify.outputs.channel }}
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      channel: ${{ steps.version.outputs.channel }}
+    env:
+      TMPDIR: ${{ github.workspace }}/.codex-work/tmp
+      TMP: ${{ github.workspace }}/.codex-work/tmp
+      TEMP: ${{ github.workspace }}/.codex-work/tmp
+      XDG_CACHE_HOME: ${{ github.workspace }}/.codex-work/cache
+      npm_config_cache: ${{ github.workspace }}/.codex-work/cache/npm
+      NODE_COMPILE_CACHE: ${{ github.workspace }}/.codex-work/cache/node
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: mkdir -p .codex-work/tmp .codex-work/cache .codex-work/build
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install pinned pnpm in project cache
+        run: |
+          npm install --prefix .codex-work/cache/pnpm-cli --no-package-lock --ignore-scripts pnpm@11.22.0
+          echo "$GITHUB_WORKSPACE/.codex-work/cache/pnpm-cli/node_modules/.bin" >> "$GITHUB_PATH"
+      - run: pnpm install --frozen-lockfile
+      - name: Set release version
+        if: inputs.release
+        id: version
+        run: |
+          BASE=$(node -p "require('./package.json').version")
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Stable releases require vMAJOR.MINOR.PATCH"; exit 1; }
+            [[ "$GITHUB_REF_NAME" == "v$BASE" ]] || { echo "Tag must match package.json version"; exit 1; }
+            echo "COCOS_RELEASE_TAG=$GITHUB_REF_NAME" >> "$GITHUB_ENV"
+            echo "COCOS_RELEASE_CHANNEL=stable" >> "$GITHUB_ENV"
+            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+            echo "channel=stable" >> "$GITHUB_OUTPUT"
+          else
+            echo "COCOS_RELEASE_TAG=v${BASE}-dev.${GITHUB_RUN_NUMBER}.${GITHUB_SHA:0:7}" >> "$GITHUB_ENV"
+            echo "COCOS_RELEASE_CHANNEL=development" >> "$GITHUB_ENV"
+            echo "tag=v${BASE}-dev.${GITHUB_RUN_NUMBER}.${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+            echo "channel=development" >> "$GITHUB_OUTPUT"
+          fi
+      - run: pnpm check
+      - run: node scripts/project-env.mjs node scripts/release-bundle.mjs
+        if: inputs.release
+      - name: Upload verified release bytes
+        if: inputs.release
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-release
+          path: .codex-work/build/releases/
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 7
+      - name: Retain test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-evidence
+          path: |
+            .codex-work/logs/verification-tests.jsonl
+            .codex-work/cache/verification/source-tests.json
+          if-no-files-found: ignore
+          include-hidden-files: true
+          retention-days: 7

@@ -13,12 +13,17 @@ import { Json } from '../../../packages/contracts/src/index.js';
 import { MaterialController } from '../../../packages/runtime3-bridge/src/material.js';
 import { CreatorShaderHost } from './shader-host.js';
 import { UiDocumentModel } from '../../../packages/ui-core/src/index.js';
+import { SerializedReferenceAudit } from '../../../packages/ui-core/src/reference-audit.js';
+import { Creator3UiStructure } from './ui-structure.js';
+import { Creator3UiStructureExecution } from './ui-structure-execution.js';
+import { Creator3PrefabSnapshot } from './prefab-snapshot.js';
 import { FontInspector } from '../../../packages/runtime3-bridge/src/font.js';
 import { AnimationTools } from '../../../packages/runtime3-bridge/src/animation.js';
 import { TwoDAnimationAuthoring } from '../../../packages/runtime3-bridge/src/animation-two-d.js';
 
 declare const Editor: { App: { path: string } };
-declare const EditorExtends: { serialize(value: unknown): unknown };
+declare const EditorExtends: { serialize(value: unknown, options?: { reserveContentsForSyncablePrefab: boolean; dontStripDefault: boolean; compressUuid: boolean; keepNodeUuid: boolean }): unknown };
+declare const cce: { SceneFacadeManager: RuntimeObject; Node: RuntimeObject };
 
 class SceneLifecycle {
   private inspector: SceneInspector | undefined;
@@ -29,8 +34,26 @@ class SceneLifecycle {
       const engineModules = join(Editor.App.path, 'node_modules');
       if (!module.paths.includes(engineModules)) module.paths.push(engineModules);
       const cc = require('cc') as RuntimeObject;
-      this.inspector = new SceneInspector({ cc, major: 3, serialize: value => EditorExtends.serialize(value), editor: true });
+      this.inspector = new SceneInspector({ cc, major: 3, serialize: value => EditorExtends.serialize(value),
+        // 删除前的引用扫描必须展开 Prefab 默认内容，不能把压缩省略的组件当作没有引用。
+        serializeReferences: value => EditorExtends.serialize(value, {
+          reserveContentsForSyncablePrefab: true, dontStripDefault: true, compressUuid: false, keepNodeUuid: true,
+        }), editor: true });
       this.materials = new MaterialController(this.inspector.environment);
+    }
+    if (method === 'scene.references') return new SerializedReferenceAudit().scene(this.inspector);
+    if (method === 'prefab.snapshot') return new Creator3PrefabSnapshot(this.inspector, value => EditorExtends.serialize(value, {
+      // 默认序列化会将可同步 Prefab 的组件压缩为 null，差异检查必须保留实例实际内容。
+      reserveContentsForSyncablePrefab: true, dontStripDefault: true, compressUuid: false, keepNodeUuid: true,
+    })).capture(Json.string(Json.value(args[0]), 'nodeId'));
+    if (method === 'ui.structure.plan') {
+      if (typeof cce === 'undefined') throw new CocosError('UNSUPPORTED_CAPABILITY', 'Native scene facade is unavailable');
+      return new Creator3UiStructure(this.inspector, cce.SceneFacadeManager).plan(Json.object(args[0]));
+    }
+    // 由版本受限的 adapter 暴露；原生端仍独立核对模式、计划与引用，避免绕过前端校验。
+    if (method === 'ui.structure.apply') {
+      if (typeof cce === 'undefined') throw new CocosError('UNSUPPORTED_CAPABILITY', 'Native scene facade is unavailable');
+      return new Creator3UiStructureExecution(this.inspector, cce.SceneFacadeManager, cce.Node).apply(Json.object(args[0]));
     }
     if (method.startsWith('ik.')) {
       const cc = this.inspector.environment.cc;

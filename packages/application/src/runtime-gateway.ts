@@ -11,14 +11,23 @@ interface Command { id: string; capabilityId: string; params: JsonObject }
 interface Pending { sessionId: string; resolve(value: JsonValue): void; reject(error: Error): void; timer: NodeJS.Timeout }
 interface RuntimeSession { id: string; projectId: string; version: string; platform: string; lastSeen: string; seen: number; commands: Command[]; wake?: () => void }
 
+export interface RuntimeGatewayLimits {
+  sessionsPerProject: number; sessions: number; pendingPerSession: number; pending: number;
+  bodyBytes: number; replyBytes: number; bodyTimeoutMs: number; bodyReaders: number;
+}
+
 export class RuntimeGateway implements RuntimeExecutor {
   private server: Server | undefined;
   private readonly tokens = new Map<string, string>();
   private readonly sessions = new Map<string, RuntimeSession>();
   private readonly pending = new Map<string, Pending>();
   private readonly configPaths: string[] = [];
+  private bodyReaders = 0;
 
-  constructor(private readonly projects: ProjectRegistry, private readonly timeoutMs = 30_000, private readonly sessionTtlMs = 30_000, private readonly now = Date.now, private readonly elapsed = now === Date.now ? () => performance.now() : now) {}
+  constructor(private readonly projects: ProjectRegistry, private readonly timeoutMs = 30_000, private readonly sessionTtlMs = 30_000, private readonly now = Date.now, private readonly elapsed = now === Date.now ? () => performance.now() : now,
+    private readonly limits: RuntimeGatewayLimits = { sessionsPerProject: 32, sessions: 128, pendingPerSession: 128, pending: 512, bodyBytes: 64 * 1024, replyBytes: 32 * 1024 * 1024, bodyTimeoutMs: 10_000, bodyReaders: 32 }) {
+    if (Object.values(limits).some(value => !Number.isSafeInteger(value) || value < 1)) throw new CocosError('INVALID_ARGUMENT', 'Invalid runtime gateway limits');
+  }
 
   private removeSession(session: RuntimeSession): void {
     session.wake?.(); this.sessions.delete(session.id);
@@ -59,6 +68,7 @@ export class RuntimeGateway implements RuntimeExecutor {
     if (rows.length > 1) throw new CocosError('AMBIGUOUS_TARGET', 'Specify runtimeInstanceId when several runtimes are connected');
     if (signal?.aborted) throw new CocosError('CANCELLED', 'Runtime operation cancelled');
     const session = rows[0]!; const id = randomUUID();
+    if (this.pending.size >= this.limits.pending || [...this.pending.values()].filter(row => row.sessionId === session.id).length >= this.limits.pendingPerSession) throw new CocosError('RESOURCE_BUSY', 'Runtime command capacity reached');
     return new Promise((accept, reject) => {
       const cancel = (): void => finish(new CocosError('OUTCOME_UNKNOWN', 'Runtime call interrupted; its side effects may have occurred'));
       const finish = (error?: Error, result?: JsonValue): void => {
@@ -83,14 +93,22 @@ export class RuntimeGateway implements RuntimeExecutor {
   }
 
   private async body(request: IncomingMessage): Promise<JsonObject> {
+    if (this.bodyReaders >= this.limits.bodyReaders) throw new CocosError('RESOURCE_BUSY', 'Runtime body reader capacity reached');
+    const limit = request.url === '/runtime/reply' ? this.limits.replyBytes : this.limits.bodyBytes;
+    const length = request.headers['content-length'];
+    if (length !== undefined && (!/^\d+$/.test(length) || Number(length) > limit)) throw new CocosError('INVALID_ARGUMENT', 'Runtime message exceeds configured body limit');
+    this.bodyReaders++;
+    const deadline = setTimeout(() => request.destroy(new CocosError('TIMEOUT', 'Runtime body read deadline exceeded')), this.limits.bodyTimeoutMs);
     const chunks: Buffer[] = []; let size = 0;
+    try {
     for await (const chunk of request) {
       const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
       size += data.length;
-      if (size > 32 * 1024 * 1024) throw new CocosError('INVALID_ARGUMENT', 'Runtime message exceeds configured body limit');
+      if (size > limit) throw new CocosError('INVALID_ARGUMENT', 'Runtime message exceeds configured body limit');
       chunks.push(data);
     }
     return Json.object(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+    } finally { clearTimeout(deadline); this.bodyReaders--; }
   }
 
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -106,12 +124,17 @@ export class RuntimeGateway implements RuntimeExecutor {
         response.setHeader('Access-Control-Allow-Methods', 'POST'); response.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization'); reply(204, null); return;
       }
       if (request.method !== 'POST') { reply(405, { error: { code: 'INVALID_ARGUMENT', message: 'POST required' } }); return; }
+      if (!['/runtime/sessions', '/runtime/register', '/runtime/poll', '/runtime/reply', '/runtime/disconnect'].includes(request.url ?? '')) { reply(404, { error: { code: 'NOT_FOUND', message: 'Unknown runtime endpoint' } }); return; }
+      // 正文中的工程身份尚不可用时，先验证令牌属于本网关；解析后仍须验证工程绑定。
+      const authorization = Buffer.from(request.headers.authorization ?? '');
+      if (![...this.tokens.values()].some(value => { const expected = Buffer.from(`Bearer ${value}`); return authorization.length === expected.length && timingSafeEqual(authorization, expected); })) throw new CocosError('UNAUTHORIZED', 'Runtime authentication failed');
       const body = await this.body(request); const projectId = Json.string(body.projectId, 'projectId');
       const token = this.tokens.get(projectId); const provided = Buffer.from(request.headers.authorization ?? ''); const expected = Buffer.from(`Bearer ${token ?? ''}`);
       if (!token || provided.length !== expected.length || !timingSafeEqual(provided, expected)) throw new CocosError('UNAUTHORIZED', 'Runtime authentication failed');
       if (request.url === '/runtime/sessions') { reply(200, this.list(projectId)); return; }
       if (request.url === '/runtime/register') {
-        this.liveSessions();
+        const live = this.liveSessions();
+        if (live.length >= this.limits.sessions || live.filter(row => row.projectId === projectId).length >= this.limits.sessionsPerProject) throw new CocosError('RESOURCE_BUSY', 'Runtime session capacity reached');
         const session: RuntimeSession = { id: randomUUID(), projectId, version: String(body.version ?? 'unknown'), platform: String(body.platform ?? 'unknown'), lastSeen: new Date(this.now()).toISOString(), seen: this.elapsed(), commands: [] };
         this.sessions.set(session.id, session); reply(200, { runtimeInstanceId: session.id }); return;
       }
@@ -120,10 +143,19 @@ export class RuntimeGateway implements RuntimeExecutor {
       session.lastSeen = new Date(this.now()).toISOString();
       session.seen = this.elapsed();
       if (request.url === '/runtime/poll') {
+        if (session.wake) throw new CocosError('RESOURCE_BUSY', 'Runtime session already has a pending poll');
         if (!session.commands.length) await new Promise<void>(accept => {
-          const timer = setTimeout(() => { delete session.wake; accept(); }, 5000);
-          session.wake = () => { clearTimeout(timer); delete session.wake; accept(); };
+          const finish = (): void => {
+            clearTimeout(timer); response.removeListener('close', finish);
+            if (session.wake === finish) delete session.wake;
+            accept();
+          };
+          const timer = setTimeout(finish, 5000);
+          session.wake = finish; response.once('close', finish);
+          if (response.destroyed) finish();
         });
+        // 断开请求不得领取尚未投递的命令，否则客户端重连后会永远丢失该任务。
+        if (response.destroyed) return;
         reply(200, { command: session.commands.shift() ?? null }); return;
       }
       if (request.url === '/runtime/reply') {

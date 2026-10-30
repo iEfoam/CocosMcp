@@ -12,8 +12,8 @@ export class UiCapabilities {
     return [
       ['ui.diff', '比较已有 UI 的声明属性；保持 UUID，报告需要单独处理的结构变更', 'read', update],
       ['ui.apply', '按 planHash 原位更新已有 UI 属性；冲突时保留现场，禁止删除重建', 'scene', apply],
-      ['ui.plan', '规划声明式 UI；检查版本、引用和名称冲突，返回 planHash', 'read', creation],
-      ['ui.build', '执行已规划 UI 树并返回 UUID 映射；部分失败使用局部补偿', 'scene', build],
+      ['ui.plan', '静态 UI 默认入口：规划可编辑场景节点，检查版本、引用和名称冲突，返回 planHash', 'read', creation],
+      ['ui.build', '静态 UI 默认通过已规划文档创建编辑器节点，返回 UUID 映射；随后 scene.save 或 prefab.create 并读回验证。脚本只负责交互与动态内容；部分失败使用局部补偿', 'scene', build],
       ['ui.inspect_layout', '读取实际 UI 四角与世界包围盒，诊断零尺寸和父边界溢出', 'read', S.object({ rootId: S.string() }, ['rootId'])],
       ['ui.validate_interaction', '静态检查按钮、Toggle、EditBox 事件与标签、PageView 页面及富文本回调；不触发回调', 'read', S.object({ rootId: S.string() }, ['rootId'])],
     ].map(([id, title, effect, inputSchema]) => ({ id, title, description: title, effect, inputSchema, module: 'F20', context: 'editor', outputSchema: {}, versions: [3], supportedMajors: [3], implementation: 'implemented', verification: 'unverified',

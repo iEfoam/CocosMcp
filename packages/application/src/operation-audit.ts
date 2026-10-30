@@ -1,14 +1,14 @@
-import { appendFile, readFile, stat } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { CocosError, Json, type JsonObject, type JsonValue } from '../../contracts/src/index.js';
 import { ProjectPaths } from './paths.js';
 import { AtomicJson } from './atomic-json.js';
-import { createReadStream } from 'node:fs';
-import { createInterface } from 'node:readline';
+import { AuditLog } from './audit-log.js';
 
 /** 通用审计仅接受元信息；请求与响应正文不落盘，恢复记录也只存摘要与终态。 */
 export class OperationAudit {
+  private readonly log = new AuditLog();
   async rows(paths: ProjectPaths, p: JsonObject): Promise<JsonObject> {
     const parse = (value: JsonValue | undefined): number | undefined => {
       if (value === undefined) return undefined;
@@ -19,28 +19,22 @@ export class OperationAudit {
     };
     const from = parse(p.from), to = parse(p.to), cursor = Number(p.cursor ?? 0), limit = Number(p.limit ?? 100);
     if (from !== undefined && to !== undefined && from >= to || !Number.isInteger(cursor) || cursor < 0 || !Number.isInteger(limit) || limit < 1 || limit > 500) throw new CocosError('INVALID_ARGUMENT', 'Invalid audit range or pagination');
-    const path = await paths.resolve('.codex-work/logs/cocos-mcp/operations.jsonl');
-    try { await stat(path); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { rows: [], nextCursor: null, range: '[from,to)', timeZone: 'UTC' }; throw error; }
-    const input = createReadStream(path, { encoding: 'utf8' }), lines = createInterface({ input, crlfDelay: Infinity });
-    const rows: JsonObject[] = []; let index = 0, nextCursor: number | null = null;
-    try {
-      for await (const line of lines) {
-        const current = index++; if (current < cursor) continue;
-        if (line.length > 65536) throw new CocosError('RESOURCE_BUSY', 'Audit line exceeds metadata limit');
-        let row: JsonObject; try { row = Json.object(JSON.parse(line)); } catch { continue; }
-        const at = Date.parse(String(row.startedAt));
-        if (!Number.isFinite(at) || from !== undefined && at < from || to !== undefined && at >= to || p.operationId !== undefined && row.operationId !== p.operationId) continue;
-        if (rows.length === limit) { nextCursor = current; break; }
-        rows.push(row);
-      }
-    } finally { lines.close(); input.destroy(); }
-    return { rows, nextCursor, range: '[from,to)', timeZone: 'UTC' };
+    if (p.pageCursor !== undefined && p.cursor !== undefined) throw new CocosError('INVALID_ARGUMENT', 'Use cursor or pageCursor, not both');
+    const position = p.pageCursor === undefined ? undefined : this.log.decode(p.pageCursor);
+    const rows: JsonObject[] = []; let nextCursor: number | null = null, nextPageCursor: string | null = null;
+    for await (const entry of this.log.lines(paths, position)) {
+      const { line } = entry, current = entry.position.index; if (!position && current < cursor) continue;
+      let row: JsonObject; try { row = Json.object(JSON.parse(line)); } catch { continue; }
+      const at = Date.parse(String(row.startedAt));
+      if (!Number.isFinite(at) || from !== undefined && at < from || to !== undefined && at >= to || p.operationId !== undefined && row.operationId !== p.operationId) continue;
+      if (rows.length === limit) { nextCursor = current; nextPageCursor = this.log.encode(entry.position); break; }
+      rows.push(row);
+    }
+    return { rows, nextCursor, nextPageCursor, range: '[from,to)', timeZone: 'UTC' };
   }
   async record(paths: ProjectPaths, row: JsonObject): Promise<boolean> {
     try {
-      const folder = await paths.work('logs', 'cocos-mcp');
-      await appendFile(await paths.resolve(join(folder, 'operations.jsonl')), JSON.stringify(row) + '\n', { mode: 0o600 });
+      await this.log.append(paths, row);
       return true;
     } catch { return false; }
   }

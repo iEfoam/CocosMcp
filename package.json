@@ -10,6 +10,10 @@
   },
   "scripts": {
     "build": "node scripts/project-env.mjs node scripts/build.mjs",
+    "build:dev": "node scripts/project-env.mjs node scripts/build.mjs --profile dev",
+    "build:native": "node scripts/project-env.mjs node scripts/build.mjs --profile native",
+    "check:release": "pnpm check",
+    "check:dev": "pnpm typecheck && node scripts/project-env.mjs node scripts/test.mjs --files",
     "typecheck": "node scripts/project-env.mjs tsc --noEmit",
     "test": "node scripts/project-env.mjs node scripts/test.mjs",
     "start": "node scripts/project-env.mjs node .codex-work/build/server/cli.mjs",

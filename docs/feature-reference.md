@@ -87,7 +87,9 @@ Creator 3.x 属性写入会读取属性描述、生成版本对应的序列化�
 - `asset.dependencies`：查询直接依赖。
 - `asset.users`：查询反向引用。
 
-`asset.dependencies/users` 已由 Creator 2.4.15 和 3.8.8 适配器暴露。2.4.15 另有 `scene.references` 和 `asset.references.audit`，检查当前序列化引用、事件依赖与保存文件 UUID；动态字符串加载和二进制内容不保证完整覆盖。
+`asset.dependencies/users` 已由 Creator 2.4.15 和 3.8.8 适配器暴露。两版均提供 `scene.references`，2.4.15 另有 `asset.references.audit`，检查当前序列化引用、事件依赖与保存文件 UUID；动态字符串加载和二进制内容不保证完整覆盖。
+
+场景引用审查会核对当前实际节点和组件的 UUID 是否出现在序列化表中，遗漏返回 `SERIALIZED_OBJECT_MISSING` 和 `complete=false`。Creator 3 的引用审查使用保留 Prefab 内容的专用序列化配置；普通指纹序列化保持原语义。结构删除必须同时满足覆盖完整、无审查问题、无保留对象指向待删除对象；原生展开和覆盖行为仍需对应版本的运行验收，不能用合成测试替代。
 
 ### 预制体
 

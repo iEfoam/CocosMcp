@@ -3,23 +3,32 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { zipSync } from 'fflate';
 import { VerificationBuild } from './verification.mjs';
+import { BuildPlan } from './build-plan.mjs';
 import files from '../packages/native-adapters/src/extension-files.json' with { type: 'json' };
 import clientFiles from '../packages/native-adapters/src/client-files.json' with { type: 'json' };
 
-const output = '.codex-work/build/releases';
+const args = process.argv.slice(2);
+if (args.length && (args.length !== 2 || args[0] !== '--directory' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/.test(args[1]))) throw new Error('Expected --directory <unique-candidate-name>');
+const output = args.length ? join('.codex-work/build/release-candidates', args[1]) : '.codex-work/build/releases';
 const verification = new VerificationBuild();
 const fingerprint = await verification.fingerprint();
+const profile = JSON.parse(await readFile('.codex-work/build/build-profile.json', 'utf8'));
+BuildPlan.assertRelease(profile, fingerprint);
+// 同一源码在旧成功记录之后也可能测试失败，不能只消费成功缓存。
+if ((await verification.overview(fingerprint)).state !== 'passed') throw new Error('Latest full test attempt must pass for the current source before packaging');
 const evidence = JSON.parse(await readFile(verification.recordPath, 'utf8'));
 if (!evidence.records.length || evidence.records.some(row => row.sourceFingerprint !== fingerprint)) throw new Error('Run pnpm check before packaging: source verification is missing or stale');
 const reportHash = createHash('sha256').update(await readFile(evidence.report)).digest('hex');
 if (evidence.records.some(row => row.reportSha256 !== reportHash)) throw new Error('Verification report checksum mismatch');
-await mkdir(output, { recursive: true });
 const artifacts = [], packages = [];
+const contents = new Map();
 const save = async (name, content) => {
   const bytes = Buffer.from(content);
-  await writeFile(join(output, name), bytes);
+  contents.set(name, bytes);
   artifacts.push({ name, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') });
 };
+// 发布阶段只消费已校验制品；说明文件也在构建阶段生成并纳入摘要。
+await save('release-notes.md', `Verified ${process.env.COCOS_RELEASE_CHANNEL ?? 'local'} build from source fingerprint ${fingerprint}.\n\n` + await readFile('.github/release-notes.md', 'utf8'));
 for (const major of [2, 3]) {
   const root = `.codex-work/build/extensions/creator${major}`;
   const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
@@ -50,5 +59,9 @@ for (const name of [...clientFiles, 'manifest.json']) {
 }
 await save('cocos-mcp-client.zip', zipSync(clientArchive));
 await save('release-manifest.json', JSON.stringify({ sourceFingerprint: fingerprint, packages, client: { version: clientManifest.version, buildId: clientManifest.buildId }, artifacts: artifacts.slice() }, null, 2));
-await writeFile(join(output, 'SHA256SUMS'), artifacts.map(row => `${row.sha256}  ${row.name}\n`).join(''));
+contents.set('SHA256SUMS', Buffer.from(artifacts.map(row => `${row.sha256}  ${row.name}\n`).join('')));
+// 校验所有输入之后再排他创建目录；重复打包不得覆盖已有制品，失败目录留作诊断。
+await mkdir(join(output, '..'), { recursive: true });
+await mkdir(output);
+for (const [name, bytes] of contents) await writeFile(join(output, name), bytes, { flag: 'wx' });
 console.log(`Packaged ${packages.length} Creator versions from verified source ${fingerprint.slice(0, 12)} in ${output}`);

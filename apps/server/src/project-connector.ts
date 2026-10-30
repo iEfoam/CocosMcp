@@ -9,6 +9,7 @@ import { ProjectAuthorizations } from '../../../packages/native-adapters/src/pro
 import { ProjectRegistry } from '../../../packages/application/src/registry.js';
 import { ServiceConnections, type ServiceDescriptor } from '../../../packages/application/src/service-connections.js';
 import type { ProjectPaths } from '../../../packages/application/src/paths.js';
+import { StageTimings } from '../../../packages/native-adapters/src/stage-timings.js';
 
 export interface ProjectBinding {
   projectId: string; paths: ProjectPaths; descriptor: ServiceDescriptor; client: Client; connections: ServiceConnections;
@@ -21,15 +22,15 @@ export class ProjectConnector {
   private readonly connecting = new Map<string, Promise<ProjectBinding>>();
   private closing = false;
   constructor(readonly projects: ProjectRegistry, readonly policy: ClientPolicy, private readonly installation: string, private readonly workerFile: string) {}
-  async get(projectId: string): Promise<ProjectBinding> {
+  async get(projectId: string, timings = new StageTimings()): Promise<ProjectBinding> {
     const row = this.bindings.get(projectId);
     if (!row) throw new CocosError('NOT_FOUND', 'Project is not connected; call cocos_project_connect with its workspace path');
     if (row.failed) throw new CocosError('CONTEXT_UNAVAILABLE', row.failed);
-    await new ProjectAuthorizations(this.installation).locate(row.paths.root, this.policy.allowedRoots);
+    await timings.measure('authorization-recheck', () => new ProjectAuthorizations(this.installation).locate(row.paths.root, this.policy.allowedRoots));
     return row;
   }
-  async workspace(input: string): Promise<ProjectPaths> {
-    return new ProjectAuthorizations(this.installation).workspace(input, this.policy.allowedRoots, this.policy.workspaceMappings);
+  async workspace(input: string, timings = new StageTimings()): Promise<ProjectPaths> {
+    return timings.measure('workspace-resolution', () => new ProjectAuthorizations(this.installation).workspace(input, this.policy.allowedRoots, this.policy.workspaceMappings));
   }
   list(): JsonValue { return { rows: [...this.bindings.values()].map(row => this.summary(row)) }; }
   private summary(row: ProjectBinding): JsonObject {
@@ -50,14 +51,14 @@ export class ProjectConnector {
       } catch { return { ...this.summary(row), state: 'unavailable', editorState: 'unavailable' }; }
     })) };
   }
-  async connect(input: string, instanceId?: string): Promise<JsonValue> {
+  async connect(input: string, instanceId?: string, timings = new StageTimings()): Promise<JsonValue> {
     if (this.closing) throw new CocosError('RESOURCE_BUSY', 'Unified client is closing');
-    const paths = await new ProjectAuthorizations(this.installation).locate(input, this.policy.allowedRoots), connections = new ServiceConnections(paths);
+    const paths = await timings.measure('authorization', () => new ProjectAuthorizations(this.installation).locate(input, this.policy.allowedRoots)), connections = new ServiceConnections(paths);
     let task = this.connecting.get(connections.projectId);
     if (!task) { task = this.attach(paths, connections); this.connecting.set(connections.projectId, task); }
     let row: ProjectBinding;
-    try { row = await task; } finally { if (this.connecting.get(connections.projectId) === task) this.connecting.delete(connections.projectId); }
-    const instances = await this.projects.instances(row.projectId);
+    try { row = await timings.measure('service-connect', () => task!); } finally { if (this.connecting.get(connections.projectId) === task) this.connecting.delete(connections.projectId); }
+    const instances = await timings.measure('editor-discovery', () => this.projects.instances(row.projectId, instanceId));
     if (instanceId && !instances.some(instance => instance.instanceId === instanceId)) throw new CocosError('CONTEXT_UNAVAILABLE', 'Requested editor instance does not belong to this connected project');
     return { project: { projectId: row.projectId, projectPath: paths.root }, connection: {
       backendState: 'ready', editorState: instanceId || instances.length === 1 ? 'ready' : instances.length ? 'ambiguous' : 'offline',

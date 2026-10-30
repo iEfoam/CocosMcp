@@ -28,6 +28,21 @@
 
 ## 声明式 UI
 
+静态 UI 默认创建编辑器节点并保存为场景或 Prefab，脚本只承担交互、数据绑定和动态内容。默认工具列表同时提供 `cocos_ui_plan` 和 `cocos_ui_build`。已有节点通过 `ui.diff/apply` 原位更新，不删除重建。创建或更新返回 `needsSave` 后仍需 `scene.save` 并读回 dirty 状态和节点属性；Prefab 使用 `asset.location` → `prefab.create` 并核验保存资源。保存失败或未保存必须明确报告，不以运行时预览可见代替持久化。
+
+常用样式字段（创建与原位更新共用 Schema）：
+
+| 组件 | 字段与语义 |
+| --- | --- |
+| Sprite、Label | `color: {r,g,b,a}`，四个通道均为 0～255 整数；Creator 2 渲染颜色要求 `a=255`，透明度使用 `cc.UIOpacity.opacity`，不覆盖已有 Node.opacity |
+| Label | `horizontalAlign`：0 左、1 中、2 右；`verticalAlign`：0 上、1 中、2 下；`spacingX` 字间距 |
+| RichText | `horizontalAlign` 同 Label；分段颜色使用原生 `<color>` 标签，不支持的组件属性不能伪装为通用字段 |
+| Button | `normalColor`、`pressedColor`、`hoverColor`、`disabledColor`（RGBA）；`duration` 秒；`zoomScale` 缩放倍率；颜色效果需 `transition=1` 和有效 target |
+| Layout | `startAxis`：0 水平、1 垂直；`horizontalDirection`：0 左到右、1 右到左；`verticalDirection`：0 下到上、1 上到下；`affectedByScale`；与既有尺寸、间距和内边距字段组合 |
+| Widget | `isAbsoluteTop/Bottom/Left/Right/HorizontalCenter/VerticalCenter`：true 为像素，false 为相对父尺寸比例（0.1 表示 10%）；对应偏移字段依次为 `top/bottom/left/right/horizontalCenter/verticalCenter`，支持负偏移 |
+
+Widget 单位先于偏移写入，不依赖 JSON 字段顺序；更新时将单位与对应偏移一起记录和补偿，未声明的偏移保留原数值。Creator 2 的 Sprite/Label 颜色映射到 Node.color，Button 状态颜色仍使用原生 cc.Color。新增字段已对照本机 2.4.15 / 3.8.8 引擎源码；自动化适配器测试不代表真实编辑器保存重开、渲染或真机验收。
+
 输入格式：
 
 ```json

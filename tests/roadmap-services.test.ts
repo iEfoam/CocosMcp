@@ -1,7 +1,8 @@
 import { TestWorkspace } from './workspace.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, readFile, writeFile, symlink, stat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdir, readFile, writeFile, symlink, stat, utimes } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import { createServer } from 'node:http';
@@ -15,14 +16,19 @@ import { RuntimeUiSelector } from '../packages/runtime3-bridge/src/ui-selector.j
 import { SceneInspector } from '../packages/runtime3-bridge/src/scene.js';
 import { CocosError, Json, type BridgeDescriptor, type BridgeRequest, type JsonObject, type JsonValue } from '../packages/contracts/src/index.js';
 
-test('local native credentials are reused once without overwriting project authentication or following a symlink', async () => {
+test('local native credentials refresh only the same newer account with a private backup and preserve invalid profiles', async () => {
   const project = await new TestWorkspace().create('account-project-'), local = await new TestWorkspace().create('account-local-');
   const profile = 'profiles/v2/editor/user.json', source = { session_id: 'fake-id', session_key: 'fake-key', cocos_uid: 'fake-user' };
   await mkdir(join(local, 'profiles/v2/editor'), { recursive: true }); await writeFile(join(local, profile), JSON.stringify(source));
   const account = new CreatorAccount(local), first = await account.prepare(project, 3), target = join(first.home, profile);
   assert.equal(first.account, 'reused-local-native-profile'); assert.equal((await stat(target)).mode & 0o777, 0o600);
-  await writeFile(join(local, profile), JSON.stringify({ ...source, session_id: 'other-account' }));
-  assert.equal((await account.prepare(project, 3)).account, 'existing-project-session'); assert.deepEqual(JSON.parse(await readFile(target, 'utf8')), source);
+  const updated = { ...source, session_id: 'updated-session' };
+  await writeFile(join(local, profile), JSON.stringify(updated)); await utimes(target, 100, 100); await utimes(join(local, profile), 200, 200);
+  const refreshed = await account.prepare(project, 3);
+  assert.equal(refreshed.account, 'refreshed-local-native-profile'); assert.deepEqual(JSON.parse(await readFile(target, 'utf8')), updated);
+  assert.deepEqual(JSON.parse(await readFile(refreshed.backupPath!, 'utf8')), source); assert.equal((await stat(refreshed.backupPath!)).mode & 0o777, 0o600);
+  await writeFile(join(local, profile), JSON.stringify({ ...source, cocos_uid: 'different-user' }));
+  assert.equal((await account.prepare(project, 3)).refreshDeferred, 'different-account'); assert.deepEqual(JSON.parse(await readFile(target, 'utf8')), updated);
   assert.equal((await account.prepare(project, 2)).account, 'unavailable');
   const escaped = await new TestWorkspace().create('account-escape-'); await mkdir(join(escaped, '.codex-work/cache'), { recursive: true });
   await symlink(local, join(escaped, '.codex-work/cache/creator-home')); await assert.rejects(account.prepare(escaped, 3), /escapes project/);
@@ -44,12 +50,12 @@ test('launcher reuses only the authenticated project identity and returns no acc
     const directory = join(root, '.codex-work/cache/cocos-mcp/instances'); await mkdir(directory, { recursive: true });
     await writeFile(join(directory, `${instanceId}.json`), JSON.stringify({ instanceId, projectPath: root, pid: process.pid, creatorMajor: 3, endpoint: `http://127.0.0.1:${address.port}/rpc`, token }));
     await writeFile(join(directory, `${'0'.repeat(24)}.json`), JSON.stringify({ instanceId: '0'.repeat(24), projectPath: root, pid: process.pid, creatorMajor: 3, endpoint: `http://127.0.0.1:${address.port}/rpc`, token }));
-    const account = new CreatorAccount(root), reused = await account.existing(root);
+    const account = new CreatorAccount(root), reused = await account.existing(root, { instanceId });
     assert.equal(reused?.status, 'existing-editor-reused'); assert.doesNotMatch(JSON.stringify(reused), new RegExp(token));
     pid++;
     account.processState = async () => 'other'; assert.equal(await account.existing(root), null);
-    account.processState = async () => 'creator'; assert.equal((await account.existing(root))?.status, 'existing-editor-present-unverified');
-    account.processState = async () => 'unknown'; assert.equal((await account.existing(root))?.status, 'existing-editor-present-unverified');
+    account.processState = async () => 'creator'; assert.equal((await account.existing(root, { instanceId }))?.status, 'existing-editor-present-unverified');
+    account.processState = async () => 'unknown'; assert.equal((await account.existing(root, { instanceId }))?.status, 'existing-editor-present-unverified');
     const outside = await new TestWorkspace().create('account-descriptor-outside-');
     await writeFile(join(outside, 'descriptor.json'), JSON.stringify({instanceId, projectPath: root, pid: process.pid, creatorMajor: 3, endpoint: `http://127.0.0.1:${address.port}/rpc`, token}));
     const escaped = await new TestWorkspace().create('account-descriptor-escape-');
@@ -104,6 +110,51 @@ test('evidence exports a real PNG reference, retains identity and redacts secret
   assert.equal(Json.object(saved.result).passed, true); assert.deepEqual(Json.object(saved.result).checks, [{ passed: false }, { passed: '[REDACTED]' }]);
   assert.equal(Json.object(saved.result).password, '[REDACTED]'); assert.equal(Json.object(saved.result).session_id, '[REDACTED]');
   assert.doesNotMatch(JSON.stringify(saved), /do-not-save|base64/); await assert.rejects(new EvidenceStore().save(paths, '../escape', {}));
+});
+
+test('evidence batches preserve distinct bytes, enforce capacity and never overwrite a previous export', async () => {
+  const root = await new TestWorkspace().create('evidence-batch-'), paths = await ProjectPaths.open(root);
+  const images = Array.from({ length: 17 }, (_, index) => Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, index]));
+  const rows = images.map(bytes => ({ dataUrl: `data:image/png;base64,${bytes.toString('base64')}` }));
+  const store = new EvidenceStore();
+  const saved = await store.save(paths, 'batch', { rows: [rows.slice(0, 2), rows.slice(2, 16)] });
+  assert.equal(saved.evidenceRefs.length, 16);
+  assert.equal(new Set(saved.evidenceRefs.map(row => row.path)).size, 16);
+  for (const [index, row] of saved.evidenceRefs.entries()) assert.deepEqual(await readFile(String(row.path)), images[index]);
+  await assert.rejects(store.save(paths, 'batch', rows[16]!), (error: unknown) => error instanceof CocosError && Json.object(error.details).partial === true);
+  assert.deepEqual(await readFile(String(saved.evidenceRefs[0]!.path)), images[0]);
+  await assert.rejects(store.save(paths, 'over-capacity', { rows }), (error: unknown) => {
+    assert.ok(error instanceof CocosError); assert.equal(error.code, 'RESOURCE_BUSY');
+    assert.equal((Json.object(error.details).evidenceRefs as JsonValue[]).length, 16);
+    return true;
+  });
+});
+
+test('evidence byte budgets reject before the next write and report a later filesystem failure without losing verified references', async () => {
+  const root = await new TestWorkspace().create('evidence-fault-'), paths = await ProjectPaths.open(root);
+  const bytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 7]);
+  const row = { dataUrl: `data:image/png;base64,${bytes.toString('base64')}` };
+  await assert.rejects(new EvidenceStore(18).save(paths, 'budget', { rows: [row, row, row] }), asyncError => {
+    assert.ok(asyncError instanceof CocosError); assert.equal(asyncError.code, 'RESOURCE_BUSY');
+    const detail = Json.object(asyncError.details), refs = detail.evidenceRefs as JsonObject[];
+    assert.equal(refs.length, 2); assert.equal(detail.pendingEvidence, null);
+    assert.ok(refs.every(ref => ref.sha256 === createHash('sha256').update(bytes).digest('hex')));
+    return true;
+  });
+  await assert.rejects(stat(join(root, '.codex-work/artifacts/cocos-mcp/budget/capture-2.png')), { code: 'ENOENT' });
+  const occupied = join(root, '.codex-work/artifacts/cocos-mcp/write-failure/capture-1.png');
+  await mkdir(occupied, { recursive: true }); await writeFile(join(occupied, 'keep.txt'), 'existing evidence');
+  await assert.rejects(new EvidenceStore().save(paths, 'write-failure', { rows: [row, row, row] }), error => {
+    assert.ok(error instanceof CocosError);
+    const detail = Json.object(error.details), refs = detail.evidenceRefs as JsonObject[];
+    assert.equal(refs.length, 1); assert.equal(detail.partial, true);
+    assert.equal(Json.object(detail.pendingEvidence).path, occupied); assert.equal(Json.object(detail.pendingEvidence).stage, 'write');
+    return true;
+  });
+  assert.deepEqual(await readFile(join(root, '.codex-work/artifacts/cocos-mcp/write-failure/capture-0.png')), bytes);
+  assert.equal(await readFile(join(occupied, 'keep.txt'), 'utf8'), 'existing evidence');
+  await assert.rejects(stat(join(root, '.codex-work/artifacts/cocos-mcp/write-failure/capture-2.png')), { code: 'ENOENT' });
+  assert.throws(() => new EvidenceStore(0), { code: 'INVALID_ARGUMENT' });
 });
 
 class SelectorFixture {

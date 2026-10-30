@@ -1,5 +1,7 @@
 import { Creator2PreviewCompiler, type Creator2ProjectCompiler } from './preview-compiler.js';
 import { PanelPreferences, type PanelMenuHost } from '../../shared/panel-preferences.js';
+import { UserInterfaceInspection } from '../../shared/user-interface.js';
+import { Creator2LoginState, type Creator2UserStatus } from './login-state.js';
 import { ExtensionUpdate } from '../../shared/extension-update.js';
 import { McpService } from '../../shared/mcp-service.js';
 import { dirname, join } from 'path';
@@ -16,6 +18,7 @@ import type { PanelState } from '../../../packages/editor-bridge/src/panel-state
 interface ReplyEvent { reply?(error: { message: string } | null, result?: unknown): void }
 
 interface CreatorEditor extends PanelMenuHost {
+  User?: Creator2UserStatus;
   ProjectCompiler?: Creator2ProjectCompiler;
   PreviewServer?: { _previewPort?: number; _validateStashedScene?(callback: () => void): void; getPreviewScene?: Function; query?(path: string, callback: (error: unknown, data: unknown) => void): void };
   stashedScene?: unknown;
@@ -34,8 +37,9 @@ declare const Editor: CreatorEditor;
 declare const __COCOS_SOURCE_FINGERPRINT__: string;
 
 class CreatorHost implements Creator2Port {
+  loginState(): Promise<'logged-in' | 'logged-out' | 'unknown'> { return new Creator2LoginState().query(this.version, Editor.User); }
   extensionState(): JsonValue { return Json.value(lifecycle.extensionState()); }
-  environment(): JsonObject { return { main: Object.keys(Editor).sort(), previewServer: Object.keys(Editor.PreviewServer ?? {}).sort(), assetdbMethods: [...new Set([...Object.keys(Editor.assetdb), ...Object.getOwnPropertyNames(Object.getPrototypeOf(Editor.assetdb))])].sort(), previewSceneSource: Editor.PreviewServer?.getPreviewScene?.toString().slice(0, 16000) ?? null, previewSceneStashingSource: Editor.PreviewServer?._validateStashedScene?.toString().slice(0, 16000) ?? null }; }
+  environment(): JsonObject { return { main: Object.keys(Editor).sort(), userInterface: Json.value(new UserInterfaceInspection().inspect(Editor)), previewServer: Object.keys(Editor.PreviewServer ?? {}).sort(), assetdbMethods: [...new Set([...Object.keys(Editor.assetdb), ...Object.getOwnPropertyNames(Object.getPrototypeOf(Editor.assetdb))])].sort(), previewSceneSource: Editor.PreviewServer?.getPreviewScene?.toString().slice(0, 16000) ?? null, previewSceneStashingSource: Editor.PreviewServer?._validateStashedScene?.toString().slice(0, 16000) ?? null }; }
   async setting(method: string, params: JsonObject): Promise<JsonValue> {
     const name = Json.string(params.name, 'name');
     if (!['project', 'builder'].includes(name)) throw new CocosError('UNAUTHORIZED', 'Only project and builder profiles are exposed');

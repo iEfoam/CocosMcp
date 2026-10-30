@@ -66,7 +66,7 @@ export class RoadmapCapabilities {
       schema.properties.document = document; schema.$defs = UiDocumentModel.schema.$defs;
     }
     add('operation.audit.query', '按 UTC 半开时间范围分页读取脱敏操作审计', 'read', {
-      from: str, to: str, cursor: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 500 }, operationId: str,
+      from: str, to: str, cursor: { type: 'integer', minimum: 0 }, pageCursor: str, limit: { type: 'integer', minimum: 1, maximum: 500 }, operationId: str,
     }, [], 'F10');
     return rows;
   }

@@ -17,6 +17,20 @@ class Deferred<T> {
   readonly promise = new Promise<T>((resolve, reject) => { this.resolve = resolve; this.reject = reject; });
 }
 
+class AuditFixture {
+  async blockWrites(root: string): Promise<void> {
+    const folder = join(root, '.codex-work/logs/cocos-mcp');
+    await mkdir(folder, { recursive: true });
+    // 在真实的新分段目录入口注入失败，不能继续阻塞已停止写入的旧文件。
+    await writeFile(join(folder, 'operations'), 'blocked');
+  }
+  async content(root: string): Promise<string> {
+    const folder = join(root, '.codex-work/logs/cocos-mcp/operations');
+    const files = (await readdir(folder)).sort();
+    return (await Promise.all(files.map(file => readFile(join(folder, file), 'utf8')))).join('');
+  }
+}
+
 const result: ExecutionResult = { operationId: 'op', projectId: 'project', capabilityId: 'runtime.query', result: {}, verification: 'unverified', completedAt: '2026-09-22T00:00:00Z' };
 
 test('editor discovery excludes reused PIDs but preserves genuine ambiguity and authenticated legacy bridges', async () => {
@@ -123,7 +137,7 @@ test('confirmed editor success survives audit failure and is not dispatched twic
   const registry = new ProjectRegistry(), { projectId } = await registry.add(root), bridge = new BridgeClient();
   t.mock.method(registry, 'instance', async () => ({ protocolVersion: 1, projectId, projectPath: root, instanceId: 'editor', editorVersion: '3.8.8', creatorMajor: 3, endpoint: '', token: '', pid: process.pid, startedAt: '' }));
   const call = t.mock.method(bridge, 'call', async () => ({ result: { saved: true }, revision: 'revision' }));
-  await mkdir(join(root, '.codex-work/logs/cocos-mcp/operations.jsonl'), { recursive: true });
+  await new AuditFixture().blockWrites(root);
   const app = new CocosApplication(registry, undefined, bridge);
   const request = { projectId, capabilityId: 'scene.query', params: {}, operationId: 'audit' };
   const first = await app.execute(request);
@@ -174,7 +188,7 @@ test('runtime success, failure and authorization rejection are audited without r
   await app.execute(request); await assert.rejects(app.execute(request), { code: 'RUNTIME_ERROR' });
   await assert.rejects(app.execute({ projectId, capabilityId: 'runtime.invoke', params: {} }), { code: 'UNAUTHORIZED' });
   await assert.rejects(app.execute({ projectId, capabilityId: 'runtime.query', params: { secret: 'never-log-validation' } }), { code: 'INVALID_ARGUMENT' });
-  const content = await readFile(join(root, '.codex-work/logs/cocos-mcp/operations.jsonl'), 'utf8');
+  const content = await new AuditFixture().content(root);
   assert.doesNotMatch(content, /never-log|base64/);
   const rows = content.trim().split('\n').map(line => JSON.parse(line));
   assert.ok(rows.some(row => row.context === 'runtime' && row.outcome === 'completed'));
@@ -203,7 +217,7 @@ test('idempotency conflict is audited before dispatch without exposing changed p
   await app.execute(request);
   await assert.rejects(app.execute({ ...request, params: { path: 'name', value: 'never-log-conflicting-value' } }), { code: 'OPERATION_CONFLICT' });
   assert.equal(calls, 1);
-  const content = await readFile(join(root, '.codex-work/logs/cocos-mcp/operations.jsonl'), 'utf8');
+  const content = await new AuditFixture().content(root);
   assert.doesNotMatch(content, /never-log/);
   const rows = content.trim().split('\n').map(line => JSON.parse(line));
   assert.equal(rows.length, 3); assert.equal(rows[2].stage, 'idempotency'); assert.equal(rows[2].outcome, 'rejected');
@@ -212,7 +226,7 @@ test('idempotency conflict is audited before dispatch without exposing changed p
 
 test('runtime audit failure preserves successful mutation response and in-memory deduplication', async () => {
   const root = await new TestWorkspace().create('runtime-audit-failure-'), registry = new ProjectRegistry(), { projectId } = await registry.add(root);
-  await mkdir(join(root, '.codex-work/logs/cocos-mcp/operations.jsonl'), { recursive: true });
+  await new AuditFixture().blockWrites(root);
   let calls = 0; const app = new CocosApplication(registry, undefined, undefined, false, { execute: async () => { calls++; return { paused: false }; } });
   const request = { projectId, capabilityId: 'runtime.resume', params: {}, operationId: 'resume' };
   const result = await app.execute(request); assert.equal(result.warnings?.[0]?.code, 'AUDIT_WRITE_FAILED');

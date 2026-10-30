@@ -47,7 +47,7 @@ class Creator2Acceptance {
         await call('asset.import', { sourcePath, targetUrl: imageLocation.url! });
       }
       const imageMeta = Json.object((await call('spriteframe.inspect', { url: imageLocation.url! })).meta);
-      const spriteMeta = Object.values(Json.object(imageMeta.subMetas)).map(Json.object).find(row => row.importer === 'sprite-frame'); assert.ok(spriteMeta);
+      const spriteMeta = Object.values(Json.object(imageMeta.subMetas)).map(value => Json.object(value)).find(row => row.importer === 'sprite-frame'); assert.ok(spriteMeta);
       const textureParams = { url: imageLocation.url!, settings: { minfilter: 'nearest', magfilter: 'nearest' } };
       const texturePlan = await call('texture.plan_import', textureParams);
       const textureChanged = await call('texture.apply_import', { ...textureParams, planHash: texturePlan.planHash! });

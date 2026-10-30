@@ -7,6 +7,7 @@ import { BridgeClient } from './bridge-client.js';
 
 export class ProjectRegistry {
   private readonly projects = new Map<string, ProjectPaths>();
+  private readonly discovering = new Map<string, Promise<BridgeDescriptor[]>>();
   constructor(private readonly bridge = new BridgeClient()) {}
 
   async add(root: string): Promise<{ projectId: string; projectPath: string }> {
@@ -28,12 +29,29 @@ export class ProjectRegistry {
 
   remove(projectId: string): void { this.projects.delete(projectId); }
 
-  async instances(projectId: string): Promise<BridgeDescriptor[]> {
+  async instances(projectId: string, instanceId?: string): Promise<BridgeDescriptor[]> {
+    this.paths(projectId);
+    const key = JSON.stringify([projectId, instanceId ?? null]);
+    let task = this.discovering.get(key);
+    if (!task) { task = this.discover(projectId, instanceId); this.discovering.set(key, task); }
+    // 仅合并仍在进行的认证，不缓存终态；后续写调用仍重新核验实例身份。
+    try { return (await task).map(row => ({ ...row })); }
+    finally { if (this.discovering.get(key) === task) this.discovering.delete(key); }
+  }
+
+  private async discover(projectId: string, instanceId?: string): Promise<BridgeDescriptor[]> {
     const paths = this.paths(projectId);
     const directory = await paths.resolve('.codex-work/cache/cocos-mcp/instances');
     let entries: string[];
-    try { entries = await readdir(directory); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error; }
+    // 第一方桥接始终按 instanceId.json 写描述符；显式目标不需要枚举和读取无关候选。
+    // 名称只负责定位，下面仍核验描述符内部身份、工程、PID、端点和实时认证。
+    if (instanceId !== undefined) {
+      if (!/^[a-zA-Z0-9_-]{1,128}$/.test(instanceId)) throw new CocosError('INVALID_ARGUMENT', 'Invalid editor instance identity');
+      entries = [instanceId + '.json'];
+    } else {
+      try { entries = await readdir(directory); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error; }
+    }
     if (entries.length > 2000) throw new CocosError('RESOURCE_BUSY', 'Editor instance directory exceeds discovery limit');
     const rows: BridgeDescriptor[] = [];
     for (const entry of entries.filter(name => name.endsWith('.json'))) {
@@ -42,6 +60,7 @@ export class ProjectRegistry {
       try { const info = await stat(path); if (!info.isFile() || info.size > 1024 * 1024) continue; descriptor = JSON.parse(await readFile(path, 'utf8')) as BridgeDescriptor; }
       catch { continue; }
       if (descriptor.protocolVersion !== 1 || descriptor.projectId !== projectId || descriptor.projectPath !== paths.root) continue;
+      if (instanceId !== undefined && descriptor.instanceId !== instanceId) continue;
       if (typeof descriptor.token !== 'string' || !/^[a-f\d]{64}$/.test(descriptor.token)) continue;
       if (!Number.isInteger(descriptor.pid) || descriptor.pid <= 0) continue;
       try { process.kill(descriptor.pid, 0); } catch { continue; }
@@ -57,11 +76,12 @@ export class ProjectRegistry {
       const batch = rows.slice(offset, offset + 4), results = await Promise.all(batch.map(row => this.bridge.identity(row)));
       batch.forEach((row, index) => { if (results[index]) active.push(row); });
     }
+    if (this.paths(projectId) !== paths) throw new CocosError('CONTEXT_UNAVAILABLE', 'Project registration changed during discovery');
     return active;
   }
 
   async instance(projectId: string, instanceId?: string): Promise<BridgeDescriptor> {
-    const rows = await this.instances(projectId);
+    const rows = await this.instances(projectId, instanceId);
     if (instanceId) {
       const match = rows.find(row => row.instanceId === instanceId);
       if (!match) throw new CocosError('CONTEXT_UNAVAILABLE', 'The editor instance is not connected');

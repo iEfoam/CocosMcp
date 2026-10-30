@@ -8,6 +8,7 @@ import { ProjectRegistry } from '../packages/application/src/registry.js';
 import { ProjectPaths } from '../packages/application/src/paths.js';
 import { ServiceConnections, type ServiceDescriptor } from '../packages/application/src/service-connections.js';
 import { TestWorkspace } from './workspace.js';
+import { Json, type JsonObject } from '../packages/contracts/src/index.js';
 
 class RoutedConnections extends ServiceConnections {
   service!: ServiceDescriptor;
@@ -15,11 +16,17 @@ class RoutedConnections extends ServiceConnections {
 }
 class RoutedClient extends Client {
   calls = 0;
+  received: unknown;
   result: CallToolResult = { content: [{ type: 'image', data: 'aW1hZ2U=', mimeType: 'image/png' }], structuredContent: { frame: 4 } };
-  override async callTool() { this.calls++; return this.result; }
+  override async callTool(...args: Parameters<Client['callTool']>) { this.calls++; this.received = args[0]; return this.result; }
 }
 class BoundConnector extends ProjectConnector {
   binding!: ProjectBinding;
+  connects = 0; selectedInstance: string | undefined; rows: JsonObject[] = [{ instanceId: 'editor' }];
+  override async connect(_input: string, instanceId?: string) {
+    this.connects++; this.selectedInstance = instanceId;
+    return { project: { projectId: this.binding.projectId, projectPath: this.binding.paths.root }, rows: this.rows };
+  }
   override async get(_id: string) { return this.binding; }
 }
 class RouterFixture {
@@ -36,10 +43,30 @@ class RouterFixture {
 }
 test('project routing preserves image content, structured responses and backend tool errors without wrapping or replay', async () => {
   const f = new RouterFixture(); await f.setup(); const args = { projectId: f.connector.binding.projectId, instanceId: 'editor', params: {} };
-  assert.equal(await f.router.call('cocos_scene_query', args, f.context), f.client.result);
+  const first = await f.router.call('cocos_scene_query', args, f.context);
+  assert.equal(first.content, f.client.result.content); assert.equal(first.structuredContent, f.client.result.structuredContent);
+  assert.deepEqual((first._meta?.['io.cocos-mcp/client-timings'] as JsonObject[]).map(row => row.stage), ['editor-selection', 'service-identity', 'backend-rpc']);
+  assert.equal(f.client.result._meta, undefined);
   f.client.result = { content: [{ type: 'text', text: 'guarded failure' }], isError: true, structuredContent: { error: { code: 'REVISION_CONFLICT' } } };
-  assert.equal(await f.router.call('cocos_scene_save', { ...args, operationId: 'save', expectedRevision: '1' }, f.context), f.client.result);
+  const failure = await f.router.call('cocos_scene_save', { ...args, operationId: 'save', expectedRevision: '1' }, f.context);
+  assert.equal(failure.isError, true); assert.equal(failure.content, f.client.result.content); assert.equal(failure.structuredContent, f.client.result.structuredContent);
   assert.equal(f.client.calls, 2); assert.equal(f.connector.binding.inFlight, 0);
+});
+
+test('automatic project selection reuses only its own connection snapshot and never caches it across requests', async t => {
+  const f = new RouterFixture(); await f.setup();
+  t.mock.method(f.connector.projects, 'instances', async () => { throw new Error('Duplicate discovery in the same routed request'); });
+  const args = { projectPath: f.connector.binding.paths.root, params: {} };
+  await f.router.call('cocos_scene_query', args, f.context);
+  assert.equal(Json.object(Json.object(Json.value(f.client.received)).arguments).instanceId, 'editor');
+  await f.router.call('cocos_scene_query', args, f.context); assert.equal(f.connector.connects, 2);
+  f.connector.rows = [{ instanceId: 'one' }, { instanceId: 'two' }];
+  await assert.rejects(f.router.call('cocos_scene_query', { ...args, rows: [{ instanceId: 'untrusted' }] }, f.context), { code: 'AMBIGUOUS_TARGET' });
+  f.connector.rows = [];
+  await assert.rejects(f.router.call('cocos_scene_query', args, f.context), { code: 'CONTEXT_UNAVAILABLE' });
+  assert.equal(f.client.calls, 2);
+  await f.router.call('cocos_scene_query', { ...args, instanceId: 'chosen' }, f.context);
+  assert.equal(f.connector.selectedInstance, 'chosen');
 });
 test('incompatible backends and already cancelled requests are rejected before any tool dispatch', async () => {
   const f = new RouterFixture(); await f.setup(); const args = { projectId: f.connector.binding.projectId, instanceId: 'editor', params: {}, operationId: 'save', expectedRevision: '1' };

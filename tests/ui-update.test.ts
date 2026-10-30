@@ -8,9 +8,10 @@ import type { EditorPort } from '../packages/creator3-adapter/src/port.js';
 
 class UpdateHarness {
   name = 'Before'; text = 'Original'; extra = false; writes = 0; failAt = 0; foreignChange = false;
+  color: JsonObject = { r: 255, g: 255, b: 255, a: 255 }; horizontalAlign = 0; verticalAlign = 0;
   document: JsonObject = { version: 1, root: { key: 'root', name: 'After', components: [{ type: 'cc.Label', properties: { string: 'Updated' } }] } };
   params(): JsonObject { return { rootId: 'r', mapping: [{ key: 'root', nodeId: 'r' }], document: this.document }; }
-  snapshot(): JsonObject { return { name: this.name, text: this.text, extra: this.extra }; }
+  snapshot(): JsonObject { return { name: this.name, text: this.text, extra: this.extra, color: this.color, horizontalAlign: this.horizontalAlign, verticalAlign: this.verticalAlign }; }
   readonly port = { version: '3.8.8', scene: async (method: string) => {
     if (method === 'ui.flush_label') return { flushed: true };
       if (method === 'fingerprint' || method === 'ui.snapshot') return this.snapshot();
@@ -19,7 +20,7 @@ class UpdateHarness {
     throw new Error(method);
   }, request: async (_channel: string, method: string) => {
     if (method === 'query-node') return { name: { type: 'String', value: this.name } };
-    if (method === 'query-component') return { string: { type: 'String', value: this.text } };
+    if (method === 'query-component') return { string: { type: 'String', value: this.text }, color: { type: 'cc.Color', value: this.color }, horizontalAlign: { type: 'Enum', value: this.horizontalAlign }, verticalAlign: { type: 'Enum', value: this.verticalAlign } };
     throw new Error(method);
   } } as EditorPort;
   service = new UiUpdateService(this.port, async (id, p) => {
@@ -27,7 +28,12 @@ class UpdateHarness {
     if (this.writes === this.failAt) { if (this.foreignChange) this.extra = true; throw new Error('Injected setter failure'); }
     const properties = Json.object(p.properties);
     if (id === 'node.set') this.name = String(properties.name);
-    else if (id === 'component.set') this.text = String(properties.string);
+    else if (id === 'component.set') {
+      if ('string' in properties) this.text = String(properties.string);
+      if ('color' in properties) this.color = Json.object(properties.color);
+      if ('horizontalAlign' in properties) this.horizontalAlign = Number(properties.horizontalAlign);
+      if ('verticalAlign' in properties) this.verticalAlign = Number(properties.verticalAlign);
+    }
     else throw new Error(`Unexpected structural operation: ${id}`);
     return {};
   });
@@ -40,6 +46,58 @@ test('UI diff and apply preserve UUIDs and undeclared components without structu
   const result = await h.apply(); assert.equal(h.writes, 2); assert.equal(h.name, 'After'); assert.equal(h.text, 'Updated');
   assert.deepEqual(result.mapping, [{ key: 'root', nodeId: 'r' }]);
   const repeat = await h.apply(); assert.equal(repeat.changed, false); assert.equal(h.writes, 2);
+});
+
+test('UI RGBA and alignment updates preserve mappings, repeat as no-op and restore on a later failure', async () => {
+  const h = new UpdateHarness(), original = h.snapshot(), color = { r: 10, g: 20, b: 30, a: 128 };
+  h.document = { version: 1, root: { key: 'root', name: 'Before', components: [{ type: 'cc.Label', properties: { color, horizontalAlign: 1, verticalAlign: 2 } }] } };
+  h.failAt = 3;
+  await assert.rejects(h.apply(), /UI update failed/);
+  assert.deepEqual(h.snapshot(), original);
+  h.failAt = 0;
+  const result = await h.apply(); assert.deepEqual(result.mapping, [{ key: 'root', nodeId: 'r' }]);
+  assert.deepEqual(h.color, color); assert.equal(h.horizontalAlign, 1); assert.equal(h.verticalAlign, 2);
+  assert.equal((await h.apply()).changed, false);
+});
+
+class WidgetUpdateHarness {
+  absolute = true; aligned = false; top = 0.1; left = 5; failLeft = false;
+  document: JsonObject = { version: 1, root: { key: 'root', name: 'Panel', components: [{ type: 'cc.Widget', properties: { top: 0.1, isAbsoluteTop: false, left: 10, isAlignTop: true } }] } };
+  snapshot(): JsonObject { return { absolute: this.absolute, aligned: this.aligned, top: this.top, left: this.left }; }
+  readonly port = { version: '3.8.8', scene: async (method: string) => {
+    if (method === 'ui.flush_label' || method === 'ui.preflight_update') return {};
+    if (method === 'fingerprint' || method === 'ui.snapshot') return this.snapshot();
+    if (method === 'hierarchy') return { total: 1, rows: [{ nodeId: 'r', parentId: 'canvas', components: [{ componentId: 'w', type: 'cc.Widget' }] }] };
+    throw new Error(method);
+  }, request: async (_channel: string, method: string) => {
+    if (method === 'query-node') return { name: { type: 'String', value: 'Panel' } };
+    return { isAlignTop: { type: 'Boolean', value: this.aligned }, isAbsoluteTop: { type: 'Boolean', value: this.absolute }, top: { type: 'Number', value: this.top }, left: { type: 'Number', value: this.left } };
+  } } as EditorPort;
+  service = new UiUpdateService(this.port, async (id, p) => {
+    assert.equal(id, 'component.set');
+    for (const [key, value] of Object.entries(Json.object(p.properties))) {
+      if (key === 'isAlignTop') { if (value !== this.aligned) this.top = 40; this.aligned = Boolean(value); }
+      if (key === 'isAbsoluteTop') { if (value !== this.absolute) this.top *= value ? 100 : 0.01; this.absolute = Boolean(value); }
+      if (key === 'top') this.top = Number(value);
+      if (key === 'left') { if (this.failLeft) throw new Error('Injected failure'); this.left = Number(value); }
+    }
+    return {};
+  });
+  async apply(): Promise<JsonObject> {
+    const p = { rootId: 'r', mapping: [{ key: 'root', nodeId: 'r' }], document: this.document };
+    return Json.object(await this.service.apply({ ...p, planHash: (await this.service.diff(p)).planHash! }));
+  }
+}
+
+test('Widget unit changes rewrite numerically unchanged offsets and compensate in native setter order', async () => {
+  const h = new WidgetUpdateHarness(), before = h.snapshot(); h.failLeft = true;
+  await assert.rejects(h.apply(), /UI update failed/); assert.deepEqual(h.snapshot(), before);
+  h.failLeft = false; await h.apply();
+  assert.equal(h.aligned, true); assert.equal(h.absolute, false); assert.equal(h.top, 0.1); assert.equal(h.left, 10);
+  assert.equal((await h.apply()).changed, false);
+  const undeclared = new WidgetUpdateHarness();
+  delete Json.object((Json.object(undeclared.document.root).components as JsonObject[])[0]!.properties).top;
+  await undeclared.apply(); assert.equal(undeclared.top, 0.1);
 });
 
 test('UI update rejects stale plans, duplicate UUID mappings and unsupported component structure before writes', async () => {

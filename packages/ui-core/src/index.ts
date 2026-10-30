@@ -16,6 +16,17 @@ export class UiDocumentModel {
   static readonly asset = S.object({ assetUuid: S.string() }, ['assetUuid']);
   static readonly number = { type: 'number', minimum: -100000, maximum: 100000 };
   static readonly positive = { type: 'number', minimum: 0, maximum: 100000 };
+  static readonly colorChannel = { type: 'integer', minimum: 0, maximum: 255 };
+  static readonly color = S.object({ r: this.colorChannel, g: this.colorChannel, b: this.colorChannel, a: this.colorChannel }, ['r', 'g', 'b', 'a']);
+  static readonly alignment = { type: 'integer', enum: [0, 1, 2] };
+  static readonly direction = { type: 'integer', enum: [0, 1] };
+  static readonly widgetOffsets: Record<string, string> = { isAbsoluteTop: 'top', isAbsoluteBottom: 'bottom', isAbsoluteLeft: 'left', isAbsoluteRight: 'right', isAbsoluteHorizontalCenter: 'horizontalCenter', isAbsoluteVerticalCenter: 'verticalCenter',
+    isAlignTop: 'top', isAlignBottom: 'bottom', isAlignLeft: 'left', isAlignRight: 'right', isAlignHorizontalCenter: 'horizontalCenter', isAlignVerticalCenter: 'verticalCenter' };
+  /** Widget 切换对齐及像素/比例单位会换算偏移；依次设置对齐、单位、声明值，避免 JSON 字段顺序改变布局。 */
+  static orderedProperties(properties: JsonObject): JsonObject {
+    const priority = (key: string): number => key.startsWith('isAlign') ? 0 : key.startsWith('isAbsolute') ? 1 : 2;
+    return Object.fromEntries(Object.entries(properties).sort(([a], [b]) => priority(a) - priority(b)));
+  }
   static readonly size = S.object({ width: this.positive, height: this.positive }, ['width', 'height']);
   static readonly componentProperties: Record<string, Record<string, JsonSchema>> = {
     'cc.SafeArea': {},
@@ -23,17 +34,21 @@ export class UiDocumentModel {
     'cc.UIOpacity': { opacity: { type: 'number', minimum: 0, maximum: 255 } },
     'cc.UITransform': { contentSize: this.size, anchorPoint: S.object({ x: { type: 'number', minimum: 0, maximum: 1 }, y: { type: 'number', minimum: 0, maximum: 1 } }, ['x', 'y']) },
     'cc.Canvas': { alignCanvasWithScreen: S.boolean() },
-    'cc.Sprite': { spriteFrame: this.asset, sizeMode: { type: 'integer', enum: [0, 1, 2] }, type: { type: 'integer', enum: [0, 1, 2, 3] } },
-    'cc.Label': { string: { type: 'string', maxLength: 10000 }, fontSize: this.positive, lineHeight: this.positive, font: this.asset, useSystemFont: S.boolean(), overflow: { type: 'integer', enum: [0, 1, 2, 3] }, enableWrapText: S.boolean() },
+    'cc.Sprite': { color: this.color, spriteFrame: this.asset, sizeMode: { type: 'integer', enum: [0, 1, 2] }, type: { type: 'integer', enum: [0, 1, 2, 3] } },
+    'cc.Label': { color: this.color, horizontalAlign: this.alignment, verticalAlign: this.alignment, spacingX: this.number,
+      string: { type: 'string', maxLength: 10000 }, fontSize: this.positive, lineHeight: this.positive, font: this.asset, useSystemFont: S.boolean(), overflow: { type: 'integer', enum: [0, 1, 2, 3] }, enableWrapText: S.boolean() },
     'cc.Button': { interactable: S.boolean(), transition: { type: 'integer', enum: [0, 1, 2, 3] }, target: this.ref,
+      normalColor: this.color, pressedColor: this.color, hoverColor: this.color, disabledColor: this.color, duration: { type: 'number', minimum: 0, maximum: 60 }, zoomScale: this.positive,
       clickEvents: this.events },
-    'cc.Layout': { type: { type: 'integer', enum: [0, 1, 2, 3] }, resizeMode: { type: 'integer', enum: [0, 1, 2] }, spacingX: this.number, spacingY: this.number, paddingLeft: this.positive, paddingRight: this.positive, paddingTop: this.positive, paddingBottom: this.positive, cellSize: this.size },
-    'cc.Widget': { isAlignTop: S.boolean(), isAlignBottom: S.boolean(), isAlignLeft: S.boolean(), isAlignRight: S.boolean(), isAlignHorizontalCenter: S.boolean(), isAlignVerticalCenter: S.boolean(), top: this.number, bottom: this.number, left: this.number, right: this.number, horizontalCenter: this.number, verticalCenter: this.number, alignMode: { type: 'integer', enum: [0, 1, 2] } },
+    'cc.Layout': { startAxis: this.direction, horizontalDirection: this.direction, verticalDirection: this.direction, affectedByScale: S.boolean(),
+      type: { type: 'integer', enum: [0, 1, 2, 3] }, resizeMode: { type: 'integer', enum: [0, 1, 2] }, spacingX: this.number, spacingY: this.number, paddingLeft: this.positive, paddingRight: this.positive, paddingTop: this.positive, paddingBottom: this.positive, cellSize: this.size },
+    'cc.Widget': { isAbsoluteTop: S.boolean(), isAbsoluteBottom: S.boolean(), isAbsoluteLeft: S.boolean(), isAbsoluteRight: S.boolean(), isAbsoluteHorizontalCenter: S.boolean(), isAbsoluteVerticalCenter: S.boolean(),
+      isAlignTop: S.boolean(), isAlignBottom: S.boolean(), isAlignLeft: S.boolean(), isAlignRight: S.boolean(), isAlignHorizontalCenter: S.boolean(), isAlignVerticalCenter: S.boolean(), top: this.number, bottom: this.number, left: this.number, right: this.number, horizontalCenter: this.number, verticalCenter: this.number, alignMode: { type: 'integer', enum: [0, 1, 2] } },
     'cc.ScrollView': { content: this.ref, horizontal: S.boolean(), vertical: S.boolean(), elastic: S.boolean(), inertia: S.boolean(), brake: { type: 'number', minimum: 0, maximum: 1 } },
     'cc.Toggle': { interactable: S.boolean(), checkMark: this.componentRef('cc.Sprite'), checkEvents: this.events },
     'cc.EditBox': { string: { type: 'string', maxLength: 10000 }, placeholder: { type: 'string', maxLength: 1000 }, textLabel: this.componentRef('cc.Label'), placeholderLabel: this.componentRef('cc.Label'), backgroundImage: this.asset, maxLength: { type: 'integer', minimum: 0, maximum: 10000 }, tabIndex: { type: 'integer', minimum: 0, maximum: 1000 }, editingDidBegan: this.events, textChanged: this.events, editingDidEnded: this.events, editingReturn: this.events },
     'cc.PageView': { content: this.ref, direction: { type: 'integer', enum: [0, 1] }, sizeMode: { type: 'integer', enum: [0, 1] }, scrollThreshold: { type: 'number', minimum: 0, maximum: 1 }, pageTurningSpeed: { type: 'number', minimum: 0, maximum: 60 }, pageEvents: this.events },
-    'cc.RichText': { string: { type: 'string', maxLength: 10000 }, fontSize: this.positive, lineHeight: this.positive, maxWidth: this.positive, useSystemFont: S.boolean(), font: this.asset },
+    'cc.RichText': { horizontalAlign: this.alignment, string: { type: 'string', maxLength: 10000 }, fontSize: this.positive, lineHeight: this.positive, maxWidth: this.positive, useSystemFont: S.boolean(), font: this.asset },
     'cc.Mask': { type: { type: 'integer', enum: [0, 1, 2, 3] }, inverted: S.boolean() },
   };
   static readonly schema: JsonSchema = {

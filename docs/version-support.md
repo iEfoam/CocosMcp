@@ -53,7 +53,13 @@ Spine 缓存事件只支持 start/complete/end；DragonBones 缓存只支持 sta
 | 引擎扩展 | 路径、调试绘制、排序、探针、动画图、IK、CCT、后处理/蒙皮诊断 | 有路径/保存重开、绘制像素、IK/Rest、Bullet 路线记录；后处理 Pass 不可用和蒙皮递归编译缺陷仍保留 |
 | 运行时 / 工作流 | 对象/事件/资源、暂停恢复、媒体、预览输入/日志、性能预算、结果引用与有界等待、构建任务 | 开发 Web 预览与已有记录；平台 SDK、生产、真机及商店交付单独验收 |
 
-2.4.15 专属的 `ui.structure.*`、`scene.references`、`asset.references.audit`、`runtime.control.*`、`runtime.resources.snapshot/diff/trend`、`runtime.tween.*`、`runtime.task.*`、骨骼 details/mix/fade/trace、专属 Camera/关节/接触入口，不因 3.x 功能更多就自动宣称 3.8.8 同名可用。3.x 的原生轨道、UITransform、PhysicsSystem2D 与 2.x API 也不能互换。
+2.4.15 专属的 `asset.references.audit`、`runtime.control.*`、`runtime.resources.snapshot/diff/trend`、`runtime.tween.*`、`runtime.task.*`、骨骼 details/mix/fade/trace、专属 Camera/关节/接触入口，不因 3.x 功能更多就自动宣称 3.8.8 同名可用。3.x 的原生轨道、UITransform、PhysicsSystem2D 与 2.x API 也不能互换。
+
+`ui.structure.plan/apply` 新增 Creator 3.8.8 普通场景适配：计划读取原生依赖、整场景引用及序列化修订，包含 Canvas 下默认 UITransform；apply 核对 planHash，使用原生手动记录并读回节点/组件 UUID、层级和顺序。已记录创建、移动、排序、组件增删、受引用保护的删除、整组 Undo/Redo、过期计划拒绝和保存重开的 3.8.8 原生验收。部分失败保留 completed/pending/mapping，不能盲目重试；保存仍需单独 scene.save。Prefab 资源编辑模式要求 scope 为原生代理的资源根，计划绑定资源 UUID；3.8.8 原生创建/移动、整组 Undo/Redo、保存重开和既有 fileId 保留已通过。普通场景中的 Prefab 实例使用独立 prefab-instance 上下文，scope 必须为完整实例根：支持挂载节点的创建、移动、排序、受引用保护的删除及组件增删，已验证整组 Undo/Redo、保存重开和源资源字节不变。源资源关联节点的移动/删除要求进入 Prefab 资源编辑模式，嵌套实例继续保护；这些限制不代表完整嵌套 Prefab 覆盖编辑已实现。Scene 自身的保存元数据 PrefabInfo 不视为实例关联。
+
+`scene.references` 新增 3.8.8 只读适配：读取原生序列化对象表，列出显式引用、事件目标及问题，不执行回调。与 2.4.15 共用扫描规则，重复 UUID、缺失对象身份和损坏记录显式报告；null 历史目标、动态字符串加载路径和脚本闭包仍无法推断。3.8.8 已有资源引用与真实 Button.target 删除保护的原生记录；自定义事件处理器目前只有测试桩证据，不能据此宣称跨版本全部事件验证通过。
+
+`asset.references.scan` 新增两版共用的文件审查路由：列出序列化 UUID、文本路径候选和动态未知加载，不改写资源。它不替换 Creator 2 专属的 `asset.references.audit`，也不代表完整引用覆盖或 Prefab 差异分析；目前为文件系统/适配器测试证据，原生环境验收尚待完成。范围、预算和字段解释见 [资源引用审查](asset-reference-review.md)。
 
 ## 其他版本与平台
 

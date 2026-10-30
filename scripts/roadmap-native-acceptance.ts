@@ -9,6 +9,8 @@ import { RuntimeGateway } from '../packages/application/src/runtime-gateway.js';
 import { EvidenceStore } from '../packages/application/src/evidence-store.js';
 import { CocosError, Json, type JsonObject } from '../packages/contracts/src/index.js';
 import { CreatorAccount } from './creator-account.mjs';
+import { NativeAcceptanceGuard } from './native-acceptance-guard.js';
+import { PropertyDump } from '../packages/creator3-adapter/src/dump.js';
 
 /** 只运行于明确提供的隔离工程；场景与输入均为本任务合成夹具。 */
 class RoadmapNativeAcceptance {
@@ -23,10 +25,12 @@ class RoadmapNativeAcceptance {
     const row = Buffer.from([0, red, green, 32, 255, 32, green, red, 255]);
     return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', header), chunk('IDAT', deflateSync(Buffer.concat([row, row]))), chunk('IEND', Buffer.alloc(0))]);
   }
-  async run(project: string, major: 2 | 3): Promise<void> {
+  async run(project: string, major: 2 | 3, scope: 'all' | 'ui-core' = 'all'): Promise<void> {
+    if (scope === 'ui-core' && major !== 3) throw new Error('The focused UI core acceptance currently requires Creator 3');
+    const guard = new NativeAcceptanceGuard(process.cwd());
+    project = await guard.project(project, major);
+    const editor = guard.editor(await new CreatorAccount().existing(project), major);
     const registry = new ProjectRegistry(), { projectId } = await registry.add(project), gateway = new RuntimeGateway(registry), gatewayPort = await gateway.start();
-    const editor = await new CreatorAccount().existing(project);
-    if (editor?.status !== 'existing-editor-reused' || editor.creatorMajor !== major) { await gateway.close(); throw new Error('Authenticated isolated editor identity required'); }
     const app = new CocosApplication(registry, undefined, undefined, false, gateway), evidence = new EvidenceStore();
     const id = `roadmap-${major}-${randomUUID()}`, directory = resolve('.codex-work/artifacts/mcp-roadmap-20261008', id);
     await mkdir(directory, { recursive: true });
@@ -72,14 +76,11 @@ class RoadmapNativeAcceptance {
       await call('scene.save'); return { sceneId, canvasId, url };
     };
     try {
-      assert.ok(project.includes('CocosMcp-UI-Test-3.8.8') || project.endsWith('/.codex-work/build/creator2-test-project'), 'Only the designated isolated projects may run this harness');
       const status = await call('editor.status'); assert.equal(status.creatorMajor, major);
-      const initial = await call('scene.query'); assert.equal(initial.dirty, false, 'Preserve any pre-existing dirty scene'); previous = String(Json.object(initial.scene).sceneId);
+      const initial = await call('scene.query'); assert.equal(initial.dirty, false, 'Preserve any pre-existing dirty scene');
       const preview = await call('preview.status');
-      // 允许收尾本轮已知的 3.x 合成截图窗口，其他预览不能被接管。
-      if (preview.running) {
-        assert.equal(preview.previewSessionId, '8aa7eaf98ab8b1db9521e4c957f5b913'); await call('preview.stop');
-      }
+      guard.preview(preview);
+      previous = String(Json.object(initial.scene).sceneId);
       const suffix = randomUUID().replaceAll('-', '').slice(0, 8), a = await createScene(`RoadmapA_${suffix}`), b = await createScene(`RoadmapB_${suffix}`);
       await call('scene.open', { uuid: a.sceneId });
       const imageUrl = String((await call('asset.location', { url: `db://assets/RoadmapImage_${suffix}.png` })).url);
@@ -100,8 +101,8 @@ class RoadmapNativeAcceptance {
       const loads = `for(const uuid of ${JSON.stringify([...imageUuids, prefabUuid])}) ${major === 2 ? 'cc.' : ''}assetManager.loadAny({uuid},(e,asset)=>{if(!e&&uuid===${JSON.stringify(prefabUuid)}){const child=${major === 2 ? 'cc.' : ''}instantiate(asset);child.name='LoadedPrefab';this.node.addChild(child);}});`;
       const className = `RoadmapButton${suffix}`, script = String((await call('asset.location', { url: `db://assets/${className}.${major === 2 ? 'js' : 'ts'}` })).url);
       const source = (text: string): string => major === 2
-        ? `cc.Class({name:'${className}',extends:cc.Component,onLoad(){const n=this.node.getChildByName('RoadmapFixture').getChildByName('Action');n.getComponent(cc.Label).string='${text}';n.on('touchend',()=>{n.getComponent(cc.Label).string='Clicked';},this);${loads}}});`
-        : `import {_decorator,Component,Label,Node,assetManager,instantiate} from 'cc';const {ccclass}=_decorator;@ccclass('${className}') export class ${className} extends Component {onLoad(){const n=this.node.getChildByName('RoadmapFixture')!.getChildByName('Action')!;n.getComponent(Label)!.string='${text}';n.on(Node.EventType.TOUCH_END,()=>{n.getComponent(Label)!.string='Clicked';},this);${loads}}}`;
+        ? `cc.Class({name:'${className}',extends:cc.Component,onLoad(){const n=this.node.getChildByName('RoadmapFixture').getChildByName('Action');n.getComponent(cc.Label).string='${text}';${loads}},onAction(){this.node.getChildByName('RoadmapFixture').getChildByName('Action').getComponent(cc.Label).string='Clicked';}});`
+        : `import {_decorator,Component,Label,assetManager,instantiate} from 'cc';const {ccclass}=_decorator;@ccclass('${className}') export class ${className} extends Component {onLoad(){const n=this.node.getChildByName('RoadmapFixture')!.getChildByName('Action')!;n.getComponent(Label)!.string='${text}';${loads}}onAction(){this.node.getChildByName('RoadmapFixture')!.getChildByName('Action')!.getComponent(Label)!.string='Clicked';}}`;
       await call('asset.create', { url: script, content: source('Before') });
       let registration: JsonObject | undefined;
       for (let i = 0; i < 40; i++) {
@@ -109,14 +110,44 @@ class RoadmapNativeAcceptance {
         if (registration) break; await delay(250);
       }
       assert.ok(registration, 'Native script component must finish registration');
-      await call('component.add', { nodeId: a.canvasId, type: major === 3 ? registration.cid! : className });
+      const handler = await call('component.add', { nodeId: a.canvasId, type: major === 3 ? registration.cid! : className });
+      const handlerId = major === 3 ? (handler.componentIds as string[])[0]! : String(handler.componentId);
+      const rgba = { r: 10, g: 20, b: 30, a: 128 }, buttonColor = { r: 200, g: 210, b: 220, a: 255 };
       const document = { version: 1, root: { key: 'fixture', name: 'RoadmapFixture', children: [{ key: 'action', name: 'Action', components: [
         { type: 'cc.UITransform', properties: { contentSize: { width: 260, height: 90 } } }, { type: 'cc.Label', properties: { string: 'Before', fontSize: 36, overflow: 1 } },
-        { type: 'cc.Button', properties: { interactable: true } },
-      ] }] } };
+        { type: 'cc.Button', properties: { interactable: true, transition: 1, normalColor: buttonColor, pressedColor: buttonColor, hoverColor: buttonColor, disabledColor: buttonColor,
+          clickEvents: [{ componentId: handlerId, handler: 'onAction', customEventData: 'native-ui-acceptance' }] } },
+        ...(major === 3 ? [{ type: 'cc.Widget', properties: { isAlignTop: true, isAbsoluteTop: false, top: 0.1, isAlignLeft: true, isAbsoluteLeft: true, left: 24 } }] : []),
+      ] }, ...(major === 3 ? [{ key: 'color-probe', name: 'ColorProbe', components: [
+        { type: 'cc.UITransform', properties: { contentSize: { width: 200, height: 60 } } },
+        { type: 'cc.Label', properties: { string: 'RGBA probe', color: rgba, fontSize: 24, overflow: 1 } },
+      ] }] : [])] } };
       const params: JsonObject = { label: 'Roadmap synthetic input fixture', parentId: a.canvasId, document, ttlMs: 3600000 };
       const plan = await call('fixture.plan', params), fixture = await call('fixture.create', { ...params, planHash: plan.planHash! }); fixtureId = String(fixture.fixtureId);
       await call('scene.save');
+      if (major === 3) await check('O12 Creator 3 Widget units, RGBA, serialized Button events and save/reopen', async () => {
+        const inspect = async (): Promise<JsonObject> => {
+          const tree = await call('scene.hierarchy', { rootId: a.canvasId, includeComponents: true, limit: 100 });
+          const matches = (tree.rows as JsonObject[]).filter(row => row.name === 'Action'); assert.equal(matches.length, 1);
+          const action = matches[0]!, components = action.components as JsonObject[];
+          const colors = (tree.rows as JsonObject[]).filter(row => row.name === 'ColorProbe'); assert.equal(colors.length, 1);
+          const colorComponents = colors[0]!.components as JsonObject[];
+          const properties = async (type: string, source = components): Promise<JsonObject> => {
+            const matches = source.filter(row => row.type === type); assert.equal(matches.length, 1);
+            return Json.object(PropertyDump.unwrap((await call('component.query', { componentId: matches[0]!.componentId! })).component!));
+          };
+          // Button 会给目标图形着色；独立 Label 探针才能验证未被按钮状态覆盖的 RGBA。
+          const label = await properties('cc.Label', colorComponents), button = await properties('cc.Button'), widget = await properties('cc.Widget');
+          assert.deepEqual(label.color, rgba); assert.deepEqual(button.normalColor, buttonColor); assert.equal(button.interactable, true);
+          assert.equal(widget.isAbsoluteTop, false); assert.equal(widget.top, 0.1); assert.equal(widget.isAbsoluteLeft, true); assert.equal(widget.left, 24);
+          const events = button.clickEvents as JsonObject[]; assert.equal(events.length, 1); assert.equal(events[0]!.handler, 'onAction');
+          assert.equal(Json.object(events[0]!.target!).uuid, a.canvasId); assert.equal(events[0]!.customEventData, 'native-ui-acceptance');
+          return { nodeId: action.nodeId!, colorNodeId: colors[0]!.nodeId!, componentIds: [...components, ...colorComponents].map(row => row.componentId!), label, button, widget };
+        };
+        const before = await inspect(); await call('scene.open', { uuid: b.sceneId }); await call('scene.open', { uuid: a.sceneId });
+        const after = await inspect(); assert.equal(after.nodeId, before.nodeId); assert.equal(after.colorNodeId, before.colorNodeId); assert.deepEqual(after.componentIds, before.componentIds);
+      });
+      if (scope === 'ui-core') return;
       await call('preview.start', { preset: 'landscape-1280', visible: true, fixtureId }); previewOwned = true;
       await call('preview.runtime.connect', { gatewayPort });
       await check('CP-007 layered readiness and synthetic UI', async () => {
@@ -130,7 +161,7 @@ class RoadmapNativeAcceptance {
         await call('runtime.pause');
         assert.equal(Json.object((await call('preview.status')).observation).gamePaused, true);
         assert.equal((await call('preview.capture', { frameMode: 'lastFrame' })).stale, true);
-        await assert.rejects(call('preview.input', { action: 'click', x: 10, y: 10 }), error => CocosError.from(error).details?.inputSent === false);
+        await assert.rejects(call('preview.input', { action: 'click', x: 10, y: 10 }), error => Json.object(CocosError.from(error).details ?? {}).inputSent === false);
         assert.equal(Json.object((await call('preview.status')).observation).gamePaused, true);
         await call('runtime.resume'); await call('preview.capture');
       });
@@ -204,7 +235,7 @@ class RoadmapNativeAcceptance {
       await check('CP-004 hidden preview acquires focus before guarded input', async () => {
         await call('preview.start', { preset: 'landscape-568', visible: false, fixtureId: fixtureId! }); previewOwned = true;
         try { assert.equal((await call('preview.input', { action: 'key', key: 'A', x: 10, y: 10 })).inputSent, true); }
-        catch (error) { assert.equal(CocosError.from(error).details?.inputSent, false); }
+        catch (error) { assert.equal(Json.object(CocosError.from(error).details ?? {}).inputSent, false); }
         await call('preview.runtime.connect', { gatewayPort });
         await call('preview.wait', { sceneId: a.sceneId, timeoutMs: 10000 });
         assert.equal((await call('runtime.ui.click', { selector: { name: 'Action' }, after: [{ selector: { name: 'Action' }, text: 'Clicked' }], timeoutMs: 5000 })).inputSent, true);
@@ -223,12 +254,12 @@ class RoadmapNativeAcceptance {
       if (fixtureId) { try { const fixture = await call('fixture.status', { fixtureId }); if (fixture.status === 'active') await call('fixture.cleanup', { fixtureId }); } catch (error) { failure ??= error; } }
       if (previous) { try { await call('scene.save'); await call('scene.open', { uuid: previous }); } catch (error) { failure ??= error; } }
       await gateway.close();
-      await writeFile(join(directory, 'summary.json'), JSON.stringify({ status: failure ? 'failed' : 'passed', project, major, checks, sourceFingerprint: process.env.COCOS_NATIVE_SOURCE_FINGERPRINT ?? null,
+      await writeFile(join(directory, 'summary.json'), JSON.stringify({ status: failure ? 'failed' : 'passed', project, major, scope, checks, sourceFingerprint: process.env.COCOS_NATIVE_SOURCE_FINGERPRINT ?? null,
         installed: JSON.parse(await readFile(join(project, major === 2 ? 'packages' : 'extensions', `cocos-mcp-creator${major}/package.json`), 'utf8')).buildId,
         limitations: ['Synthetic local desktop acceptance; external browser, physical devices and real business are separate scopes.'] }, null, 2));
       console.log(JSON.stringify({ directory, status: failure ? 'failed' : 'passed' })); if (failure) process.exitCode = 1;
     }
   }
 }
-const [project, major] = process.argv.slice(2); if (!project || !['2', '3'].includes(major ?? '')) throw new Error('Usage: roadmap-native-acceptance <isolated-project> <2|3>');
-await new RoadmapNativeAcceptance().run(resolve(project), Number(major) as 2 | 3);
+const [project, major, scope = 'all'] = process.argv.slice(2); if (!project || !['2', '3'].includes(major ?? '') || !['all', 'ui-core'].includes(scope)) throw new Error('Usage: roadmap-native-acceptance <isolated-project> <2|3> [all|ui-core]');
+await new RoadmapNativeAcceptance().run(resolve(project), Number(major) as 2 | 3, scope as 'all' | 'ui-core');

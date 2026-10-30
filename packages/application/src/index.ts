@@ -7,6 +7,7 @@ import { CocosError, Json, type ExecutionRequest, type ExecutionResult, type Jso
 import { CapabilityCatalog } from '../../capability-catalog/src/index.js';
 import { BridgeClient } from './bridge-client.js';
 import { ProjectRegistry } from './registry.js';
+import { StageTimings } from '../../native-adapters/src/stage-timings.js';
 import { ProjectQueue } from './queue.js';
 import { WorkflowValues, type WorkflowOptions } from './workflow-values.js';
 import { OperationStore } from './operation-store.js';
@@ -14,6 +15,7 @@ import { AtomicJson } from './atomic-json.js';
 import { OperationAudit } from './operation-audit.js';
 import { RoadmapOperations } from './roadmap-operations.js';
 import { EvidenceStore } from './evidence-store.js';
+import { EditorControlPolicy } from '../../capability-catalog/src/editor-control.js';
 
 export interface RuntimeExecutor { select?(projectId: string, runtimeInstanceId?: string): string; execute(projectId: string, runtimeInstanceId: string | undefined, capabilityId: string, params: import('../../contracts/src/index.js').JsonObject, signal?: AbortSignal): Promise<JsonValue> }
 export interface WorkflowStep extends WorkflowOptions { capabilityId: string; params: import('../../contracts/src/index.js').JsonObject; instanceId?: string; runtimeInstanceId?: string; operationId?: string; expectedRevision?: string }
@@ -45,6 +47,7 @@ export class CocosApplication {
       throw error;
     }
     const paths = this.projects.paths(request.projectId);
+    const timings = new StageTimings();
     const fingerprint = Json.canonical({ capabilityId: capability.id, params: request.params, instanceId: request.instanceId ?? null, runtimeInstanceId: request.runtimeInstanceId ?? null, expectedRevision: request.expectedRevision ?? null });
     const requestHash = createHash('sha256').update(fingerprint).digest('hex');
     const metadata = { operationId, capabilityId: capability.id, projectId: request.projectId, context: capability.context, effect: capability.effect,
@@ -63,57 +66,70 @@ export class CocosApplication {
         if (!this.runtime) throw new CocosError(FeatureSupport.owns(capability.id) ? 'UNSUPPORTED_CAPABILITY' : 'CONTEXT_UNAVAILABLE', 'Runtime gateway is not enabled');
         selectedRuntime = this.runtime.select?.(request.projectId, request.runtimeInstanceId) ?? request.runtimeInstanceId ?? null;
         dispatched = true;
-        const result = await this.runtime.execute(request.projectId, selectedRuntime ?? undefined, capability.id, request.params, signal);
+        const result = await timings.measure('runtime-dispatch', () => this.runtime!.execute(request.projectId, selectedRuntime ?? undefined, capability.id, request.params, signal));
         const execution: ExecutionResult = { operationId, capabilityId: capability.id, projectId: request.projectId, result, verification: capability.verification, completedAt: new Date().toISOString() };
         return execution;
       }
-      const descriptor = await this.projects.instance(request.projectId, request.instanceId);
+      const descriptor = await timings.measure('editor-discovery', () => this.projects.instance(request.projectId, request.instanceId));
       selectedInstance = descriptor.instanceId;
       this.operations.target(`${request.projectId}:${operationId}`, descriptor.instanceId);
       if (!capability.versions.includes(descriptor.creatorMajor) || !capability.supportedMajors?.includes(descriptor.creatorMajor)) throw new CocosError('UNSUPPORTED_VERSION', 'Capability is not implemented by this Creator major version');
       dispatched = true;
-      const response = await this.bridge.call(descriptor, { protocolVersion: 1, projectId: request.projectId, instanceId: descriptor.instanceId,
+      const response = await timings.measure('editor-rpc', () => this.bridge.call(descriptor, { protocolVersion: 1, projectId: request.projectId, instanceId: descriptor.instanceId,
         operationId, capabilityId: request.capabilityId, params: request.params,
-        ...(request.expectedRevision !== undefined ? { expectedRevision: request.expectedRevision } : {}) }, signal);
+        ...(request.expectedRevision !== undefined ? { expectedRevision: request.expectedRevision } : {}) }, signal));
       if (request.capabilityId === 'preview.diagnose') {
         const diagnostic = Json.object(response.result);
         response.result = { ...diagnostic, layers: { ...Json.object(diagnostic.layers), mcpService: 'passed', editorRpc: 'passed' },
           operationId, projectId: request.projectId, instanceId: descriptor.instanceId, transportProof: 'authenticated-application-and-editor-rpc-response', businessOutcomeVerified: false };
       }
       const result: ExecutionResult = { operationId, capabilityId: request.capabilityId, projectId: request.projectId, instanceId: descriptor.instanceId,
-        revision: response.revision, result: response.result, verification: capability.verification, completedAt: new Date().toISOString() };
+        revision: response.revision, result: response.result, verification: capability.verification, completedAt: new Date().toISOString(),
+        ...(response.timings ? { nativeTimings: response.timings } : {}) };
       return result;
     };
-    const execution = () => (this.roadmap.owns(capability.id) || capability.id === 'operation.audit.query' ? dispatch() : this.queue.run(request.projectId, dispatch, signal)).catch((error: unknown) => {
+    const execution = () => {
+      const stopQueue = timings.start('queue');
+      const enter = () => { stopQueue(); return dispatch(); };
+      return (this.roadmap.owns(capability.id) || capability.id === 'operation.audit.query' || EditorControlPolicy.allows(capability.id) ? enter() : this.queue.run(request.projectId, enter, signal)).finally(stopQueue).catch((error: unknown) => {
       if (!FeatureSupport.owns(capability.id) || !(error instanceof CocosError) || !['UNSUPPORTED_CAPABILITY', 'UNSUPPORTED_VERSION'].includes(error.code)) throw error;
       const execution: ExecutionResult = { operationId, capabilityId: capability.id, projectId: request.projectId, result: FeatureSupport.unsupported(capability.id, error.message), verification: capability.verification, completedAt: new Date().toISOString() };
       return execution;
-    });
+      });
+    };
     const audited = async (): Promise<ExecutionResult> => {
       auditedAttempt = true;
       const start = performance.now(), startedAt = new Date().toISOString();
-      const began = await this.audit.record(paths, { ...metadata, startedAt, outcome: 'started', sideEffectState: 'not-sent' });
+      const began = await timings.measure('audit-begin', () => this.audit.record(paths, { ...metadata, startedAt, outcome: 'started', sideEffectState: 'not-sent' }));
       try {
         const result = await execution();
         const payload = result.result && typeof result.result === 'object' && !Array.isArray(result.result) ? result.result : {};
-        let evidenceRefs: import('../../contracts/src/index.js').JsonObject[] = [], evidenceFailed = false;
+        let evidenceRefs: import('../../contracts/src/index.js').JsonObject[] = [], evidenceFailed = false, evidenceFailure: JsonValue = null;
         if (['preview.capture', 'preview.input', 'preview.validate_viewports', 'runtime.capture'].includes(capability.id)) {
-          try { evidenceRefs = (await this.evidence.save(paths, createHash('sha256').update(operationId).digest('hex'), result.result)).evidenceRefs; }
-          catch { evidenceFailed = true; }
+          try { evidenceRefs = (await timings.measure('evidence-write', () => this.evidence.save(paths, createHash('sha256').update(operationId).digest('hex'), result.result))).evidenceRefs; }
+          catch (error) {
+            evidenceFailed = true;
+            const failure = CocosError.from(error), details = Json.object(failure.details ?? {});
+            evidenceRefs = Array.isArray(details.evidenceRefs) ? details.evidenceRefs.map(row => Json.object(row)) : [];
+            // 证据导出中途失败仍保留已核验引用和未核验文件位置；不记录原始图像正文。
+            evidenceFailure = { code: failure.code, partial: true, pendingEvidence: details.pendingEvidence ?? null };
+          }
         }
         const terminal = { ...metadata, instanceId: selectedInstance, runtimeInstanceId: selectedRuntime, startedAt, completedAt: result.completedAt, durationMs: performance.now() - start,
           outcome: 'completed', errorCode: null, sideEffectState: capability.effect === 'read' ? 'none' : dispatched ? 'acknowledged' : 'not-sent',
           sessionId: typeof (payload.previewSessionId ?? payload.diagnosticSessionId) === 'string' && /^[a-f0-9]{32}$/.test(String(payload.previewSessionId ?? payload.diagnosticSessionId)) ? payload.previewSessionId ?? payload.diagnosticSessionId ?? null : null,
-          evidenceRefs, auditWarnings: began && !evidenceFailed ? [] : ['AUDIT_WRITE_FAILED'] };
-        const recorded = await this.audit.record(paths, terminal), recovered = !recoveryPath || await this.audit.finish(recoveryPath, { status: 'completed', completedAt: result.completedAt, sideEffectState: terminal.sideEffectState });
-        if (!began || !recorded || !recovered || evidenceFailed) result.warnings = [{ code: 'AUDIT_WRITE_FAILED', message: 'Operation completed, but its local audit, evidence or recovery record could not be written; do not replay it' }];
+          evidenceRefs, evidenceFailure, timings: timings.rows(), nativeTimings: result.nativeTimings ?? [], auditWarnings: began && !evidenceFailed ? [] : ['AUDIT_WRITE_FAILED'] };
+        const recorded = await timings.measure('audit-terminal', () => this.audit.record(paths, terminal)), recovered = !recoveryPath || await this.audit.finish(recoveryPath, { status: 'completed', completedAt: result.completedAt, sideEffectState: terminal.sideEffectState });
+        if (!began || !recorded || !recovered || evidenceFailed) result.warnings = [{ code: 'AUDIT_WRITE_FAILED', message: 'Operation completed, but its local audit, evidence or recovery record could not be written; do not replay it',
+          ...(evidenceFailed ? { details: { evidenceRefs, evidenceFailure } } : {}) }];
+        result.timings = timings.rows();
         return result;
       } catch (error) {
         const failure = CocosError.from(error), detail = failure.details && typeof failure.details === 'object' && !Array.isArray(failure.details) ? failure.details : {};
         const sideEffectState = !dispatched || detail.inputSent === false ? 'not-sent' : capability.effect === 'read' ? 'none' : 'unknown';
         const completedAt = new Date().toISOString();
         const recorded = await this.audit.record(paths, { ...metadata, instanceId: selectedInstance, runtimeInstanceId: selectedRuntime, startedAt, completedAt, durationMs: performance.now() - start,
-          outcome: failure.code === 'OUTCOME_UNKNOWN' ? 'unknown' : 'failed', errorCode: failure.code, sideEffectState,
+          outcome: failure.code === 'OUTCOME_UNKNOWN' ? 'unknown' : 'failed', errorCode: failure.code, sideEffectState, timings: timings.rows(),
           inputSent: typeof detail.inputSent === 'boolean' ? detail.inputSent : null, sentEvents: typeof detail.sentEvents === 'number' ? detail.sentEvents : null,
           stage: typeof detail.stage === 'string' && ['focus', 'frame'].includes(detail.stage) ? detail.stage : dispatched ? 'dispatch' : 'preflight', evidenceRefs: [], auditWarnings: [] });
         const recovered = !recoveryPath || await this.audit.finish(recoveryPath, { status: failure.code === 'OUTCOME_UNKNOWN' ? 'unknown' : 'failed', completedAt, errorCode: failure.code, sideEffectState });

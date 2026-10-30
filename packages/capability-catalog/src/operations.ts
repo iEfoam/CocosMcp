@@ -14,6 +14,7 @@ import { AnimationCapabilities } from './animation.js';
 import { RuntimeAssetCapabilities } from './runtime-assets.js';
 import { Creator2Support } from './creator2-support.js';
 import { RoadmapCapabilities } from './roadmap.js';
+import { OutputContracts } from './output-contracts.js';
 
 export class Operations {
   private readonly rows: Capability[] = [];
@@ -74,9 +75,11 @@ export class Operations {
       this.add(`asset.${id}`, id === 'dependencies' || id === 'users' ? 'F15' : 'F14', title, 'read', asset, ['url'], [2, 3], id === 'dependencies' || id === 'users' ? { supportedMajors: [3] } : {});
     }
     this.add('asset.location', 'F13', '规划新资源路径：优先复用已有类型目录，没有则建议创建；不写入资源', 'read', { url: str }, ['url'], [3]);
+    this.add('asset.references.scan', 'F15', '只读审查目标资源的序列化 UUID、文本路径候选及动态未知加载；扫描不授权自动改写', 'read', { urls: { type: 'array', items: str, minItems: 1, maxItems: 2000 }, scopeUrl: str, recursive: bool }, ['urls'], [2, 3]);
     const organize = { scopeUrl: str, recursive: bool, urls: { type: 'array', items: str, maxItems: 2000 } };
     this.add('asset.organize.plan', 'F13', '按类型预览项目资源整理；默认仅根目录，保留已归类目录，跳过路径敏感资源；agent 必须审查字符串加载路径', 'read', organize, [], [3]);
     this.add('asset.organize.apply', 'F13', '执行已审查的资源整理计划；传相同范围及 planHash，通过 AssetDB 移动并验证 UUID，返回逐项记录与回滚路径', 'asset', { ...organize, planHash: str }, ['planHash'], [3]);
+    this.add('asset.organize.recovery', 'F13', '只读核对整理日志的源目标 UUID 和摘要；返回 moved/not-moved/conflict/unknown，不自动重放', 'read', { journalId: { type: 'string', pattern: '^[a-f0-9]{24}$' } }, ['journalId'], [2, 3]);
     this.add('asset.create', 'F13', '通过 AssetDB 创建文本资源', 'asset', { ...asset, content: { type: 'string' } }, ['url', 'content']);
     this.add('asset.save', 'F13', '通过 AssetDB 保存文本资源', 'asset', { ...asset, content: { type: 'string' } }, ['url', 'content']);
     this.add('asset.import', 'F13', '导入工程目录内的文件', 'asset', { sourcePath: str, targetUrl: str }, ['sourcePath', 'targetUrl']);
@@ -89,7 +92,11 @@ export class Operations {
     this.add('prefab.open', 'F09', '在原生预制体编辑模式打开资源；当前场景必须已保存', 'scene', { uuid: str }, ['uuid'], [3]);
     this.add('prefab.create', 'F09', '将节点保存成预制体资源', 'asset', { ...node, url: str }, ['nodeId', 'url']);
     this.add('prefab.apply', 'F09', '将预制体实例修改应用到资源', 'asset', node, ['nodeId']);
+    this.add('prefab.diff', 'F09', '按 fileId 和嵌套实例身份比较源 Prefab 与当前实例；返回属性覆盖、层级差异和未验证边界，不自动修复', 'read', node, ['nodeId'], [3], { prerequisites: ['Creator 3.8.8；选择已关联的 Prefab 实例根节点'] });
     this.add('prefab.revert', 'F09', '还原预制体实例修改', 'scene', node, ['nodeId']);
+    const prefabChange = { ...node, action: S.enum('apply', 'restore') };
+    this.add('prefab.change.plan', 'F09', '生成整实例应用/恢复计划，绑定完整差异、源依赖和实例摘要；不完整比较拒绝生成', 'read', prefabChange, ['nodeId', 'action'], [3]);
+    this.add('prefab.change.apply', 'F09', '重新验证 expectedHash 与 planHash 后执行原生应用/恢复，并核对源实例收敛；不自动保存场景', 'asset', { ...prefabChange, expectedHash: { type: 'string', pattern: '^[a-f0-9]{64}$' }, planHash: { type: 'string', pattern: '^[a-f0-9]{64}$' } }, ['nodeId', 'action', 'expectedHash', 'planHash'], [3]);
     this.add('prefab.unlink', 'F09', '解除预制体实例关联', 'scene', node, ['nodeId']);
     this.add('view.query', 'F11', '读取场景视图、Gizmo 与网格状态', 'read', {}, [], [2, 3], { supportedMajors: [3] });
     this.add('view.set', 'F11', '修改场景视图、Gizmo 与网格', 'configuration', { is2D: bool, grid: bool, tool: str, coordinate: str, pivot: str }, [], [2, 3], { supportedMajors: [3] });
@@ -191,6 +198,16 @@ export class Operations {
       if (row.prerequisites) row.prerequisites = row.prerequisites.map(text => text.replace(/Creator 3\.8\.8/g, 'Creator 2.4.15 或 3.8.8（按版本分别适配）'));
       if (!row.supportedMajors?.includes(2)) row.supportedMajors?.unshift(2);
     }
+    const outputs = new OutputContracts();
+    const references = this.rows.find(row => row.id === 'scene.references')!;
+    references.versions = [2, 3]; references.supportedMajors = [2, 3];
+    references.prerequisites = ['Creator 2.4.15 或 3.8.8；原生序列化结果只读检查，不调用事件回调'];
+    for (const row of this.rows.filter(row => row.id === 'ui.structure.plan' || row.id === 'ui.structure.apply')) {
+      row.versions = [2, 3]; row.supportedMajors = [2, 3];
+      row.prerequisites = ['Creator 2.4.15 或 3.8.8；3.8.8 仅普通场景，不修改 Prefab 实例/资源；apply 使用相同参数与最新 planHash'];
+      row.rollback = row.id.endsWith('.plan') ? '只读规划，不修改原生场景' : '原生整组 Undo/Redo；部分失败返回 completed/pending/mapping，必须读回，禁止盲目重试；保存需单独 scene.save';
+    }
+    for (const row of this.rows) row.outputSchema = outputs.schema(row.id) ?? row.outputSchema;
     return this.rows;
   }
 }

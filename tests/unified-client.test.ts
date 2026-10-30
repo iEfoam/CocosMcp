@@ -38,7 +38,7 @@ class RoutedEditor implements EditorAdapter {
   async execute(id: string): Promise<JsonValue> {
     if (id === 'scene.query') { this.reads++; this.readStarted.resolve(); await delay(100); }
     if (id === 'scene.save') { this.saves++; this.started.resolve(); await delay(250); this.finished.resolve(); }
-    return { marker: this.marker, saves: this.saves };
+    return { marker: this.marker, saves: this.saves, ...(id === 'scene.query' ? { context: 'editor', scene: {}, dirty: false } : {}) };
   }
   async dispose(): Promise<void> {}
 }
@@ -106,6 +106,22 @@ class UnifiedFixture {
     finally { await Promise.all(this.bridges.map(bridge => bridge.stop())); }
   }
 }
+
+test('unified transport exposes request-local resolution, authorization, service and native serialization timings', async () => {
+  const f = new UnifiedFixture(); await f.setup();
+  try {
+    const game = await f.game('timed-game'), client = await f.client();
+    const response = await client.callTool({ name: 'cocos_scene_query', arguments: { workspacePath: game.root, params: {} } });
+    assert.ok(!response.isError);
+    const stages = (response._meta?.['io.cocos-mcp/client-timings'] as JsonObject[]).map(row => row.stage);
+    for (const stage of ['workspace-resolution', 'authorization', 'service-connect', 'editor-discovery', 'authorization-recheck', 'service-identity', 'backend-rpc']) assert.ok(stages.includes(stage), stage);
+    const native = Json.object(Json.value(response.structuredContent)).nativeTimings as JsonObject[];
+    assert.ok(native.some(row => row.stage === 'native-execution'));
+    assert.ok(native.some(row => row.stage === 'response-serialization'));
+    assert.ok(native.every(row => typeof row.durationMs === 'number' && row.durationMs >= 0));
+    assert.equal(game.editor.reads, 1);
+  } finally { await f.close(); }
+});
 
 test('offline unified stdio initializes without a project and advertises self-contained connection guidance', async () => {
   const f = new UnifiedFixture(); await f.setup();

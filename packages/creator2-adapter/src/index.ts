@@ -4,6 +4,7 @@ import { Creator2AnimationService } from './animation.js';
 import { Creator2Texture } from './texture.js';
 import { basename, dirname } from 'path';
 import { PreviewService } from '../../creator3-adapter/src/preview.js';
+import { AssetReferenceAudit } from '../../asset-policy/src/reference-audit.js';
 import { Creator2UiService } from './ui.js';
 import { createHash } from 'crypto';
 import { CocosError, Json, type EditorAdapter, type JsonObject, type JsonValue } from '../../contracts/src/index.js';
@@ -12,6 +13,7 @@ import { Creator2Assets } from './assets.js';
 import { Creator2Support } from './support.js';
 
 export interface Creator2Port {
+  loginState?(): Promise<'logged-in' | 'logged-out' | 'unknown'>;
   setting?(method: string, params: JsonObject): Promise<JsonValue>;
   previewUrl?(): Promise<string>;
   environment?(): JsonObject;
@@ -28,6 +30,7 @@ export interface Creator2Port {
 }
 
 export class Creator2Adapter implements EditorAdapter {
+  async loginState(): Promise<'logged-in' | 'logged-out' | 'unknown'> { return this.port.loginState ? this.port.loginState() : 'unknown'; }
   readonly major = 2 as const;
   private readonly assets: Creator2Assets;
   constructor(private readonly port: Creator2Port) { this.assets = new Creator2Assets(port); }
@@ -66,8 +69,10 @@ export class Creator2Adapter implements EditorAdapter {
     switch (id) {
       case 'editor.environment': return { ...Json.object(Json.value(await this.port.scene('environment'))), host: this.port.environment?.() ?? {} };
       case 'asset.location': return this.assets.organization.location(str('url'));
+      case 'asset.references.scan': return new AssetReferenceAudit(this.port.projectPath).audit(p);
       case 'asset.organize.plan': return this.assets.organization.plan(p);
       case 'asset.organize.apply': return this.assets.organization.apply(p);
+      case 'asset.organize.recovery': return this.assets.organization.recovery(str('journalId'));
       case 'asset.dependencies': return this.assets.references(str('url'), false);
       case 'asset.users': return this.assets.references(str('url'), true);
       case 'scene.save_copy': { const saved = Json.object(await this.port.scene('serializeCurrentScene')); return { rows: await this.asset('create', str('url'), typeof saved.content === 'string' ? saved.content : JSON.stringify(saved.content)) }; }

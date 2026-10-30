@@ -57,10 +57,11 @@ export class UiService {
           if (!existing) await step('component.add', { nodeId, type: component.type });
         }
       }
-      for (const row of rows) {
+      // Widget 会在后续尺寸变化时保留节点位置并反算边距；所有节点的渲染及显式尺寸完成后才启用对齐。
+      for (const widgetPass of [false, true]) for (const row of rows) {
         const nodeId = mapping.get(row.key)!;
         // Label 的初始排版可能先改尺寸；先配置渲染组件，再应用文档显式声明的 UITransform。
-        for (const component of [...(row.node.components ?? [])].sort((a, b) => Number(a.type === 'cc.UITransform') - Number(b.type === 'cc.UITransform'))) {
+        for (const component of [...(row.node.components ?? [])].filter(component => (component.type === 'cc.Widget') === widgetPass).sort((a, b) => Number(a.type === 'cc.UITransform') - Number(b.type === 'cc.UITransform'))) {
           const tree = Json.object(await this.port.scene('hierarchy', { rootId: nodeId, limit: 1 }));
           const actual = (Json.object((tree.rows as JsonValue[])[0]).components as JsonObject[]).find(c => c.type === component.type);
           if (!actual) throw new CocosError('VERIFICATION_FAILED', `Missing UI component: ${component.type}`);
