@@ -42,7 +42,7 @@ const clientHashes = {}, clientDigest = createHash('sha256');
 for (const name of clientFiles) { const bytes = await readFile(join(clientRoot, name)); clientHashes[name] = createHash('sha256').update(bytes).digest('hex'); clientDigest.update(name).update(bytes); }
 const clientEvidence = JSON.parse(define.__COCOS_VERIFICATION_EVIDENCE__), clientFingerprint = JSON.parse(define.__COCOS_SOURCE_FINGERPRINT__);
 await writeFile(join(clientRoot, 'manifest.json'), JSON.stringify({ schemaVersion: 1, kind: 'cocos-unified-client', apiVersion: 1,
-  version: process.env.COCOS_RELEASE_TAG?.replace(/^v/, '') || '0.1.0', buildId: clientDigest.digest('hex').slice(0, 16), builtAt,
+  version: process.env.COCOS_RELEASE_TAG?.replace(/^v/, '') || '0.1.1', buildId: clientDigest.digest('hex').slice(0, 16), builtAt,
   sourceFingerprint: clientFingerprint, verificationReportSha256: clientEvidence.length && clientEvidence.every(row => row.sourceFingerprint === clientFingerprint) ? clientEvidence[0].reportSha256 : null,
   fileHashes: clientHashes }, null, 2) + '\n');
 }

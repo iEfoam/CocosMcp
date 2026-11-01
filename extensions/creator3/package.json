@@ -1,7 +1,7 @@
 {
   "name": "cocos-mcp-creator3",
   "title": "CocosMCP · Creator 3",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "package_version": 2,
   "editor": ">=3.0.0 <4.0.0",
   "description": "免费开源的 AI 编辑器桥接：连接 MCP 客户端与 Creator 场景、资源和开发运行时。",

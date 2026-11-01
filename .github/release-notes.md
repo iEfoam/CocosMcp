@@ -1,6 +1,10 @@
-## 可靠性、UI 与 Prefab 优化 / Reliability, UI and Prefab improvements
+## v0.1.1 正式版 / Stable release
 
-本次交付 O01–O15 优化及其必要的 UI 编排、样式和 Creator 登录复用依赖：
+将已交付的可靠性、UI 与 Prefab 优化发布到稳定通道，统一工作区、Creator 2/3 扩展、统一客户端与 MCP 服务版本为 `0.1.1`。本次不新增编辑器功能。
+
+This stable release promotes the delivered reliability, UI and Prefab improvements and aligns the workspace, Creator 2/3 extensions, unified client and MCP server at `0.1.1`. It adds no new editor capabilities.
+
+包含此前 O01–O15 优化及其 UI 编排、样式和 Creator 登录复用依赖：
 
 - 证据导出并发与容量守卫，写后未知结果账本，独立诊断/取消通道，原子恢复日志。
 - 输出契约、网关配额、按范围资源扫描、请求阶段计时、日志与构建历史管理。
@@ -8,11 +12,11 @@
 - Prefab 差异与 guarded apply/restore、缺失脚本保护、UUID/字面路径/动态未知审查。
 - 开发/原生/发布构建档位、共享 CI 验证、只读检查与独立发布权限、不可覆盖候选包。
 
-发布准备前本地自动测试 534/534 通过。原生证据包括 Creator 3 UI 15/15、Creator 2 14/14，以及本轮 Creator 3 Prefab 资源/实例专项；各自适用其记录的源码检查点，不表示全部能力均获当前原生验证。此 Release 由 CI 对发布提交重新检查和构建。
+此前源码检查点的自动测试 534/534 通过。历史原生证据包括 Creator 3 UI 15/15、Creator 2 14/14，以及 Creator 3 Prefab 资源/实例专项；各自适用其记录的源码检查点，不表示全部能力均获当前原生验证。此 Release 由 CI 对 `v0.1.1` 发布提交重新进行类型检查、完整测试、构建和打包，并在上传前复核 SHA-256。
 
 Prefab 实例源节点移动/删除需进入资源编辑模式；嵌套实例、压缩嵌套差异、动态字符串引用仍保留明确限制。未部署到用户工程或服务器。详见 [交付清单](https://github.com/iEfoam/CocosMcp/blob/main/docs/optimization-release-20261030.md)。
 
-Local pre-release validation passed 534 automated tests. Native acceptance is fixture- and source-checkpoint-specific: Creator 3 UI 15/15, Creator 2 14/14, plus focused Creator 3 Prefab asset/instance persistence and Undo/Redo checks. CI verifies this release commit independently. Nested Prefab overrides and dynamic reference rewriting retain documented limits. No project or server deployment is included.
+The earlier source checkpoint passed 534 automated tests. Historical native acceptance is fixture- and source-checkpoint-specific: Creator 3 UI 15/15, Creator 2 14/14, plus focused Creator 3 Prefab asset/instance persistence and Undo/Redo checks. CI independently typechecks, tests, builds and packages the `v0.1.1` commit, then verifies transferred artifact checksums. Nested Prefab overrides and dynamic reference rewriting retain documented limits. No project or server deployment is included.
 
 ## 安装 / Installation
 
@@ -26,6 +30,10 @@ Local pre-release validation passed 534 automated tests. Native acceptance is fi
 | --- | --- | --- |
 | 2.x | `cocos-mcp-creator2.zip` | `packages/cocos-mcp-creator2/` |
 | 3.x | `cocos-mcp-creator3.zip` | `extensions/cocos-mcp-creator3/` |
+
+多工程统一 stdio 接入另下载同版本 `cocos-mcp-client.zip`，按[统一客户端指南](https://github.com/iEfoam/CocosMcp/blob/v0.1.1/docs/unified-client.md)安装并授权目标工程。所有 ZIP 均需使用本 Release 的 `SHA256SUMS` 校验。
+
+For unified multi-project stdio, also download this release's `cocos-mcp-client.zip`, follow the [unified client guide](https://github.com/iEfoam/CocosMcp/blob/v0.1.1/docs/unified-client.md), and authorize the target project. Verify every ZIP against this release's `SHA256SUMS`.
 
 1. 准备 Cocos Creator 与 **Node.js 24+**，用同版本 `SHA256SUMS` 核对 ZIP。升级前停止 MCP 服务、关闭 Creator 并备份旧扩展。
 2. 将 ZIP 内容解压到对应目录，确保 `package.json` 直接位于该目录内。

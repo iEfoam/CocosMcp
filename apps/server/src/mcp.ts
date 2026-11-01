@@ -55,7 +55,7 @@ export class CocosMcpServer {
   }
 
   create(): McpServer {
-    const server = new McpServer({ name: 'cocos-mcp', version: '0.1.0' }, { instructions: (this.routing?.instructions ?? '创建资源前调用 asset.location，优先复用已有对应类型目录，不得把生成资源散落在 assets 根目录。后续使用实际 assetLocation.url。用户要求项目资源整理时，先 asset.organize.plan，审查类型、路径引用和 skipped，再以相同范围及 planHash 执行 asset.organize.apply；通过 AssetDB 保留 UUID，检查 partial/pending 与恢复日志，不得直接搬动文件或重建 meta。') + UiAuthoring.instructions });
+    const server = new McpServer({ name: 'cocos-mcp', version: '0.1.1' }, { instructions: (this.routing?.instructions ?? '创建资源前调用 asset.location，优先复用已有对应类型目录，不得把生成资源散落在 assets 根目录。后续使用实际 assetLocation.url。用户要求项目资源整理时，先 asset.organize.plan，审查类型、路径引用和 skipped，再以相同范围及 planHash 执行 asset.organize.apply；通过 AssetDB 保留 UUID，检查 partial/pending 与恢复日志，不得直接搬动文件或重建 meta。') + UiAuthoring.instructions });
     const project = { projectId: z.string().min(1) };
     const envelope = { ...project, instanceId: z.string().optional(), runtimeInstanceId: z.string().optional(),
       operationId: z.string().min(1).max(128).optional(), expectedRevision: z.string().optional() };
